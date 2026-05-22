@@ -77,7 +77,6 @@ markers = [
 
 [dependency-groups]
 dev = [
-    "bandit[toml]>=1.7",
     "codespell>=2.2",
     "mypy>=1.20.2",
     "pytest>=9.0.3",
@@ -94,9 +93,3 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
-
-[tool.bandit]
-exclude_dirs = ["/venv/"]
-
-[tool.bandit.assert_used]
-skips = ["*/*test.py", "*/test_*.py", "*tests/*.py"]
