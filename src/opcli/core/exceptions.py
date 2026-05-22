@@ -11,18 +11,7 @@ import shlex
 
 
 class OpcliError(Exception):
-    """Base exception for all opcli errors.
-
-    Attributes:
-        hint: Optional actionable suggestion displayed after the error message.
-    """
-
-    hint: str | None = None
-
-    def __init__(self, *args: object, hint: str | None = None) -> None:
-        super().__init__(*args)
-        if hint is not None:
-            self.hint = hint
+    """Base exception for all opcli errors."""
 
 
 class SubprocessError(OpcliError):
