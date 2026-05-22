@@ -12,14 +12,13 @@ failures can be reproduced manually by copy-pasting from the output.
 """
 
 import io
+import logging
 import os
 import shlex
 import subprocess
 import sys
 import threading
 from dataclasses import dataclass
-
-import typer
 
 from opcli.core.exceptions import SubprocessError
 
@@ -115,11 +114,14 @@ def run_command(  # noqa: PLR0913
     return _run_captured(cmd, cwd=cwd, timeout=timeout, check=check, stdin=stdin, env=merged_env)
 
 
-def _log_command(cmd: list[str], cwd: str | None, *, err: bool = False) -> None:
-    """Print the command and working directory for reproducibility."""
-    typer.echo(f"$ {shlex.join(cmd)}", err=err)
+logger = logging.getLogger(__name__)
+
+
+def _log_command(cmd: list[str], cwd: str | None) -> None:
+    """Log the command and working directory for reproducibility."""
+    logger.info("$ %s", shlex.join(cmd))
     if cwd:
-        typer.echo(f"  cwd: {cwd}", err=err)
+        logger.info("  cwd: %s", cwd)
 
 
 def _run_interactive(
@@ -130,7 +132,7 @@ def _run_interactive(
     env: dict[str, str] | None = None,
 ) -> SubprocessResult:
     """Run *cmd* with inherited stdin/stdout/stderr for full TTY access."""
-    _log_command(cmd, cwd, err=True)
+    _log_command(cmd, cwd)
     try:
         proc = subprocess.run(cmd, cwd=cwd, check=False, env=env)
     except OSError as exc:
@@ -162,7 +164,7 @@ def _run_streaming(  # noqa: PLR0913
     env: dict[str, str] | None = None,
 ) -> SubprocessResult:
     """Run *cmd* with real-time output to the terminal."""
-    _log_command(cmd, cwd, err=True)
+    _log_command(cmd, cwd)
     try:
         proc = subprocess.Popen(
             cmd,
@@ -258,7 +260,7 @@ def _run_captured(  # noqa: PLR0913
     env: dict[str, str] | None = None,
 ) -> SubprocessResult:
     """Run *cmd* with fully buffered output (no terminal echo)."""
-    _log_command(cmd, cwd, err=True)
+    _log_command(cmd, cwd)
     try:
         proc = subprocess.run(
             cmd,
