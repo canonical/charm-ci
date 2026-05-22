@@ -12,13 +12,14 @@ failures can be reproduced manually by copy-pasting from the output.
 """
 
 import io
-import logging
 import os
 import shlex
 import subprocess
 import sys
 import threading
 from dataclasses import dataclass
+
+import typer
 
 from opcli.core.exceptions import SubprocessError
 
@@ -32,32 +33,6 @@ class SubprocessResult:
     stdout: str
     stderr: str
     returncode: int
-
-
-def _stream_pipe(
-    pipe: io.TextIOWrapper,
-    buf: list[str],
-    dest: io.TextIOWrapper,
-) -> None:
-    """Read *pipe* line-by-line, echo to *dest*, accumulate in *buf*."""
-    for line in pipe:
-        buf.append(line)
-        dest.write(line)
-        dest.flush()
-
-
-def _write_stdin(pipe: io.TextIOWrapper, data: str) -> None:
-    """Write *data* to *pipe* and close it.
-
-    ``BrokenPipeError`` and ``ValueError`` are silently swallowed — they
-    mean the subprocess closed its stdin early, which is normal for commands
-    that consume all their input before exiting.
-    """
-    try:
-        pipe.write(data)
-        pipe.close()
-    except (BrokenPipeError, ValueError):
-        pass
 
 
 def run_command(  # noqa: PLR0913
@@ -114,16 +89,6 @@ def run_command(  # noqa: PLR0913
     return _run_captured(cmd, cwd=cwd, timeout=timeout, check=check, stdin=stdin, env=merged_env)
 
 
-logger = logging.getLogger(__name__)
-
-
-def _log_command(cmd: list[str], cwd: str | None) -> None:
-    """Log the command and working directory for reproducibility."""
-    logger.info("$ %s", shlex.join(cmd))
-    if cwd:
-        logger.info("  cwd: %s", cwd)
-
-
 def _run_interactive(
     cmd: list[str],
     *,
@@ -132,7 +97,7 @@ def _run_interactive(
     env: dict[str, str] | None = None,
 ) -> SubprocessResult:
     """Run *cmd* with inherited stdin/stdout/stderr for full TTY access."""
-    _log_command(cmd, cwd)
+    _log_command(cmd, cwd, err=True)
     try:
         proc = subprocess.run(cmd, cwd=cwd, check=False, env=env)
     except OSError as exc:
@@ -154,6 +119,13 @@ def _run_interactive(
     return result
 
 
+def _log_command(cmd: list[str], cwd: str | None, *, err: bool = False) -> None:
+    """Print the command and working directory for reproducibility."""
+    typer.echo(f"$ {shlex.join(cmd)}", err=err)
+    if cwd:
+        typer.echo(f"  cwd: {cwd}", err=err)
+
+
 def _run_streaming(  # noqa: PLR0913
     cmd: list[str],
     *,
@@ -164,7 +136,7 @@ def _run_streaming(  # noqa: PLR0913
     env: dict[str, str] | None = None,
 ) -> SubprocessResult:
     """Run *cmd* with real-time output to the terminal."""
-    _log_command(cmd, cwd)
+    _log_command(cmd, cwd, err=True)
     try:
         proc = subprocess.Popen(
             cmd,
@@ -250,6 +222,32 @@ def _run_streaming(  # noqa: PLR0913
     return result
 
 
+def _stream_pipe(
+    pipe: io.TextIOWrapper,
+    buf: list[str],
+    dest: io.TextIOWrapper,
+) -> None:
+    """Read *pipe* line-by-line, echo to *dest*, accumulate in *buf*."""
+    for line in pipe:
+        buf.append(line)
+        dest.write(line)
+        dest.flush()
+
+
+def _write_stdin(pipe: io.TextIOWrapper, data: str) -> None:
+    """Write *data* to *pipe* and close it.
+
+    ``BrokenPipeError`` and ``ValueError`` are silently swallowed — they
+    mean the subprocess closed its stdin early, which is normal for commands
+    that consume all their input before exiting.
+    """
+    try:
+        pipe.write(data)
+        pipe.close()
+    except (BrokenPipeError, ValueError):
+        pass
+
+
 def _run_captured(  # noqa: PLR0913
     cmd: list[str],
     *,
@@ -260,7 +258,7 @@ def _run_captured(  # noqa: PLR0913
     env: dict[str, str] | None = None,
 ) -> SubprocessResult:
     """Run *cmd* with fully buffered output (no terminal echo)."""
-    _log_command(cmd, cwd)
+    _log_command(cmd, cwd, err=True)
     try:
         proc = subprocess.run(
             cmd,

@@ -135,31 +135,6 @@ def provision_load(
     return pushed
 
 
-def _is_port_open(host: str, port: int, *, timeout: float = 2.0) -> bool:
-    """Return ``True`` if a TCP connection to *host*:*port* succeeds."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-def _detect_kubectl() -> list[str] | None:
-    """Auto-detect the kubectl command based on installed k8s providers.
-
-    Detection order: microk8s → k8s → standalone kubectl.
-    Returns the command prefix (e.g. ``["sudo", "microk8s", "kubectl"]``)
-    or ``None`` if no k8s tooling is found.
-    """
-    if shutil.which("microk8s"):
-        return ["sudo", "microk8s", "kubectl"]
-    if shutil.which("k8s"):
-        return ["sudo", "k8s", "kubectl"]
-    if shutil.which("kubectl"):
-        return ["sudo", "kubectl"]
-    return None
-
-
 def provision_registry(
     root: Path,
 ) -> str:
@@ -214,3 +189,28 @@ def provision_registry(
     )
 
     return "deployed"
+
+
+def _is_port_open(host: str, port: int, *, timeout: float = 2.0) -> bool:
+    """Return ``True`` if a TCP connection to *host*:*port* succeeds."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _detect_kubectl() -> list[str] | None:
+    """Auto-detect the kubectl command based on installed k8s providers.
+
+    Detection order: microk8s → k8s → standalone kubectl.
+    Returns the command prefix (e.g. ``["sudo", "microk8s", "kubectl"]``)
+    or ``None`` if no k8s tooling is found.
+    """
+    if shutil.which("microk8s"):
+        return ["sudo", "microk8s", "kubectl"]
+    if shutil.which("k8s"):
+        return ["sudo", "k8s", "kubectl"]
+    if shutil.which("kubectl"):
+        return ["sudo", "kubectl"]
+    return None

@@ -46,6 +46,173 @@ _VIRTUAL_BACKEND = "integration-test"
 # ---------------------------------------------------------------------------
 
 
+_TASK_YAML_CONTENT = (
+    "summary: integration tests\n"
+    "\n"
+    "execute: |\n"
+    '    cd "${SPREAD_PATH}"\n'
+    '    PYTEST_CMD=$(opcli pytest expand -e "${TOX_ENV:-integration}"'
+    ' -- --model testing --keep-models -k "$MODULE") || exit 1\n'
+    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && ${PYTEST_CMD}\"\n"
+)
+
+
+def spread_init(root: Path, *, force: bool = False) -> tuple[Path, Path]:
+    """Generate ``spread.yaml`` and ``tests/integration/run/task.yaml``.
+
+    Returns:
+        Tuple of (spread.yaml path, task.yaml path).
+
+    Raises:
+        ConfigurationError: If files exist and *force* is ``False``.
+    """
+    spread_path = root / _SPREAD_YAML
+    task_path = root / _TASK_YAML_REL
+
+    if not force:
+        for p in (spread_path, task_path):
+            if p.exists():
+                msg = f"{p.name} already exists. Use --force to overwrite."
+                raise ConfigurationError(msg)
+
+    project_name = root.resolve().name
+    modules = _discover_test_modules(root)
+
+    spread_content = _generate_spread_yaml(project_name, modules)
+    spread_path.write_text(spread_content)
+    logger.info("Wrote %s", spread_path)
+
+    task_path.parent.mkdir(parents=True, exist_ok=True)
+    task_path.write_text(_TASK_YAML_CONTENT)
+    logger.info("Wrote %s", task_path)
+
+    return spread_path, task_path
+
+
+def spread_expand(
+    root: Path,
+    *,
+    ci: bool | None = None,
+) -> str:
+    """Read ``spread.yaml`` and return the expanded content as a string.
+
+    The output is for display / debugging; it does **not** include the
+    ``reroot`` field that ``spread_run`` injects.
+
+    Raises:
+        ConfigurationError: If ``spread.yaml`` is missing or malformed.
+    """
+    expanded = _expand(root, ci=ci)
+    return dumps_yaml(literalize(expanded))
+
+
+# ---------------------------------------------------------------------------
+#  spread run
+# ---------------------------------------------------------------------------
+
+
+def spread_run(
+    root: Path,
+    *,
+    extra_args: list[str] | None = None,
+    ci: bool | None = None,
+) -> None:
+    """Expand ``spread.yaml`` and run ``spread``.
+
+    The expanded YAML is written to a temporary subdirectory inside *root*
+    with a ``reroot: ..`` field so spread resolves the project tree from the
+    parent directory.  Spread is invoked from that subdirectory; the original
+    ``spread.yaml`` is never modified.
+
+    In local mode, secrets from ``.secrets.env`` (if present) are loaded and
+    passed as environment variables to the spread subprocess.  In CI mode the
+    variables are expected to already be in the environment.
+
+    Raises:
+        ConfigurationError: If ``spread.yaml`` is missing or malformed.
+        SubprocessError: If spread exits non-zero.
+    """
+    is_ci = ci if ci is not None else _is_ci()
+    expanded = _expand(root, ci=ci)
+    expanded["reroot"] = _compose_reroot(expanded.get("reroot"))
+
+    # Load secrets env overlay for local runs only
+    secrets_env: dict[str, str] | None = None
+    if not is_ci:
+        loaded = _load_secrets_env(root)
+        if loaded:
+            secrets_env = loaded
+
+    with _expanded_spread_yaml_dir(root, expanded, prefix=".spread-run-") as tmp_dir:
+        cmd = ["spread"]
+        if extra_args:
+            cmd.extend(extra_args)
+        status(f"Running spread ({'CI' if is_ci else 'local'} mode)")
+        run_command(cmd, cwd=str(tmp_dir), interactive=True, env=secrets_env)
+
+
+def spread_jobs(root: Path) -> list[dict[str, str]]:
+    """Return all CI spread task selectors as a list of GitHub Actions matrix entries.
+
+    Calls ``spread -list`` on the expanded (CI-mode) ``spread.yaml``, restricted
+    to virtual backends (``integration-test``).  Non-virtual
+    spread-native backends are excluded.
+
+    Each entry has:
+
+    - ``name``: display name — the full spread selector as returned by
+      ``spread -list``.
+    - ``selector``: full spread selector as returned by ``spread -list``.
+    - ``runs-on``: GitHub Actions runner label (JSON-encoded, from the
+      ``runner:`` field on the system entry, or ``"ubuntu-latest"`` if absent).
+    - ``arch``: architecture string — taken from the explicit ``arch:`` field
+      on the system entry when present, otherwise derived from the runner label.
+
+    Raises:
+        ConfigurationError: If ``spread.yaml`` is missing, malformed, or
+            contains no virtual backend.
+        SubprocessError: If ``spread -list`` fails.
+    """
+    raw = _load_spread_yaml(root)
+    runner_map, arch_map, ci_backend_names = _virtual_runner_map(raw)
+
+    # _expand_backend raises ConfigurationError when no virtual backends are found.
+    expanded = _expand_backend(raw, ci=True)
+    expanded["reroot"] = _compose_reroot(expanded.get("reroot"))
+
+    entries: list[dict[str, str]] = []
+    with _expanded_spread_yaml_dir(root, expanded, prefix=".spread-jobs-") as tmp_dir:
+        selectors = [f"{name}:" for name in ci_backend_names]
+        result = run_command(
+            ["spread", "-list", *selectors],
+            cwd=str(tmp_dir),
+            stream=False,
+        )
+
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            parts = line.split(":")
+            _MIN_PARTS = 3  # noqa: N806
+            if len(parts) < _MIN_PARTS:
+                continue
+            system = parts[1]
+            runner = runner_map.get(system, json.dumps(_DEFAULT_RUNNER))
+            explicit_arch = arch_map.get(system)
+            arch = explicit_arch if explicit_arch is not None else _arch_from_runner(runner)
+            entries.append(
+                {
+                    "name": line,
+                    "selector": line,
+                    "runs-on": runner,
+                    "arch": arch,
+                }
+            )
+
+    return entries
+
+
 def _discover_test_modules(root: Path) -> list[str]:
     """Find ``test_*.py`` files under ``tests/integration/``."""
     integration_dir = root / "tests" / "integration"
@@ -101,47 +268,199 @@ def _generate_spread_yaml(
     return dumps_yaml(data)
 
 
-_TASK_YAML_CONTENT = (
-    "summary: integration tests\n"
-    "\n"
-    "execute: |\n"
-    '    cd "${SPREAD_PATH}"\n'
-    '    PYTEST_CMD=$(opcli pytest expand -e "${TOX_ENV:-integration}"'
-    ' -- --model testing --keep-models -k "$MODULE") || exit 1\n'
-    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && ${PYTEST_CMD}\"\n"
-)
+def _expand(root: Path, *, ci: bool | None = None) -> dict[str, Any]:
+    """Load ``spread.yaml``, expand its virtual backend, return the dict."""
+    data = _load_spread_yaml(root)
+    return _expand_backend(data, ci=ci)
 
 
-def spread_init(root: Path, *, force: bool = False) -> tuple[Path, Path]:
-    """Generate ``spread.yaml`` and ``tests/integration/run/task.yaml``.
+def _load_spread_yaml(root: Path) -> dict[str, Any]:
+    """Load and validate ``spread.yaml`` from *root*.
 
     Returns:
-        Tuple of (spread.yaml path, task.yaml path).
+        Parsed YAML mapping.
 
     Raises:
-        ConfigurationError: If files exist and *force* is ``False``.
+        ConfigurationError: If the file is missing or not a YAML mapping.
     """
     spread_path = root / _SPREAD_YAML
-    task_path = root / _TASK_YAML_REL
+    if not spread_path.exists():
+        msg = f"{_SPREAD_YAML} not found. Run 'opcli spread init' first."
+        raise ConfigurationError(msg)
 
-    if not force:
-        for p in (spread_path, task_path):
-            if p.exists():
-                msg = f"{p.name} already exists. Use --force to overwrite."
-                raise ConfigurationError(msg)
+    try:
+        data = load_yaml(spread_path)
+    except ValueError:
+        msg = f"{_SPREAD_YAML} does not contain a YAML mapping"
+        raise ConfigurationError(msg) from None
 
-    project_name = root.resolve().name
-    modules = _discover_test_modules(root)
+    return data
 
-    spread_content = _generate_spread_yaml(project_name, modules)
-    spread_path.write_text(spread_content)
-    logger.info("Wrote %s", spread_path)
 
-    task_path.parent.mkdir(parents=True, exist_ok=True)
-    task_path.write_text(_TASK_YAML_CONTENT)
-    logger.info("Wrote %s", task_path)
+def _expand_backend(
+    spread_data: dict[str, object],
+    *,
+    ci: bool | None = None,
+) -> dict[str, object]:
+    """Replace all virtual-typed backends with concrete ones.
 
-    return spread_path, task_path
+    Scans all backends in ``spread.yaml`` for a ``type:`` field whose value
+    is a recognised virtual type (``integration-test``).
+    Each such backend is removed and replaced with a concrete counterpart
+    named ``{backend_name}-local`` or ``{backend_name}-ci``.  The ``type:``
+    field is consumed by opcli and replaced with ``type: adhoc``.  All other
+    user-defined fields (``systems``, ``environment``, ``prepare-each``,
+    ``kill-timeout``, etc.) are preserved.
+
+    Multiple virtual backends may coexist in a single ``spread.yaml`` — each
+    is expanded independently, so users can declare e.g.
+    ``integration-test:`` and ``integration-test-arm:`` (both with
+    ``type: integration-test``) with different system lists.
+
+    Suite-level ``backends:`` lists are also updated so that any reference to
+    a virtual backend name is replaced with the corresponding concrete name.
+
+    Args:
+        spread_data: Parsed spread.yaml (mutated in place on a deep copy).
+        ci: Force CI mode if True, local if False, auto-detect if None.
+
+    Returns:
+        New dict with the backends replaced.
+
+    Raises:
+        ConfigurationError: If no backend with a recognised virtual type is
+            found.
+    """
+    data = deepcopy(spread_data)
+    backends = data.get("backends")
+    if not isinstance(backends, dict):
+        msg = "spread.yaml has no 'backends' section"
+        raise ConfigurationError(msg)
+
+    use_ci = ci if ci is not None else _is_ci()
+    found_any = False
+
+    for backend_name in list(backends.keys()):
+        backend_entry = backends.get(backend_name)
+        if not isinstance(backend_entry, dict):
+            continue
+        # If type: is absent, fall back to the backend name as the type —
+        # mirroring spread's own convention where the backend name implies
+        # the driver type when type: is not explicitly set.
+        raw_type = backend_entry.get("type")
+        backend_type = raw_type if isinstance(raw_type, str) else backend_name
+        if backend_type not in _BACKEND_CONFIGS:
+            continue
+        found_any = True
+
+        prepare_parts = _BACKEND_CONFIGS[backend_type]
+        # Strip the virtual type field; _build_concrete_backend sets type: adhoc
+        virtual = {k: v for k, v in backend_entry.items() if k != "type"}
+        del backends[backend_name]
+
+        concrete_name = f"{backend_name}-ci" if use_ci else f"{backend_name}-local"
+        if concrete_name in backends:
+            msg = (
+                f"Cannot expand virtual backend '{backend_name}': the concrete "
+                f"name '{concrete_name}' already exists in spread.yaml. "
+                "Rename or remove the conflicting backend."
+            )
+            raise ConfigurationError(msg)
+        backends[concrete_name] = _build_concrete_backend(
+            virtual,
+            use_ci=use_ci,
+            prepare_parts=prepare_parts,
+        )
+        _replace_suite_backend_name(data, backend_name, concrete_name)
+
+    if not found_any:
+        known = ", ".join(f"'{n}'" for n in _BACKEND_CONFIGS)
+        msg = (
+            f"spread.yaml contains no backend with a recognised virtual type "
+            f"({known}). Nothing to expand."
+        )
+        raise ConfigurationError(msg)
+
+    data["backends"] = backends
+    return data
+
+
+def _build_concrete_backend(
+    virtual: object,
+    *,
+    use_ci: bool,
+    prepare_parts: tuple[str, str, str, str],
+) -> dict[str, object]:
+    """Return a concrete adhoc backend dict built from a virtual backend entry.
+
+    *prepare_parts* is ``(local_before, local_after, ci_before, ci_after)``.
+    If the user's virtual backend contains a ``prepare`` key its content is
+    spliced between the *before* and *after* sections of the appropriate mode.
+    """
+    backend_def: dict[str, object] = deepcopy(virtual) if isinstance(virtual, dict) else {}
+    backend_def["type"] = "adhoc"
+
+    # Extract user-defined prepare before we overwrite it.
+    user_prepare = backend_def.pop("prepare", None)
+    user_prepare_str = str(user_prepare).rstrip("\n") + "\n" if user_prepare else ""
+
+    local_prepare_before, local_prepare_after, ci_prepare_before, ci_prepare_after = prepare_parts
+
+    systems = backend_def.get("systems")
+
+    if use_ci:
+        backend_def["allocate"] = _CI_ALLOCATE
+        prepare = ci_prepare_before + user_prepare_str + ci_prepare_after
+        if prepare:
+            backend_def["prepare"] = prepare
+        # GitHub Actions vars are only needed for the CI backend so that
+        # _CI_PREPARE can authenticate and download build artifacts via gh.
+        # Scoping them here keeps the root spread.yaml clean for local runs.
+        existing_env = backend_def.get("environment")
+        existing_env = dict(existing_env) if isinstance(existing_env, dict) else {}
+        backend_def["environment"] = {
+            # SUDO_USER=ubuntu makes juju store controller data in the ubuntu
+            # user's home directory so tests running as ubuntu can find the
+            # credentials.
+            "SUDO_USER": "ubuntu",
+            "GITHUB_TOKEN": '$(HOST: echo "${GITHUB_TOKEN:-}")',
+            "GITHUB_RUN_ID": '$(HOST: echo "${GITHUB_RUN_ID:-}")',
+            "GITHUB_REPOSITORY": '$(HOST: echo "${GITHUB_REPOSITORY:-}")',
+            "GITHUB_WORKSPACE": '$(HOST: echo "${GITHUB_WORKSPACE:-}")',
+            **existing_env,
+        }
+        if isinstance(systems, list):
+            backend_def["systems"] = _transform_systems(
+                systems, strip_keys=_SYSTEM_STRIP_KEYS, inject_username="root"
+            )
+    else:
+        # Extract per-system resource overrides before stripping the fields.
+        resources: dict[str, dict[str, int]] = {}
+        if isinstance(systems, list):
+            resources = _extract_system_resources(systems)
+
+        preamble = _make_resource_preamble(resources)
+        backend_def["allocate"] = preamble + _LOCAL_ALLOCATE
+        backend_def["discard"] = _LOCAL_DISCARD
+        existing_env = backend_def.get("environment")
+        existing_env = dict(existing_env) if isinstance(existing_env, dict) else {}
+        backend_def["environment"] = {
+            # SUDO_USER=ubuntu makes juju store controller data in the ubuntu
+            # user's home directory so tests running as ubuntu can find the
+            # credentials.
+            "SUDO_USER": "ubuntu",
+            **existing_env,
+        }
+        prepare = local_prepare_before + user_prepare_str + local_prepare_after
+        if prepare:
+            backend_def["prepare"] = prepare
+
+        if isinstance(systems, list):
+            backend_def["systems"] = _transform_systems(
+                systems, strip_keys=_SYSTEM_STRIP_KEYS, inject_username="ubuntu"
+            )
+
+    return backend_def
 
 
 # ---------------------------------------------------------------------------
@@ -391,26 +710,6 @@ def _make_resource_preamble(resources: dict[str, dict[str, int]]) -> str:
     return "".join(lines)
 
 
-def _transform_system_props(
-    name: str,
-    props: object,
-    *,
-    strip_keys: frozenset[str],
-    inject_username: str | None,
-) -> object:
-    """Return the transformed props for a single system name→props pair."""
-    if isinstance(props, dict):
-        new_props = {k: v for k, v in props.items() if k not in strip_keys}
-        if inject_username:
-            new_props.setdefault("username", inject_username)
-        return new_props if new_props else None
-    if props is None:
-        if inject_username:
-            return {"username": inject_username}
-        return None
-    return props
-
-
 def _transform_systems(
     systems: list[object],
     *,
@@ -450,82 +749,24 @@ def _transform_systems(
     return result
 
 
-def _build_concrete_backend(
-    virtual: object,
+def _transform_system_props(
+    name: str,
+    props: object,
     *,
-    use_ci: bool,
-    prepare_parts: tuple[str, str, str, str],
-) -> dict[str, object]:
-    """Return a concrete adhoc backend dict built from a virtual backend entry.
-
-    *prepare_parts* is ``(local_before, local_after, ci_before, ci_after)``.
-    If the user's virtual backend contains a ``prepare`` key its content is
-    spliced between the *before* and *after* sections of the appropriate mode.
-    """
-    backend_def: dict[str, object] = deepcopy(virtual) if isinstance(virtual, dict) else {}
-    backend_def["type"] = "adhoc"
-
-    # Extract user-defined prepare before we overwrite it.
-    user_prepare = backend_def.pop("prepare", None)
-    user_prepare_str = str(user_prepare).rstrip("\n") + "\n" if user_prepare else ""
-
-    local_prepare_before, local_prepare_after, ci_prepare_before, ci_prepare_after = prepare_parts
-
-    systems = backend_def.get("systems")
-
-    if use_ci:
-        backend_def["allocate"] = _CI_ALLOCATE
-        prepare = ci_prepare_before + user_prepare_str + ci_prepare_after
-        if prepare:
-            backend_def["prepare"] = prepare
-        # GitHub Actions vars are only needed for the CI backend so that
-        # _CI_PREPARE can authenticate and download build artifacts via gh.
-        # Scoping them here keeps the root spread.yaml clean for local runs.
-        existing_env = backend_def.get("environment")
-        existing_env = dict(existing_env) if isinstance(existing_env, dict) else {}
-        backend_def["environment"] = {
-            # SUDO_USER=ubuntu makes juju store controller data in the ubuntu
-            # user's home directory so tests running as ubuntu can find the
-            # credentials.
-            "SUDO_USER": "ubuntu",
-            "GITHUB_TOKEN": '$(HOST: echo "${GITHUB_TOKEN:-}")',
-            "GITHUB_RUN_ID": '$(HOST: echo "${GITHUB_RUN_ID:-}")',
-            "GITHUB_REPOSITORY": '$(HOST: echo "${GITHUB_REPOSITORY:-}")',
-            "GITHUB_WORKSPACE": '$(HOST: echo "${GITHUB_WORKSPACE:-}")',
-            **existing_env,
-        }
-        if isinstance(systems, list):
-            backend_def["systems"] = _transform_systems(
-                systems, strip_keys=_SYSTEM_STRIP_KEYS, inject_username="root"
-            )
-    else:
-        # Extract per-system resource overrides before stripping the fields.
-        resources: dict[str, dict[str, int]] = {}
-        if isinstance(systems, list):
-            resources = _extract_system_resources(systems)
-
-        preamble = _make_resource_preamble(resources)
-        backend_def["allocate"] = preamble + _LOCAL_ALLOCATE
-        backend_def["discard"] = _LOCAL_DISCARD
-        existing_env = backend_def.get("environment")
-        existing_env = dict(existing_env) if isinstance(existing_env, dict) else {}
-        backend_def["environment"] = {
-            # SUDO_USER=ubuntu makes juju store controller data in the ubuntu
-            # user's home directory so tests running as ubuntu can find the
-            # credentials.
-            "SUDO_USER": "ubuntu",
-            **existing_env,
-        }
-        prepare = local_prepare_before + user_prepare_str + local_prepare_after
-        if prepare:
-            backend_def["prepare"] = prepare
-
-        if isinstance(systems, list):
-            backend_def["systems"] = _transform_systems(
-                systems, strip_keys=_SYSTEM_STRIP_KEYS, inject_username="ubuntu"
-            )
-
-    return backend_def
+    strip_keys: frozenset[str],
+    inject_username: str | None,
+) -> object:
+    """Return the transformed props for a single system name→props pair."""
+    if isinstance(props, dict):
+        new_props = {k: v for k, v in props.items() if k not in strip_keys}
+        if inject_username:
+            new_props.setdefault("username", inject_username)
+        return new_props if new_props else None
+    if props is None:
+        if inject_username:
+            return {"username": inject_username}
+        return None
+    return props
 
 
 def _replace_suite_backend_name(
@@ -544,123 +785,6 @@ def _replace_suite_backend_name(
                 suite_cfg["backends"] = [
                     concrete_name if b == virtual_name else b for b in suite_backends
                 ]
-
-
-def _expand_backend(
-    spread_data: dict[str, object],
-    *,
-    ci: bool | None = None,
-) -> dict[str, object]:
-    """Replace all virtual-typed backends with concrete ones.
-
-    Scans all backends in ``spread.yaml`` for a ``type:`` field whose value
-    is a recognised virtual type (``integration-test``).
-    Each such backend is removed and replaced with a concrete counterpart
-    named ``{backend_name}-local`` or ``{backend_name}-ci``.  The ``type:``
-    field is consumed by opcli and replaced with ``type: adhoc``.  All other
-    user-defined fields (``systems``, ``environment``, ``prepare-each``,
-    ``kill-timeout``, etc.) are preserved.
-
-    Multiple virtual backends may coexist in a single ``spread.yaml`` — each
-    is expanded independently, so users can declare e.g.
-    ``integration-test:`` and ``integration-test-arm:`` (both with
-    ``type: integration-test``) with different system lists.
-
-    Suite-level ``backends:`` lists are also updated so that any reference to
-    a virtual backend name is replaced with the corresponding concrete name.
-
-    Args:
-        spread_data: Parsed spread.yaml (mutated in place on a deep copy).
-        ci: Force CI mode if True, local if False, auto-detect if None.
-
-    Returns:
-        New dict with the backends replaced.
-
-    Raises:
-        ConfigurationError: If no backend with a recognised virtual type is
-            found.
-    """
-    data = deepcopy(spread_data)
-    backends = data.get("backends")
-    if not isinstance(backends, dict):
-        msg = "spread.yaml has no 'backends' section"
-        raise ConfigurationError(msg)
-
-    use_ci = ci if ci is not None else _is_ci()
-    found_any = False
-
-    for backend_name in list(backends.keys()):
-        backend_entry = backends.get(backend_name)
-        if not isinstance(backend_entry, dict):
-            continue
-        # If type: is absent, fall back to the backend name as the type —
-        # mirroring spread's own convention where the backend name implies
-        # the driver type when type: is not explicitly set.
-        raw_type = backend_entry.get("type")
-        backend_type = raw_type if isinstance(raw_type, str) else backend_name
-        if backend_type not in _BACKEND_CONFIGS:
-            continue
-        found_any = True
-
-        prepare_parts = _BACKEND_CONFIGS[backend_type]
-        # Strip the virtual type field; _build_concrete_backend sets type: adhoc
-        virtual = {k: v for k, v in backend_entry.items() if k != "type"}
-        del backends[backend_name]
-
-        concrete_name = f"{backend_name}-ci" if use_ci else f"{backend_name}-local"
-        if concrete_name in backends:
-            msg = (
-                f"Cannot expand virtual backend '{backend_name}': the concrete "
-                f"name '{concrete_name}' already exists in spread.yaml. "
-                "Rename or remove the conflicting backend."
-            )
-            raise ConfigurationError(msg)
-        backends[concrete_name] = _build_concrete_backend(
-            virtual,
-            use_ci=use_ci,
-            prepare_parts=prepare_parts,
-        )
-        _replace_suite_backend_name(data, backend_name, concrete_name)
-
-    if not found_any:
-        known = ", ".join(f"'{n}'" for n in _BACKEND_CONFIGS)
-        msg = (
-            f"spread.yaml contains no backend with a recognised virtual type "
-            f"({known}). Nothing to expand."
-        )
-        raise ConfigurationError(msg)
-
-    data["backends"] = backends
-    return data
-
-
-def _load_spread_yaml(root: Path) -> dict[str, Any]:
-    """Load and validate ``spread.yaml`` from *root*.
-
-    Returns:
-        Parsed YAML mapping.
-
-    Raises:
-        ConfigurationError: If the file is missing or not a YAML mapping.
-    """
-    spread_path = root / _SPREAD_YAML
-    if not spread_path.exists():
-        msg = f"{_SPREAD_YAML} not found. Run 'opcli spread init' first."
-        raise ConfigurationError(msg)
-
-    try:
-        data = load_yaml(spread_path)
-    except ValueError:
-        msg = f"{_SPREAD_YAML} does not contain a YAML mapping"
-        raise ConfigurationError(msg) from None
-
-    return data
-
-
-def _expand(root: Path, *, ci: bool | None = None) -> dict[str, Any]:
-    """Load ``spread.yaml``, expand its virtual backend, return the dict."""
-    data = _load_spread_yaml(root)
-    return _expand_backend(data, ci=ci)
 
 
 def _compose_reroot(existing_reroot: object | None) -> str:
@@ -688,89 +812,18 @@ def _compose_reroot(existing_reroot: object | None) -> str:
     return posixpath.normpath(posixpath.join("..", existing_reroot))
 
 
-def spread_expand(
+@contextmanager
+def _expanded_spread_yaml_dir(
     root: Path,
+    expanded: object,
     *,
-    ci: bool | None = None,
-) -> str:
-    """Read ``spread.yaml`` and return the expanded content as a string.
-
-    The output is for display / debugging; it does **not** include the
-    ``reroot`` field that ``spread_run`` injects.
-
-    Raises:
-        ConfigurationError: If ``spread.yaml`` is missing or malformed.
-    """
-    expanded = _expand(root, ci=ci)
-    return dumps_yaml(literalize(expanded))
-
-
-# ---------------------------------------------------------------------------
-#  spread run
-# ---------------------------------------------------------------------------
-
-
-def spread_run(
-    root: Path,
-    *,
-    extra_args: list[str] | None = None,
-    ci: bool | None = None,
-) -> None:
-    """Expand ``spread.yaml`` and run ``spread``.
-
-    The expanded YAML is written to a temporary subdirectory inside *root*
-    with a ``reroot: ..`` field so spread resolves the project tree from the
-    parent directory.  Spread is invoked from that subdirectory; the original
-    ``spread.yaml`` is never modified.
-
-    In local mode, secrets from ``.secrets.env`` (if present) are loaded and
-    passed as environment variables to the spread subprocess.  In CI mode the
-    variables are expected to already be in the environment.
-
-    Raises:
-        ConfigurationError: If ``spread.yaml`` is missing or malformed.
-        SubprocessError: If spread exits non-zero.
-    """
-    is_ci = ci if ci is not None else _is_ci()
-    expanded = _expand(root, ci=ci)
-    expanded["reroot"] = _compose_reroot(expanded.get("reroot"))
-
-    # Load secrets env overlay for local runs only
-    secrets_env: dict[str, str] | None = None
-    if not is_ci:
-        loaded = _load_secrets_env(root)
-        if loaded:
-            secrets_env = loaded
-
-    with _expanded_spread_yaml_dir(root, expanded, prefix=".spread-run-") as tmp_dir:
-        cmd = ["spread"]
-        if extra_args:
-            cmd.extend(extra_args)
-        status(f"Running spread ({'CI' if is_ci else 'local'} mode)")
-        run_command(cmd, cwd=str(tmp_dir), interactive=True, env=secrets_env)
-
-
-# ---------------------------------------------------------------------------
-#  spread jobs — enumerate CI test selectors for GitHub Actions matrix
-# ---------------------------------------------------------------------------
-
-_DEFAULT_RUNNER = "ubuntu-latest"
-
-
-def _arch_from_runner(runner_json: str) -> str:
-    """Derive a display architecture string from a JSON-encoded runner label.
-
-    Checks for ``arm64`` in the runner labels; falls back to ``amd64``.
-    """
-    try:
-        labels = json.loads(runner_json)
-    except json.JSONDecodeError:
-        return "amd64"
-    if isinstance(labels, str):
-        labels = [labels]
-    if isinstance(labels, list) and any("arm64" in str(lbl).lower() for lbl in labels):
-        return "arm64"
-    return "amd64"
+    prefix: str,
+) -> Iterator[Path]:
+    """Yield a temp directory containing the expanded ``spread.yaml``."""
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=root) as tmp_dir:
+        tmp_dir_path = Path(tmp_dir)
+        dump_yaml(literalize(expanded), tmp_dir_path / _SPREAD_YAML)
+        yield tmp_dir_path
 
 
 def _virtual_runner_map(  # noqa: C901
@@ -825,77 +878,24 @@ def _virtual_runner_map(  # noqa: C901
     return runner_map, arch_map, ci_names
 
 
-def spread_jobs(root: Path) -> list[dict[str, str]]:
-    """Return all CI spread task selectors as a list of GitHub Actions matrix entries.
+# ---------------------------------------------------------------------------
+#  spread jobs — enumerate CI test selectors for GitHub Actions matrix
+# ---------------------------------------------------------------------------
 
-    Calls ``spread -list`` on the expanded (CI-mode) ``spread.yaml``, restricted
-    to virtual backends (``integration-test``).  Non-virtual
-    spread-native backends are excluded.
+_DEFAULT_RUNNER = "ubuntu-latest"
 
-    Each entry has:
 
-    - ``name``: display name — the full spread selector as returned by
-      ``spread -list``.
-    - ``selector``: full spread selector as returned by ``spread -list``.
-    - ``runs-on``: GitHub Actions runner label (JSON-encoded, from the
-      ``runner:`` field on the system entry, or ``"ubuntu-latest"`` if absent).
-    - ``arch``: architecture string — taken from the explicit ``arch:`` field
-      on the system entry when present, otherwise derived from the runner label.
+def _arch_from_runner(runner_json: str) -> str:
+    """Derive a display architecture string from a JSON-encoded runner label.
 
-    Raises:
-        ConfigurationError: If ``spread.yaml`` is missing, malformed, or
-            contains no virtual backend.
-        SubprocessError: If ``spread -list`` fails.
+    Checks for ``arm64`` in the runner labels; falls back to ``amd64``.
     """
-    raw = _load_spread_yaml(root)
-    runner_map, arch_map, ci_backend_names = _virtual_runner_map(raw)
-
-    # _expand_backend raises ConfigurationError when no virtual backends are found.
-    expanded = _expand_backend(raw, ci=True)
-    expanded["reroot"] = _compose_reroot(expanded.get("reroot"))
-
-    entries: list[dict[str, str]] = []
-    with _expanded_spread_yaml_dir(root, expanded, prefix=".spread-jobs-") as tmp_dir:
-        selectors = [f"{name}:" for name in ci_backend_names]
-        result = run_command(
-            ["spread", "-list", *selectors],
-            cwd=str(tmp_dir),
-            stream=False,
-        )
-
-        for raw_line in result.stdout.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            parts = line.split(":")
-            _MIN_PARTS = 3  # noqa: N806
-            if len(parts) < _MIN_PARTS:
-                continue
-            system = parts[1]
-            runner = runner_map.get(system, json.dumps(_DEFAULT_RUNNER))
-            explicit_arch = arch_map.get(system)
-            arch = explicit_arch if explicit_arch is not None else _arch_from_runner(runner)
-            entries.append(
-                {
-                    "name": line,
-                    "selector": line,
-                    "runs-on": runner,
-                    "arch": arch,
-                }
-            )
-
-    return entries
-
-
-@contextmanager
-def _expanded_spread_yaml_dir(
-    root: Path,
-    expanded: object,
-    *,
-    prefix: str,
-) -> Iterator[Path]:
-    """Yield a temp directory containing the expanded ``spread.yaml``."""
-    with tempfile.TemporaryDirectory(prefix=prefix, dir=root) as tmp_dir:
-        tmp_dir_path = Path(tmp_dir)
-        dump_yaml(literalize(expanded), tmp_dir_path / _SPREAD_YAML)
-        yield tmp_dir_path
+    try:
+        labels = json.loads(runner_json)
+    except json.JSONDecodeError:
+        return "amd64"
+    if isinstance(labels, str):
+        labels = [labels]
+    if isinstance(labels, list) and any("arm64" in str(lbl).lower() for lbl in labels):
+        return "arm64"
+    return "amd64"
