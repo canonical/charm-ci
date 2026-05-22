@@ -58,7 +58,7 @@ def run_command(  # noqa: PLR0913
         stream: If ``True`` (default), echo stdout/stderr to the terminal
             in real time while still capturing them. If ``False``, buffer
             all output silently (useful for commands whose stdout is
-            consumed programmatically, like ``opcli pytest args``).
+            consumed programmatically, like ``opcli pytest expand``).
         interactive: If ``True``, inherit the parent's stdin/stdout/stderr
             so the subprocess has full TTY access. Required for commands
             like ``spread -shell``. Output is not captured in this mode.

@@ -1,0 +1,13 @@
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock

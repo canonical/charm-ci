@@ -9,24 +9,19 @@
 ``fetch`` downloads a completed CI run's artifacts so tests can run locally.
 """
 
-from __future__ import annotations
-
 import glob as globmod
 import json
 import logging
 import os
-import platform
 import re
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 from opcli.core.discovery import discover_artifacts
+from opcli.core.env import current_arch
 from opcli.core.exceptions import ConfigurationError, OpcliError, SubprocessError
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
@@ -562,7 +557,7 @@ def _build_rock(rock: RockArtifact, root: Path, attributed: set[str]) -> Generat
     return GeneratedRock(
         name=rock.name,
         **{"rockcraft-yaml": rock.rockcraft_yaml},
-        builds=[RockOutput(arch=_current_arch(), file=output_file)],
+        builds=[RockOutput(arch=current_arch(), file=output_file)],
     )
 
 
@@ -688,20 +683,6 @@ def _relative_to_root(path_str: str, root: Path) -> str:
         raise OpcliError(msg) from exc
 
 
-def _current_arch() -> str:
-    """Return the normalised architecture of the current machine.
-
-    Maps ``x86_64`` → ``amd64`` and ``aarch64`` → ``arm64``.
-    All other values are returned as-is (lower-cased).
-    """
-    machine = platform.machine().lower()
-    if machine in ("x86_64", "amd64"):
-        return "amd64"
-    if machine in ("aarch64", "arm64"):
-        return "arm64"
-    return machine
-
-
 def _build_charm(
     charm: CharmArtifact,
     root: Path,
@@ -725,7 +706,7 @@ def _build_charm(
     after = _snapshot_outputs(pack_dir, "charm")
     new_outputs = _pick_new_charm_outputs(after, pack_dir, charm.name, attributed)
     attributed.update(new_outputs)
-    arch = _current_arch()
+    arch = current_arch()
     charm_outputs = [
         CharmOutput(
             arch=arch,
@@ -828,7 +809,7 @@ def _build_snap(snap: SnapArtifact, root: Path, attributed: set[str]) -> Generat
     return GeneratedSnap(
         name=snap.name,
         **{"snapcraft-yaml": snap.snapcraft_yaml},
-        builds=[SnapOutput(arch=_current_arch(), file=output_file)],
+        builds=[SnapOutput(arch=current_arch(), file=output_file)],
     )
 
 
@@ -957,7 +938,7 @@ def _to_ci_file_output[T: (CharmOutput, SnapOutput)](
     produce distinct artifact names (for example
     ``built-charm-my-charm-amd64``).
     """
-    arch = builds[0].arch if builds else _current_arch()
+    arch = builds[0].arch if builds else current_arch()
     return output_type.model_validate(
         {
             "arch": arch,

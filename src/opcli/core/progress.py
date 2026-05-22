@@ -13,11 +13,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 
-def _timestamp() -> str:
-    """Return a compact HH:MM:SS timestamp."""
-    return time.strftime("%H:%M:%S")
-
-
 def status(message: str) -> None:
     """Print a timestamped status line to stderr."""
     sys.stderr.write(f"[{_timestamp()}] {message}\n")
@@ -38,3 +33,8 @@ def step(description: str) -> Iterator[None]:
         seconds = elapsed % 60
         elapsed_str = f"{minutes}m {seconds:.0f}s"
     status(f"done: {description} ({elapsed_str})")
+
+
+def _timestamp() -> str:
+    """Return a compact HH:MM:SS timestamp."""
+    return time.strftime("%H:%M:%S")

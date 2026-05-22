@@ -1,0 +1,25 @@
+project: examples
+path: /home/ubuntu/proj
+kill-timeout: 60m
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+    - ubuntu-24.04
+environment:
+  CONCIERGE: '$(HOST: echo "${CONCIERGE:-concierge.yaml}")'
+  OPCLI_GIT_REF: '$(HOST: echo "${OPCLI_GIT_REF:-main}")'
+exclude:
+- .git
+- .tox
+- .venv
+- .*_cache
+suites:
+  tests/integration/:
+    summary: integration tests
+    backends:
+    - integration-test
+    environment:
+      MODULE/test_k8s_charm: test_k8s_charm
+      MODULE/test_machine_charm: test_machine_charm
+

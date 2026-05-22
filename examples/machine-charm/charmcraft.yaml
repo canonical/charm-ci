@@ -1,0 +1,18 @@
+name: machine-charm
+type: charm
+summary: Trivial machine charm for opcli CI workflow testing.
+description: |
+  Minimal machine charm used to validate the opcli CI build workflow.
+  Not intended for real deployment.
+
+base: ubuntu@24.04
+
+platforms:
+  amd64:
+
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv

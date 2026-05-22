@@ -27,11 +27,10 @@ available builds are used (graceful degradation for single-arch repos).
 """
 
 import logging
-import platform
 from pathlib import Path
 from typing import overload
 
-from opcli.core.env import is_ci
+from opcli.core.env import current_arch, is_ci
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.secrets import load_secrets_env
 from opcli.core.subprocess import run_command
@@ -118,7 +117,7 @@ def assemble_pytest_args(  # noqa: C901
         raise ConfigurationError(msg)
 
     generated = load_artifacts_build(gen_path)
-    arch = _current_arch()
+    arch = current_arch()
 
     args: list[str] = []
 
@@ -170,16 +169,6 @@ def assemble_pytest_args(  # noqa: C901
 # ---------------------------------------------------------------------------
 #  Private helpers
 # ---------------------------------------------------------------------------
-
-
-def _current_arch() -> str:
-    """Return the normalised architecture of the current machine."""
-    machine = platform.machine().lower()
-    if machine in ("x86_64", "amd64"):
-        return "amd64"
-    if machine in ("aarch64", "arm64"):
-        return "arm64"
-    return machine
 
 
 @overload

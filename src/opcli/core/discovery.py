@@ -13,9 +13,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ruamel.yaml import YAML
-
 from opcli.core.exceptions import DiscoveryError
+from opcli.core.yaml_io import load_yaml_optional
 from opcli.models.artifacts import (
     ArtifactResource,
     ArtifactsPlan,
@@ -25,8 +24,6 @@ from opcli.models.artifacts import (
 )
 
 logger = logging.getLogger(__name__)
-
-_yaml = YAML()
 
 _PRUNE_DIRS: frozenset[str] = frozenset(
     {
@@ -172,15 +169,11 @@ def _read_yaml_field_with_metadata_fallback(
 
 def _load_yaml_mapping(path: Path, *, require_mapping: bool) -> dict[str, object] | None:
     """Load a YAML mapping from *path*."""
-    with path.open() as fh:
-        data = _yaml.load(fh)
-
-    if not isinstance(data, dict):
-        if require_mapping:
-            msg = f"{path} does not contain a YAML mapping"
-            raise DiscoveryError(msg)
-        return None
-    return dict(data)
+    data = load_yaml_optional(path)
+    if data is None and require_mapping:
+        msg = f"{path} does not contain a YAML mapping"
+        raise DiscoveryError(msg)
+    return data
 
 
 def _load_metadata_mapping(path: Path) -> dict[str, object] | None:

@@ -36,6 +36,15 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return dict(data)
 
 
+def load_yaml_optional(path: Path) -> dict[str, Any] | None:
+    """Load a YAML file, returning ``None`` if the content is not a mapping."""
+    with path.open() as fh:
+        data = _yaml.load(fh)
+    if not isinstance(data, dict):
+        return None
+    return dict(data)
+
+
 def loads_yaml(text: str) -> dict[str, Any]:
     """Parse a YAML string and return its contents as a dict."""
     data = _yaml.load(StringIO(text))

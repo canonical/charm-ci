@@ -1,6 +1,5 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
-
 """Tests for ``opcli pytest expand`` and ``opcli pytest run``."""
 
 import logging
@@ -11,13 +10,9 @@ from pytest_mock import MockerFixture
 
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.pytest_args import assemble_pytest_args, assemble_tox_argv, pytest_run
+from tests.conftest import write_file
 
 _V1_ERROR_MATCH = "validation error"
-
-
-def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +81,7 @@ class TestAssemblePytestArgs:
             assemble_pytest_args(tmp_path)
 
     def test_invalid_generated_fields_raises(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\ncharms:\n- name: c\n  source: .\n"
             "  builds:\n  - arch: amd64\n    path: ./c.charm\n",
@@ -95,7 +90,7 @@ class TestAssemblePytestArgs:
             assemble_pytest_args(tmp_path)
 
     def test_local_charm_with_embedded_rock_resource(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_LOCAL)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_LOCAL)
 
         args = assemble_pytest_args(tmp_path)
 
@@ -104,7 +99,7 @@ class TestAssemblePytestArgs:
 
     def test_ci_scenario_only_generated_file(self, tmp_path: Path) -> None:
         """Pytest expand works with only artifacts.build.yaml (no repo checkout)."""
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_CI)
         # Intentionally no artifacts.yaml present
 
         args = assemble_pytest_args(tmp_path)
@@ -116,7 +111,7 @@ class TestAssemblePytestArgs:
 
     def test_ci_charm_logs_warning(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
         """CI-format charm (artifact output only) emits a warning, no --charm-file."""
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_CI)
 
         with caplog.at_level(logging.WARNING, logger="opcli.core.pytest_args"):
             args = assemble_pytest_args(tmp_path)
@@ -127,7 +122,7 @@ class TestAssemblePytestArgs:
         )
 
     def test_charm_without_resources(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_NO_RESOURCES)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_NO_RESOURCES)
 
         args = assemble_pytest_args(tmp_path)
 
@@ -135,7 +130,7 @@ class TestAssemblePytestArgs:
 
     def test_multi_base_charm_emits_multiple_charm_file_flags(self, tmp_path: Path) -> None:
         """Multi-base charm produces one --charm-file per output entry."""
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\ncharms:\n- name: aproxy\n"
             "  charmcraft-yaml: charmcraft.yaml\n"
@@ -156,14 +151,14 @@ class TestAssemblePytestArgs:
         assert args.count("--charm-file=./aproxy_ubuntu-22.04-amd64.charm") == 1
 
     def test_empty_generated(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
 
         args = assemble_pytest_args(tmp_path)
         assert args == []
 
     def test_unresolved_resource_produces_no_flag(self, tmp_path: Path) -> None:
         """Resource with no file or image (rock not built) emits no flag."""
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\ncharms:\n- name: c\n  charmcraft-yaml: charmcraft.yaml\n"
             "  builds:\n  - arch: amd64\n    path: ./c_ubuntu-22.04-amd64.charm\n"
@@ -178,7 +173,7 @@ class TestAssemblePytestArgs:
 
     def test_image_takes_priority_over_file_when_both_set(self, tmp_path: Path) -> None:
         """After provision load, image ref is preferred over local file path."""
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n"
@@ -203,7 +198,7 @@ class TestAssemblePytestArgs:
         (e.g. ``expressjs-app``), the generated flag must be
         ``--expressjs-app-image=...``, not ``--app-image=...``.
         """
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\n"
             "rocks:\n- name: expressjs-app\n  rockcraft-yaml: rockcraft.yaml\n"
@@ -228,7 +223,7 @@ class TestAssemblePytestArgs:
         This is the core operator-workflows behaviour: image flags come from
         iterating rocks directly, no explicit rock: annotation required.
         """
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\n"
             "rocks:\n"
@@ -249,7 +244,7 @@ class TestAssemblePytestArgs:
 
     def test_resource_without_rock_link_produces_no_flag(self, tmp_path: Path) -> None:
         """Resources not linked to a rock (no rock: field) produce no image flag."""
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\ncharms:\n- name: mycharm\n"
             "  charmcraft-yaml: charmcraft.yaml\n"
@@ -269,7 +264,7 @@ class TestAssembleToxArgv:
     """Tests for assemble_tox_argv()."""
 
     def test_no_flags_no_extra_omits_separator(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
 
         argv = assemble_tox_argv(tmp_path)
 
@@ -277,7 +272,7 @@ class TestAssembleToxArgv:
         assert "--" not in argv
 
     def test_assembled_flags_include_separator(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_LOCAL)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_LOCAL)
 
         argv = assemble_tox_argv(tmp_path)
 
@@ -286,7 +281,7 @@ class TestAssembleToxArgv:
         assert "--charm-file=./mycharm_ubuntu-22.04-amd64.charm" in argv
 
     def test_extra_args_only_include_separator(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
 
         argv = assemble_tox_argv(tmp_path, extra_args=["-k", "test_foo"])
 
@@ -295,14 +290,14 @@ class TestAssembleToxArgv:
         assert "test_foo" in argv
 
     def test_custom_tox_env(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
 
         argv = assemble_tox_argv(tmp_path, tox_env="e2e")
 
         assert argv[2] == "e2e"
 
     def test_extra_args_appended_after_assembled(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_LOCAL)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_LOCAL)
 
         argv = assemble_tox_argv(tmp_path, extra_args=["-v", "-k", "test_charm"])
 
@@ -322,7 +317,7 @@ class TestPytestRun:
     """Tests for ``pytest_run`` — executes tox interactively."""
 
     def test_runs_tox_interactively(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_LOCAL)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_LOCAL)
         mock_run = mocker.patch("opcli.core.pytest_args.run_command")
         mocker.patch("opcli.core.pytest_args.is_ci", return_value=False)
         mocker.patch("opcli.core.pytest_args.load_secrets_env", return_value={})
@@ -337,7 +332,7 @@ class TestPytestRun:
         assert cmd[:3] == ["tox", "-e", "integration"]
 
     def test_forwards_extra_args(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
         mock_run = mocker.patch("opcli.core.pytest_args.run_command")
         mocker.patch("opcli.core.pytest_args.is_ci", return_value=False)
         mocker.patch("opcli.core.pytest_args.load_secrets_env", return_value={})
@@ -349,7 +344,7 @@ class TestPytestRun:
         assert "test_charm" in cmd
 
     def test_custom_tox_env(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
         mock_run = mocker.patch("opcli.core.pytest_args.run_command")
         mocker.patch("opcli.core.pytest_args.is_ci", return_value=False)
         mocker.patch("opcli.core.pytest_args.load_secrets_env", return_value={})
@@ -360,7 +355,7 @@ class TestPytestRun:
         assert cmd[2] == "e2e"
 
     def test_loads_secrets_env_locally(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
         mock_run = mocker.patch("opcli.core.pytest_args.run_command")
         mocker.patch("opcli.core.pytest_args.is_ci", return_value=False)
         mocker.patch(
@@ -373,7 +368,7 @@ class TestPytestRun:
         assert mock_run.call_args.kwargs["env"] == {"SECRET_KEY": "val"}
 
     def test_skips_secrets_in_ci(self, tmp_path: Path, mocker: MockerFixture) -> None:
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
         mock_run = mocker.patch("opcli.core.pytest_args.run_command")
         mocker.patch("opcli.core.pytest_args.is_ci", return_value=True)
         mock_load = mocker.patch("opcli.core.pytest_args.load_secrets_env")

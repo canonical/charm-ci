@@ -1,6 +1,5 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
-
 """Tests for ``opcli spread init``, ``expand``, and ``run``."""
 
 import json
@@ -20,12 +19,7 @@ from opcli.core.spread import (
 )
 from opcli.core.subprocess import SubprocessResult
 from opcli.core.yaml_io import load_yaml, loads_yaml
-
-
-def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-
+from tests.conftest import write_file
 
 _MINIMAL_SPREAD = """\
 project: test-project
@@ -133,14 +127,14 @@ class TestSpreadInit:
         assert not any("conftest" in k for k in suite_env)
 
     def test_refuses_overwrite_without_force(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", "existing\n")
+        write_file(tmp_path / "spread.yaml", "existing\n")
 
         with pytest.raises(ConfigurationError, match="already exists"):
             spread_init(tmp_path)
 
     def test_overwrites_with_force(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", "old\n")
-        _write(tmp_path / "tests" / "integration" / "run" / "task.yaml", "old\n")
+        write_file(tmp_path / "spread.yaml", "old\n")
+        write_file(tmp_path / "tests" / "integration" / "run" / "task.yaml", "old\n")
 
         spread_path, task_path = spread_init(tmp_path, force=True)
         assert "integration-test" in spread_path.read_text()
@@ -154,7 +148,7 @@ class TestSpreadInit:
 
     def test_generated_suite_has_backends_key(self, tmp_path: Path) -> None:
         """spread_init generates suite with backends: [integration-test] for scoping."""
-        _write(tmp_path / "tests" / "integration" / "test_charm.py", "")
+        write_file(tmp_path / "tests" / "integration" / "test_charm.py", "")
         spread_path, _ = spread_init(tmp_path)
 
         parsed = loads_yaml(spread_path.read_text())
@@ -180,13 +174,13 @@ backends:
 suites:
   tests/: {}
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         with pytest.raises(ConfigurationError, match="no backend with a recognised virtual type"):
             spread_expand(tmp_path)
 
     def test_expand_local(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -220,7 +214,7 @@ suites:
         assert systems[0]["ubuntu-24.04"]["username"] == "ubuntu"
 
     def test_expand_ci(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
@@ -278,7 +272,7 @@ suites:
         assert systems[0]["ubuntu-24.04"]["username"] == "root"
 
     def test_preserves_other_sections(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
 
@@ -287,7 +281,7 @@ suites:
         assert "suites:" in result
 
     def test_preserves_systems(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
 
@@ -312,7 +306,7 @@ environment:
 suites:
   tests/integration/: {}
 """
-        _write(tmp_path / "spread.yaml", spread_with_extras)
+        write_file(tmp_path / "spread.yaml", spread_with_extras)
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
         local = parsed["backends"]["integration-test-local"]
@@ -343,7 +337,7 @@ environment:
 suites:
   tests/integration/: {}
 """
-        _write(tmp_path / "spread.yaml", spread_with_prepare)
+        write_file(tmp_path / "spread.yaml", spread_with_prepare)
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
         local = parsed["backends"]["integration-test-local"]
@@ -375,7 +369,7 @@ environment:
 suites:
   tests/integration/: {}
 """
-        _write(tmp_path / "spread.yaml", spread_with_prepare)
+        write_file(tmp_path / "spread.yaml", spread_with_prepare)
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
         ci = parsed["backends"]["integration-test-ci"]
@@ -390,7 +384,7 @@ suites:
 
     def test_no_user_prepare_unchanged(self, tmp_path: Path) -> None:
         """Without a user prepare key, generated prepare is unchanged."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
         local = parsed["backends"]["integration-test-local"]
@@ -404,7 +398,7 @@ suites:
 
     def test_local_allocate_has_cleanup_trap(self, tmp_path: Path) -> None:
         """The local allocate script must clean up the VM on failure."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -416,7 +410,7 @@ suites:
 
     def test_local_allocate_waits_for_agent(self, tmp_path: Path) -> None:
         """The local allocate script waits for LXD agent before cloud-init."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -429,7 +423,7 @@ suites:
 
     def test_auto_detects_ci_env_var(self, tmp_path: Path) -> None:
         """CI env var toggles between ci/local backend expansion."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         with patch.dict("os.environ", {"CI": "true"}):
             result = spread_expand(tmp_path)
@@ -446,7 +440,7 @@ suites:
         assert "lxc launch --vm" in local_backend["allocate"]
 
     def test_expanded_is_valid_yaml(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
 
@@ -456,7 +450,7 @@ suites:
 
     def test_local_allocate_uses_ubuntu_user(self, tmp_path: Path) -> None:
         """The allocate script sets up ubuntu user, not root."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -468,7 +462,7 @@ suites:
 
     def test_local_prepare_conditional(self, tmp_path: Path) -> None:
         """Prepare script delegates conditionals to opcli subcommands."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -481,7 +475,7 @@ suites:
 
     def test_ci_prepare_conditional(self, tmp_path: Path) -> None:
         """CI prepare delegates concierge to opcli subcommand."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
@@ -511,7 +505,7 @@ suites:
   tests/integration/:
     summary: integration tests
 """
-        _write(tmp_path / "spread.yaml", spread_with_mapping)
+        write_file(tmp_path / "spread.yaml", spread_with_mapping)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -543,7 +537,7 @@ suites:
   tests/integration/:
     summary: integration tests
 """
-        _write(tmp_path / "spread.yaml", spread_with_user)
+        write_file(tmp_path / "spread.yaml", spread_with_user)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -572,7 +566,7 @@ suites:
     environment:
       MODULE/test_charm: test_charm
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -602,7 +596,7 @@ suites:
     environment:
       MODULE/test_charm: test_charm
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -629,7 +623,7 @@ suites:
     environment:
       MODULE/test_charm: test_charm
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         # type: is a list (not a string) — falls back to backend name "integration-test"
         result = spread_expand(tmp_path, ci=False)
@@ -659,7 +653,7 @@ suites:
     environment:
       MODULE/test_charm: test_charm
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         with pytest.raises(ConfigurationError, match=r"concrete name.*already exists"):
             spread_expand(tmp_path, ci=False)
@@ -690,7 +684,7 @@ suites:
 
     def test_resources_appear_in_local_allocate(self, tmp_path: Path) -> None:
         """cpu/memory/disk from system entry appear as case-arm in local allocate."""
-        _write(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
+        write_file(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -703,7 +697,7 @@ suites:
 
     def test_resources_stripped_from_local_systems(self, tmp_path: Path) -> None:
         """cpu/memory/disk are removed from system entries in local expansion."""
-        _write(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
+        write_file(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -717,7 +711,7 @@ suites:
 
     def test_resources_stripped_from_ci_systems(self, tmp_path: Path) -> None:
         """cpu/memory/disk are removed from system entries in CI expansion."""
-        _write(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
+        write_file(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
 
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
@@ -748,7 +742,7 @@ suites:
   tests/integration/:
     summary: integration tests
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -775,7 +769,7 @@ suites:
   tests/integration/:
     summary: integration tests
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
@@ -809,7 +803,7 @@ suites:
   tests/integration/:
     summary: integration tests
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -822,7 +816,7 @@ suites:
 
     def test_env_var_overrides_system_resource(self, tmp_path: Path) -> None:
         """Per-system case arms use :- so explicit env vars still win."""
-        _write(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
+        write_file(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -850,14 +844,14 @@ suites:
   tests/integration/:
     summary: integration tests
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         with pytest.raises(ValidationError, match="positive integer"):
             spread_expand(tmp_path, ci=False)
 
     def test_no_resources_no_preamble(self, tmp_path: Path) -> None:
         """When no resources are declared, no case statement is prepended."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -884,14 +878,14 @@ suites:
   tests/integration/:
     summary: integration tests
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         with pytest.raises(ValidationError, match="positive integer"):
             spread_expand(tmp_path, ci=False)
 
     def test_case_pattern_is_quoted(self, tmp_path: Path) -> None:
         """Case arm patterns must be quoted to prevent shell glob expansion."""
-        _write(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
+        write_file(tmp_path / "spread.yaml", self._SPREAD_WITH_RESOURCES)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -904,7 +898,7 @@ suites:
 class TestSpreadRun:
     def test_runs_spread_from_temp_subdir(self, tmp_path: Path) -> None:
         """Spread is invoked from a temp subdirectory inside the project root."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         captured_cwd: list[str] = []
 
@@ -921,7 +915,7 @@ class TestSpreadRun:
         assert cwd != tmp_path
 
     def test_uses_spread_binary(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         with patch("opcli.core.spread.run_command") as mock_run:
             spread_run(tmp_path, ci=False)
@@ -932,7 +926,7 @@ class TestSpreadRun:
 
     def test_spread_yaml_in_temp_subdir_has_reroot(self, tmp_path: Path) -> None:
         """The temp spread.yaml must contain reroot pointing to the project root."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         captured_yaml: list[dict[str, object]] = []
 
@@ -951,7 +945,7 @@ class TestSpreadRun:
         assert written.get("reroot") == ".."
 
     def test_original_spread_yaml_never_modified(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
         original_content = (tmp_path / "spread.yaml").read_text()
 
         with patch("opcli.core.spread.run_command"):
@@ -960,7 +954,7 @@ class TestSpreadRun:
         assert (tmp_path / "spread.yaml").read_text() == original_content
 
     def test_original_spread_yaml_not_modified_on_failure(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
         original_content = (tmp_path / "spread.yaml").read_text()
 
         def failing_cmd(cmd: list[str], **kwargs: object) -> None:
@@ -975,7 +969,7 @@ class TestSpreadRun:
         assert (tmp_path / "spread.yaml").read_text() == original_content
 
     def test_temp_dir_cleaned_up_on_success(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         with patch("opcli.core.spread.run_command"):
             spread_run(tmp_path, ci=False)
@@ -984,7 +978,7 @@ class TestSpreadRun:
         assert leftover == []
 
     def test_extra_args_forwarded(self, tmp_path: Path) -> None:
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         selector = "integration-test-local:ubuntu-24.04:tests/integration/run:test_charm"
         with patch("opcli.core.spread.run_command") as mock_run:
@@ -999,7 +993,7 @@ class TestSpreadRun:
 
     def test_expand_output_has_no_reroot(self, tmp_path: Path) -> None:
         """spread_expand() for display should not include reroot."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -1015,7 +1009,7 @@ class TestSpreadRunSecrets:
 
     def test_secrets_env_passed_in_local_mode(self, tmp_path: Path) -> None:
         """In local mode, .secrets.env vars are passed to run_command."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
         (tmp_path / ".secrets.env").write_text("MY_SECRET=hunter2\n")
 
         with patch("opcli.core.spread.run_command") as mock_run:
@@ -1026,7 +1020,7 @@ class TestSpreadRunSecrets:
 
     def test_secrets_env_not_loaded_in_ci_mode(self, tmp_path: Path) -> None:
         """In CI mode, .secrets.env is not loaded (vars come from environment)."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
         (tmp_path / ".secrets.env").write_text("MY_SECRET=hunter2\n")
 
         with patch("opcli.core.spread.run_command") as mock_run:
@@ -1037,7 +1031,7 @@ class TestSpreadRunSecrets:
 
     def test_no_secrets_file_passes_none(self, tmp_path: Path) -> None:
         """When .secrets.env doesn't exist, env=None is passed."""
-        _write(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
 
         with patch("opcli.core.spread.run_command") as mock_run:
             spread_run(tmp_path, ci=False)
@@ -1062,7 +1056,7 @@ class TestGeneratedSuiteBackends:
 
     def test_generated_spread_yaml_has_type_field(self, tmp_path: Path) -> None:
         """spread_init generates a backend with type: integration-test."""
-        _write(tmp_path / "tests" / "integration" / "test_charm.py", "")
+        write_file(tmp_path / "tests" / "integration" / "test_charm.py", "")
         spread_path, _ = spread_init(tmp_path)
 
         parsed = loads_yaml(spread_path.read_text())
@@ -1086,7 +1080,7 @@ suites:
     environment:
       MODULE/test_charm: test_charm
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -1121,7 +1115,7 @@ suites:
     environment:
       MODULE/test_charm: test_charm
 """
-        _write(tmp_path / "spread.yaml", spread)
+        write_file(tmp_path / "spread.yaml", spread)
 
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
@@ -1312,7 +1306,7 @@ class TestSpreadTasks:
 
     def test_returns_selectors_for_each_variant(self, tmp_path: Path) -> None:
         """Returns one entry per (system, task_dir, variant) combination."""
-        _write(tmp_path / "spread.yaml", _SPREAD_WITH_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_WITH_RUNNER)
 
         with patch(
             "opcli.core.spread.run_command",
@@ -1326,7 +1320,7 @@ class TestSpreadTasks:
 
     def test_selector_format(self, tmp_path: Path) -> None:
         """Selector is taken verbatim from spread -list output."""
-        _write(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
         raw_selector = "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm"
 
         with patch(
@@ -1340,7 +1334,7 @@ class TestSpreadTasks:
 
     def test_runs_on_from_runner_field(self, tmp_path: Path) -> None:
         """runs-on matches the system's runner: label (JSON-encoded)."""
-        _write(tmp_path / "spread.yaml", _SPREAD_WITH_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_WITH_RUNNER)
 
         with patch(
             "opcli.core.spread.run_command",
@@ -1353,7 +1347,7 @@ class TestSpreadTasks:
 
     def test_no_variants_name_is_full_selector(self, tmp_path: Path) -> None:
         """When spread -list returns no variant, name is the full selector."""
-        _write(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
 
         with patch(
             "opcli.core.spread.run_command",
@@ -1371,7 +1365,7 @@ class TestSpreadTasks:
 
     def test_spread_list_called_with_ci_backend_selectors(self, tmp_path: Path) -> None:
         """Spread -list is invoked with one selector per virtual backend."""
-        _write(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
 
         with patch(
             "opcli.core.spread.run_command",
@@ -1403,7 +1397,7 @@ suites:
     backends:
       - integration-test
 """
-        _write(tmp_path / "spread.yaml", spread_mixed)
+        write_file(tmp_path / "spread.yaml", spread_mixed)
 
         with patch(
             "opcli.core.spread.run_command",
@@ -1417,7 +1411,7 @@ suites:
 
     def test_ci_backend_has_username_root(self, tmp_path: Path) -> None:
         """Expanded CI backend sets username: root per system for SSH."""
-        _write(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
 
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
@@ -1435,7 +1429,7 @@ suites:
 
     def test_ci_backend_strips_runner_field(self, tmp_path: Path) -> None:
         """Expanded CI backend does not contain runner: key in systems."""
-        _write(tmp_path / "spread.yaml", _SPREAD_WITH_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_WITH_RUNNER)
 
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
@@ -1466,7 +1460,7 @@ suites:
     backends:
       - integration-test
 """
-        _write(tmp_path / "spread.yaml", spread_with_arch)
+        write_file(tmp_path / "spread.yaml", spread_with_arch)
 
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
@@ -1497,7 +1491,7 @@ suites:
     backends:
       - integration-test
 """
-        _write(tmp_path / "spread.yaml", spread_arm)
+        write_file(tmp_path / "spread.yaml", spread_arm)
 
         with patch(
             "opcli.core.spread.run_command",
@@ -1511,7 +1505,7 @@ suites:
         assert entries[0]["arch"] == "arm64"
 
         """Entries without arm64 runner label get arch=amd64."""
-        _write(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
 
         with patch(
             "opcli.core.spread.run_command",
@@ -1538,7 +1532,7 @@ suites:
     backends:
       - integration-test
 """
-        _write(tmp_path / "spread.yaml", spread_arm)
+        write_file(tmp_path / "spread.yaml", spread_arm)
 
         with patch(
             "opcli.core.spread.run_command",
@@ -1552,7 +1546,7 @@ suites:
 
     def test_duplicate_variant_keys_produce_distinct_selectors(self, tmp_path: Path) -> None:
         """Key != value in MODULE/* produces distinct selectors (the original bug)."""
-        _write(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
         list_output = (
             "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm\n"
             "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm_k8s\n"
@@ -1572,7 +1566,7 @@ suites:
 
     def test_temp_dir_cleaned_up_after_tasks(self, tmp_path: Path) -> None:
         """Temporary spread.yaml directory is removed after spread_jobs returns."""
-        _write(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
+        write_file(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
 
         with patch(
             "opcli.core.spread.run_command",

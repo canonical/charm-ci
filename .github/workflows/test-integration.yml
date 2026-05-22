@@ -1,0 +1,118 @@
+name: Test Integration
+
+# Tests the integration-test reusable workflow using the examples/ directory
+# as a real operator repository fixture.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/**"
+      - "src/**"
+      - ".github/workflows/build-artifacts.yml"
+      - ".github/workflows/integration-test.yml"
+      - ".github/workflows/test-integration.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "examples/**"
+      - "src/**"
+      - ".github/workflows/build-artifacts.yml"
+      - ".github/workflows/integration-test.yml"
+      - ".github/workflows/test-integration.yml"
+  workflow_dispatch:
+
+jobs:
+  integration-test:
+    uses: ./.github/workflows/integration-test.yml
+    with:
+      working-directory: examples
+    secrets: inherit
+    permissions:
+      packages: write
+      contents: read
+      actions: read
+
+  # Run spread with the local (LXD) backend in parallel with the CI tests.
+  # Uses 'opcli artifacts fetch --wait' to poll until the build uploads
+  # artifacts-build, then downloads artifacts and runs spread without
+  # CI=true so the local: backend (LXD VM) is used.
+  test-local:
+    name: "Spread (local/LXD)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        working-directory: examples
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup tmate session
+        if: runner.debug == 1
+        uses: mxschmitt/action-tmate@v3
+        with:
+          detached: true
+          timeout-minutes: 60
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install opcli
+        run: uv tool install "${GITHUB_WORKSPACE}"
+
+      - name: Install spread
+        run: |
+          sudo snap install go --classic
+          go install github.com/canonical/spread/cmd/spread@latest
+          sudo ln -sf ~/go/bin/spread /usr/local/bin/spread
+
+      - name: Install LXD
+        run: |
+          sudo snap install lxd
+          sudo lxd waitready
+          sudo lxd init --auto
+          sudo usermod -aG lxd $USER
+          sudo chmod 0666 /var/snap/lxd/common/lxd/unix.socket
+          if sudo iptables -nL DOCKER-USER 2>/dev/null; then
+            sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+            sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+          fi
+          if sudo ip6tables -nL DOCKER-USER 2>/dev/null; then
+            sudo ip6tables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+            sudo ip6tables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+          fi
+
+      # --wait polls until artifacts-build appears (build may still be running).
+      # Bail out early if the build has already failed.
+      - name: Fetch CI artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Check if the build's Collect step already failed
+          conclusion=$(gh run view "${{ github.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --json jobs \
+            --jq '.jobs[] | select(.name | contains("Collect artifacts")) | .conclusion' || true)
+          if [[ "$conclusion" =~ ^(skipped|failure|cancelled)$ ]]; then
+            echo "::error::Build failed — 'Collect artifacts' conclusion is '$conclusion'."
+            exit 1
+          fi
+          opcli artifacts fetch \
+            --run-id "${{ github.run_id }}" \
+            --repo "${{ github.repository }}" \
+            --wait
+
+      # No CI=true → spread uses the local: backend (LXD VM).
+      # _LOCAL_PREPARE inside the VM runs concierge and opcli provision load.
+      # Explicitly clear CI to override GitHub Actions' default CI=true.
+      # Set OPCLI_GIT_REF so the LXD VM installs the same opcli commit that
+      # produced artifacts.build.yaml, keeping the format in sync.
+      - name: Run spread (local/LXD)
+        env:
+          CI: ""
+          OPCLI_GIT_REF: ${{ github.sha }}
+        run: opcli spread run -- -vv
+
