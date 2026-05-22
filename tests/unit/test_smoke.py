@@ -1,0 +1,13 @@
+# Copyright 2025 Canonical Ltd.
+# See LICENSE file for licensing details.
+
+"""Smoke test to verify the test infrastructure works."""
+
+from __future__ import annotations
+
+
+def test_import_opcli() -> None:
+    """opcli package can be imported."""
+    import opcli
+
+    assert opcli.__version__
