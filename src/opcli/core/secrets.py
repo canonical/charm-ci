@@ -4,17 +4,11 @@
 """Shared secrets-env loading for local test execution."""
 
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _SECRETS_ENV_FILE = ".secrets.env"
-
-
-def is_ci() -> bool:
-    """Return True when running inside CI (truthy ``CI`` env var)."""
-    return bool(os.environ.get("CI"))
 
 
 def load_secrets_env(root: Path) -> dict[str, str]:
