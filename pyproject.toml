@@ -13,6 +13,10 @@ dependencies = [
     "ruamel.yaml>=0.18",
 ]
 
+[project.urls]
+Repository = "https://github.com/canonical/charm-ci"
+Issues = "https://github.com/canonical/charm-ci/issues"
+
 [project.scripts]
 opcli = "opcli.app:app"
 
