@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
+import opcli
+
 
 def test_import_opcli() -> None:
     """opcli package can be imported."""
-    import opcli
-
     assert opcli.__version__
