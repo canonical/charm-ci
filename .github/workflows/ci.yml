@@ -7,6 +7,15 @@ on:
     branches: [main]
 
 jobs:
+  license-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check license headers
+        uses: apache/skywalking-eyes/header@main
+        with:
+          config: .licenserc.yaml
+
   lint:
     runs-on: ubuntu-latest
     steps:

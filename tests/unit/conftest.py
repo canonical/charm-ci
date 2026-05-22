@@ -1,3 +1,6 @@
+# Copyright 2025 Canonical Ltd.
+# See LICENSE file for licensing details.
+
 """Unit test fixtures for opcli.
 
 Unit tests exercise local (non-CI) behaviour by default.  The autouse
