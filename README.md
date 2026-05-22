@@ -16,11 +16,11 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 ```bash
 # With uv (recommended)
-uv tool install git+https://github.com/javierdelapuente/operator-ci-poc.git
+uv tool install git+https://github.com/canonical/charm-ci.git
 
 # Or from a local clone
-git clone https://github.com/javierdelapuente/operator-ci-poc.git
-cd operator-ci-poc && uv tool install .
+git clone https://github.com/canonical/charm-ci.git
+cd charm-ci && uv tool install .
 
 # Verify
 opcli --help
@@ -184,7 +184,7 @@ Example usage:
 ```yaml
 jobs:
   build:
-    uses: javierdelapuente/operator-ci-poc/.github/workflows/build-artifacts.yml@main
+    uses: canonical/charm-ci/.github/workflows/build-artifacts.yml@main
     permissions:
       contents: read
       packages: write
@@ -194,7 +194,7 @@ jobs:
 
   test:
     needs: build
-    uses: javierdelapuente/operator-ci-poc/.github/workflows/integration-test.yml@main
+    uses: canonical/charm-ci/.github/workflows/integration-test.yml@main
     secrets: inherit
     with:
       working-directory: .
@@ -238,7 +238,7 @@ Pass secret names to the reusable workflow via `test-secret-{1..5}-name` inputs:
 ```yaml
 jobs:
   integration-test:
-    uses: javierdelapuente/operator-ci-poc/.github/workflows/integration-test.yml@main
+    uses: canonical/charm-ci/.github/workflows/integration-test.yml@main
     secrets: inherit
     with:
       test-secret-1-name: S3_ACCESS_KEY

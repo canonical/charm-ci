@@ -6,20 +6,8 @@ name: Test Integration
 on:
   push:
     branches: [main]
-    paths:
-      - "examples/**"
-      - "src/**"
-      - ".github/workflows/build-artifacts.yml"
-      - ".github/workflows/integration-test.yml"
-      - ".github/workflows/test-integration.yml"
   pull_request:
     branches: [main]
-    paths:
-      - "examples/**"
-      - "src/**"
-      - ".github/workflows/build-artifacts.yml"
-      - ".github/workflows/integration-test.yml"
-      - ".github/workflows/test-integration.yml"
   workflow_dispatch:
 
 jobs:
@@ -115,4 +103,22 @@ jobs:
           CI: ""
           OPCLI_GIT_REF: ${{ github.sha }}
         run: opcli spread run -- -vv
+
+  # ── Gate job (always reports) ────────────────────────────────────────────────
+  # Required by branch protection. Passes when integration jobs succeed or are
+  # skipped (paths filter didn't match). Set "Integration Gate" as a required
+  # status check in repo settings.
+  gate:
+    name: Integration Gate
+    if: always() && !cancelled()
+    needs: [integration-test, test-local]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for result in "${{ needs.integration-test.result }}" "${{ needs.test-local.result }}"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "Integration job failed: $result"
+              exit 1
+            fi
+          done
 
