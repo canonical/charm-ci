@@ -128,21 +128,16 @@ jobs:
         run: sudo snap install snapcraft --classic
 
       - name: Login to GHCR
-        if: matrix.type == 'rock' && github.event_name != 'pull_request'
+        if: matrix.type == 'rock'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             skopeo login ghcr.io --username "${{ github.actor }}" --password-stdin
 
       - name: Build ${{ matrix.type }} ${{ matrix.name }}
         run: opcli artifacts build --${{ matrix.type }} ${{ matrix.name }}
-        env:
-          # Fork PRs get a read-only GITHUB_TOKEN that cannot push packages.
-          # Unset GITHUB_ACTIONS for rocks on PRs so opcli builds locally
-          # without attempting the GHCR push.  Rocks are published on merge.
-          GITHUB_ACTIONS: ${{ (matrix.type == 'rock' && github.event_name == 'pull_request') && '' || 'true' }}
 
       - name: Upload ${{ matrix.type }} ${{ matrix.name }}
-        if: matrix.type != 'rock' || github.event_name == 'pull_request'
+        if: matrix.type != 'rock'
         uses: actions/upload-artifact@v4
         with:
           name: built-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
