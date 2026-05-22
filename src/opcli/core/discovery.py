@@ -9,6 +9,7 @@ resources to discovered rocks when the match is unambiguous.
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -59,19 +60,12 @@ def _read_yaml_name(path: Path) -> str:
     config lives in ``charmcraft.yaml`` and charm identity lives in
     ``metadata.yaml``).
     """
-    with path.open() as fh:
-        data = _yaml.load(fh)
-    if not isinstance(data, dict):
-        msg = f"{path} does not contain a YAML mapping"
-        raise DiscoveryError(msg)
-    name = data.get("name")
-    if (not isinstance(name, str) or not name) and path.name == "charmcraft.yaml":
-        metadata_path = path.parent / "metadata.yaml"
-        if metadata_path.exists():
-            with metadata_path.open() as fh:
-                meta = _yaml.load(fh)
-            if isinstance(meta, dict):
-                name = meta.get("name")
+    name = _read_yaml_field_with_metadata_fallback(
+        path,
+        "name",
+        should_fallback=_missing_name,
+        require_mapping=True,
+    )
     if not isinstance(name, str) or not name:
         msg = f"{path} is missing a valid 'name' field"
         raise DiscoveryError(msg)
@@ -85,26 +79,82 @@ def _read_charm_resources(path: Path) -> dict[str, dict[str, Any]]:
     ``resources`` section is absent from ``charmcraft.yaml`` (legacy
     split format).
     """
-    with path.open() as fh:
-        data = _yaml.load(fh)
-    if not isinstance(data, dict):
-        return {}
-    resources = data.get("resources")
-    if not isinstance(resources, dict):
-        metadata_path = path.parent / "metadata.yaml"
-        if metadata_path.exists():
-            with metadata_path.open() as fh:
-                meta = _yaml.load(fh)
-            if isinstance(meta, dict):
-                resources = meta.get("resources")
+    resources = _read_yaml_field_with_metadata_fallback(
+        path,
+        "resources",
+        should_fallback=_missing_mapping,
+    )
     if not isinstance(resources, dict):
         return {}
-    return dict(resources)
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for resource_name, resource_data in resources.items():
+        if isinstance(resource_name, str) and isinstance(resource_data, dict):
+            normalized[resource_name] = dict(resource_data)
+    return normalized
 
 
 def _yaml_relative(marker_path: Path, root: Path) -> str:
     """Return the marker file path relative to *root*."""
     return str(marker_path.relative_to(root))
+
+
+def _read_yaml_field_with_metadata_fallback(
+    path: Path,
+    field: str,
+    *,
+    should_fallback: Callable[[object | None], bool],
+    require_mapping: bool = False,
+) -> object | None:
+    """Read a YAML field, falling back to metadata.yaml for charmcraft files."""
+    data = _load_yaml_mapping(path, require_mapping=require_mapping)
+    if data is None:
+        return None
+
+    value = data.get(field)
+    if not should_fallback(value):
+        return value
+
+    metadata = _load_metadata_mapping(path)
+    if metadata is None:
+        return value
+
+    metadata_value = metadata.get(field)
+    return metadata_value if not should_fallback(metadata_value) else value
+
+
+def _load_metadata_mapping(path: Path) -> dict[str, object] | None:
+    """Load metadata.yaml for charmcraft files when present and well-formed."""
+    if path.name != "charmcraft.yaml":
+        return None
+
+    metadata_path = path.parent / "metadata.yaml"
+    if not metadata_path.exists():
+        return None
+    return _load_yaml_mapping(metadata_path, require_mapping=False)
+
+
+def _load_yaml_mapping(path: Path, *, require_mapping: bool) -> dict[str, object] | None:
+    """Load a YAML mapping from *path*."""
+    with path.open() as fh:
+        data = _yaml.load(fh)
+
+    if not isinstance(data, dict):
+        if require_mapping:
+            msg = f"{path} does not contain a YAML mapping"
+            raise DiscoveryError(msg)
+        return None
+    return dict(data)
+
+
+def _missing_name(value: object | None) -> bool:
+    """Return whether *value* is missing a valid non-empty name."""
+    return not isinstance(value, str) or not value
+
+
+def _missing_mapping(value: object | None) -> bool:
+    """Return whether *value* is missing a mapping."""
+    return not isinstance(value, dict)
 
 
 def _snap_fields(marker_path: Path, root: Path) -> tuple[str, str | None]:

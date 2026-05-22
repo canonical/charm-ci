@@ -16,6 +16,8 @@ import os
 import platform
 import re
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -552,13 +554,11 @@ def _build_rock(rock: RockArtifact, root: Path, attributed: set[str]) -> Generat
 
     before = _snapshot_outputs(pack_dir, "rock")
 
-    symlink_path, symlink_created = _with_rock_symlink(yaml_path, pack_dir)
-    try:
-        with step(f"Building rock '{rock.name}' (rockcraft pack)"):
-            run_command([*_PACK_COMMANDS["rock"]], cwd=str(pack_dir), env=_ROCKCRAFT_ENV)
-    finally:
-        if symlink_created and symlink_path and symlink_path.is_symlink():
-            symlink_path.unlink()
+    with (
+        _with_pack_yaml_symlink("rockcraft.yaml", yaml_path, pack_dir),
+        step(f"Building rock '{rock.name}' (rockcraft pack)"),
+    ):
+        run_command([*_PACK_COMMANDS["rock"]], cwd=str(pack_dir), env=_ROCKCRAFT_ENV)
 
     after = _snapshot_outputs(pack_dir, "rock")
     new_output = _pick_new_output(before, after, "rock", pack_dir, attributed)
@@ -586,13 +586,11 @@ def _build_charm(
         msg = f"pack-dir not found: {charm.pack_dir}"
         raise ConfigurationError(msg)
 
-    symlink_path, symlink_created = _with_charm_symlink(yaml_path, pack_dir)
-    try:
-        with step(f"Building charm '{charm.name}' (charmcraft pack)"):
-            run_command([*_PACK_COMMANDS["charm"]], cwd=str(pack_dir))
-    finally:
-        if symlink_created and symlink_path and symlink_path.is_symlink():
-            symlink_path.unlink()
+    with (
+        _with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
+        step(f"Building charm '{charm.name}' (charmcraft pack)"),
+    ):
+        run_command([*_PACK_COMMANDS["charm"]], cwd=str(pack_dir))
     after = _snapshot_outputs(pack_dir, "charm")
     new_outputs = _pick_new_charm_outputs(after, pack_dir, charm.name, attributed)
     attributed.update(new_outputs)
@@ -739,47 +737,44 @@ def _push_rock_to_ghcr(rock: GeneratedRock, ci: _CIContext, root: Path) -> Gener
 
 
 def _to_ci_charm(charm: GeneratedCharm, ci: _CIContext) -> GeneratedCharm:
-    """Return a copy of *charm* with CI artifact-reference output.
-
-    The artifact name includes the architecture so parallel multi-arch builds
-    produce distinct artifact names (e.g. ``built-charm-my-charm-amd64``).
-    """
-    arch = charm.builds[0].arch if charm.builds else _current_arch()
+    """Return a copy of *charm* with CI artifact-reference output."""
     return GeneratedCharm(
         name=charm.name,
         **{"charmcraft-yaml": charm.charmcraft_yaml},
-        builds=[
-            CharmOutput.model_validate(
-                {
-                    "arch": arch,
-                    "artifact": f"built-charm-{charm.name}-{arch}",
-                    "run-id": ci.run_id,
-                }
-            )
-        ],
+        builds=[_to_ci_file_output(charm.name, charm.builds, "charm", ci, CharmOutput)],
         resources=charm.resources,
     )
 
 
 def _to_ci_snap(snap: GeneratedSnap, ci: _CIContext) -> GeneratedSnap:
-    """Return a copy of *snap* with CI artifact-reference output.
-
-    The artifact name includes the architecture so parallel multi-arch builds
-    produce distinct artifact names (e.g. ``built-snap-my-snap-amd64``).
-    """
-    arch = snap.builds[0].arch if snap.builds else _current_arch()
+    """Return a copy of *snap* with CI artifact-reference output."""
     return GeneratedSnap(
         name=snap.name,
         **{"snapcraft-yaml": snap.snapcraft_yaml},
-        builds=[
-            SnapOutput.model_validate(
-                {
-                    "arch": arch,
-                    "artifact": f"built-snap-{snap.name}-{arch}",
-                    "run-id": ci.run_id,
-                }
-            )
-        ],
+        builds=[_to_ci_file_output(snap.name, snap.builds, "snap", ci, SnapOutput)],
+    )
+
+
+def _to_ci_file_output[T: (CharmOutput, SnapOutput)](
+    name: str,
+    builds: list[T],
+    kind: str,
+    ci: _CIContext,
+    output_type: type[T],
+) -> T:
+    """Build a CI artifact-reference output entry for a charm or snap.
+
+    The artifact name includes the architecture so parallel multi-arch builds
+    produce distinct artifact names (for example
+    ``built-charm-my-charm-amd64``).
+    """
+    arch = builds[0].arch if builds else _current_arch()
+    return output_type.model_validate(
+        {
+            "arch": arch,
+            "artifact": f"built-{kind}-{name}-{arch}",
+            "run-id": ci.run_id,
+        }
     )
 
 
@@ -814,93 +809,40 @@ def _snapshot_outputs(pack_dir: Path, kind: str) -> set[str]:
     return set(globmod.glob(str(pack_dir / _OUTPUT_GLOBS[kind])))
 
 
-def _with_rock_symlink(
-    yaml_path: Path,
-    pack_dir: Path,
-) -> tuple[Path | None, bool]:
-    """Prepare a ``rockcraft.yaml`` symlink in *pack_dir* if needed.
+@contextmanager
+def _with_pack_yaml_symlink(target_name: str, yaml_path: Path, pack_dir: Path) -> Iterator[None]:
+    """Temporarily provide ``target_name`` in *pack_dir* via a relative symlink.
 
-    Rockcraft always looks for a file literally named ``rockcraft.yaml`` in
-    the working directory, regardless of the actual filename of the craft YAML.
-    This function creates ``<pack_dir>/rockcraft.yaml → <relative-path>`` when
-    the source file is not already named ``rockcraft.yaml`` and located in
-    ``pack_dir``.
-
-    The symlink target is always **relative** so that it remains valid when
-    rockcraft copies the pack-dir into a managed LXC container (where the
-    host absolute path does not exist).
-
-    Returns ``(symlink_path, created)`` where *created* is ``True`` when this
-    call created the symlink (and the caller must remove it afterwards).
-
-    Raises:
-        ConfigurationError: If a real (non-symlink) ``rockcraft.yaml`` already
-            exists in *pack_dir* and its content differs from *yaml_path*.
+    If a regular file already exists at the target path, it is accepted only
+    when its content matches *yaml_path* exactly. Existing symlinks are replaced
+    for the duration of the context and removed afterwards, but cleanup only
+    deletes a symlink so a crafting tool cannot accidentally lose a real file it
+    created during the build.
     """
-    target = pack_dir / "rockcraft.yaml"
+    target = pack_dir / target_name
     if target.resolve() == yaml_path.resolve():
-        # Already the right file — no symlink needed.
-        return None, False
+        yield
+        return
 
     if target.exists() and not target.is_symlink():
         if target.read_bytes() == yaml_path.read_bytes():
-            # Identical content — rockcraft will use it correctly.
-            return None, False
+            yield
+            return
         msg = (
             f"A regular file already exists at {target} and it differs from "
             f"{yaml_path}. Remove it or set pack-dir to a directory without a "
-            "rockcraft.yaml."
+            f"{target_name}."
         )
         raise ConfigurationError(msg)
+
     if target.is_symlink():
         target.unlink()
     target.symlink_to(os.path.relpath(yaml_path, pack_dir))
-    return target, True
-
-
-def _with_charm_symlink(
-    yaml_path: Path,
-    pack_dir: Path,
-) -> tuple[Path | None, bool]:
-    """Prepare a ``charmcraft.yaml`` symlink in *pack_dir* if needed.
-
-    Charmcraft always looks for a file literally named ``charmcraft.yaml`` in
-    the working directory.  This function creates
-    ``<pack_dir>/charmcraft.yaml → <relative-path>`` when the source file is
-    not already named ``charmcraft.yaml`` and located in *pack_dir*.
-
-    The symlink target is always **relative** so that it remains valid if
-    charmcraft copies the directory into a managed container.
-
-    Returns ``(symlink_path, created)`` where *created* is ``True`` when this
-    call created the symlink (and the caller must remove it afterwards).
-
-    Raises:
-        ConfigurationError: If a real (non-symlink) ``charmcraft.yaml`` already
-            exists in *pack_dir* and points to a different file than *yaml_path*.
-            This prevents silently building the wrong charm.
-    """
-    target = pack_dir / "charmcraft.yaml"
-    if target.resolve() == yaml_path.resolve():
-        # Already the right file — no symlink needed.
-        return None, False
-
-    if target.exists() and not target.is_symlink():
-        if target.read_bytes() == yaml_path.read_bytes():
-            # A real charmcraft.yaml already exists with identical content
-            # (e.g. a copy kept alongside a non-standard filename).
-            # Charmcraft will use it and produce the correct charm — no action.
-            return None, False
-        msg = (
-            f"A regular file already exists at {target} and it differs from "
-            f"{yaml_path}. Remove it or set pack-dir to a directory without a "
-            "charmcraft.yaml."
-        )
-        raise ConfigurationError(msg)
-    if target.is_symlink():
-        target.unlink()
-    target.symlink_to(os.path.relpath(yaml_path, pack_dir))
-    return target, True
+    try:
+        yield
+    finally:
+        if target.is_symlink():
+            target.unlink()
 
 
 def _pick_new_output(
@@ -1335,7 +1277,7 @@ def _gh_download_with_wait(
     last_exc: SubprocessError | None = None
     for attempt in range(1, _WAIT_MAX_ATTEMPTS + 1):
         try:
-            run_command(cmd, cwd=cwd)
+            _run_gh_download(cmd, cwd, dest)
             return
         except SubprocessError as exc:
             stderr_lower = exc.stderr.lower()
@@ -1346,10 +1288,6 @@ def _gh_download_with_wait(
                     f"permissions.\n{exc.stderr.strip()}"
                 )
                 raise ConfigurationError(msg) from exc
-            if dest is not None and any(kw in stderr_lower for kw in _FILE_EXISTS_KEYWORDS):
-                dest.unlink(missing_ok=True)
-                run_command(cmd, cwd=cwd)
-                return
             last_exc = exc
             conclusion = _check_collect_job_conclusion(run_id, repo)
             if conclusion in _BAIL_CONCLUSIONS:
@@ -1378,20 +1316,19 @@ def _gh_download_with_wait(
 
 
 def _gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None:
-    """Run ``gh run download``, raising :class:`SubprocessError` on failure.
+    """Run ``gh run download``, raising :class:`SubprocessError` on failure."""
+    _run_gh_download(cmd, cwd, dest)
 
-    If ``gh`` reports that the destination file already exists (older ``gh``
-    versions lack ``--clobber``), the file is deleted and the download is
-    retried once.
-    """
+
+def _run_gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None:
+    """Run ``gh run download`` once, deleting an existing output file if needed."""
     try:
         run_command(cmd, cwd=cwd)
     except SubprocessError as exc:
-        if dest is not None and any(kw in exc.stderr.lower() for kw in _FILE_EXISTS_KEYWORDS):
-            dest.unlink(missing_ok=True)
-            run_command(cmd, cwd=cwd)
-        else:
+        if dest is None or not any(kw in exc.stderr.lower() for kw in _FILE_EXISTS_KEYWORDS):
             raise
+        dest.unlink(missing_ok=True)
+        run_command(cmd, cwd=cwd)
 
 
 def _check_collect_job_conclusion(run_id: str, repo: str) -> str | None:
