@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "opcli"
+version = "0.1.0"
+description = "CLI tool for operator development workflows (Charms, Rocks, Snaps)"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.15",
+    "pydantic>=2",
+    "ruamel.yaml>=0.18",
+]
+
+[project.scripts]
+opcli = "opcli.app:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opcli"]
+
+[tool.ruff]
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "PL", "RUF"]
+ignore = ["B008"]  # typer.Option/Argument in defaults is the standard pattern
+
+[tool.ruff.lint.per-file-ignores]
+# Shell script strings embedded as constants may exceed 88 chars
+"src/opcli/core/spread.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["opcli"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require external services (LXD, spread)",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.20.2",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "pytest-mock>=3.15.1",
+    "ruff>=0.15.11",
+]
