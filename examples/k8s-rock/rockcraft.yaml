@@ -1,0 +1,23 @@
+name: k8s-rock
+version: "1.0"
+summary: Trivial rock for opcli CI workflow testing.
+description: |
+  Minimal rock used to validate the opcli CI build workflow.
+  Not intended for real deployment.
+
+base: ubuntu@24.04
+build-base: ubuntu@24.04
+license: Apache-2.0
+
+platforms:
+  amd64:
+
+services:
+  app:
+    override: replace
+    startup: enabled
+    command: sleep infinity
+
+parts:
+  app:
+    plugin: nil

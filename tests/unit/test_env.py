@@ -1,6 +1,5 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
-
 """Tests for env provisioning helpers and the ``opcli env`` CLI commands."""
 
 from pathlib import Path
@@ -13,12 +12,7 @@ from opcli.commands.env import app as env_app
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.provision import provision_load, provision_prepare, provision_registry
 from opcli.core.yaml_io import load_artifacts_build
-
-
-def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-
+from tests.conftest import write_file
 
 _RUNNER = CliRunner()
 
@@ -106,7 +100,7 @@ class TestProvisionPrepare:
     """Tests for provision_prepare()."""
 
     def test_runs_concierge(self, tmp_path: Path) -> None:
-        _write(tmp_path / "concierge.yaml", "providers: {}\n")
+        write_file(tmp_path / "concierge.yaml", "providers: {}\n")
 
         with patch("opcli.core.provision.run_command") as mock_run:
             provision_prepare(tmp_path)
@@ -121,7 +115,7 @@ class TestProvisionPrepare:
             provision_prepare(tmp_path)
 
     def test_custom_concierge_file(self, tmp_path: Path) -> None:
-        _write(tmp_path / "concierge_juju4.yaml", "providers: {}\n")
+        write_file(tmp_path / "concierge_juju4.yaml", "providers: {}\n")
 
         with patch("opcli.core.provision.run_command") as mock_run:
             provision_prepare(tmp_path, concierge_file="concierge_juju4.yaml")
@@ -140,7 +134,7 @@ class TestProvisionLoad:
         assert result == []
 
     def test_registry_port_closed_returns_empty_without_pushing(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.load_artifacts_build") as mock_load,
@@ -154,7 +148,7 @@ class TestProvisionLoad:
         mock_run.assert_not_called()
 
     def test_pushes_local_rocks(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -177,7 +171,7 @@ class TestProvisionLoad:
         )
 
     def test_custom_registry(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -200,7 +194,7 @@ class TestProvisionLoad:
         )
 
     def test_repushes_when_existing_image_differs_from_target(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_STALE_IMAGE)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_STALE_IMAGE)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -214,7 +208,7 @@ class TestProvisionLoad:
         assert updated.rocks[0].builds[0].image == "localhost:32000/myrock:amd64"
 
     def test_pushes_multiple_local_rocks(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_MULTIPLE_LOCAL_ROCKS)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_MULTIPLE_LOCAL_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -253,7 +247,7 @@ class TestProvisionLoad:
         assert mock_run.call_args_list[1].kwargs == {"cwd": str(tmp_path)}
 
     def test_no_local_rocks_returns_empty(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\n"
             "rocks:\n- name: r1\n  rockcraft-yaml: rd/rockcraft.yaml\n"
@@ -270,7 +264,7 @@ class TestProvisionLoad:
         mock_run.assert_not_called()
 
     def test_empty_generated_returns_empty(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -282,7 +276,7 @@ class TestProvisionLoad:
         mock_run.assert_not_called()
 
     def test_pushes_oci_archive_directly_without_docker_daemon(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -300,7 +294,7 @@ class TestProvisionLoad:
 
     def test_updates_artifacts_build_with_image_ref(self, tmp_path: Path) -> None:
         """After pushing, rock.builds.image is set and file is preserved."""
-        _write(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command"),
@@ -315,7 +309,7 @@ class TestProvisionLoad:
 
     def test_updates_charm_resources_for_pushed_rock(self, tmp_path: Path) -> None:
         """provision_load pushes rocks; charm resources reference via rock: field."""
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             _GENERATED_WITH_ROCKS_AND_RESOURCES,
         )
@@ -336,7 +330,7 @@ class TestProvisionLoad:
 
     def test_idempotent_skips_already_loaded_rock(self, tmp_path: Path) -> None:
         """Rock with image already set to the target ref is skipped."""
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n"
@@ -355,7 +349,7 @@ class TestProvisionLoad:
 
     def test_no_writeback_when_nothing_pushed(self, tmp_path: Path) -> None:
         """artifacts.build.yaml is not written when no rocks are pushed."""
-        _write(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
 
         with (
             patch("opcli.core.provision.dump_artifacts_build") as mock_dump,
@@ -471,7 +465,7 @@ class TestProvisionRegistry:
             "  builds:\n  - arch: amd64\n"
             "    path: ./c.charm\n    base: ubuntu@22.04\n"
         )
-        _write(tmp_path / "artifacts.build.yaml", content)
+        write_file(tmp_path / "artifacts.build.yaml", content)
         with (
             patch("opcli.core.provision._is_port_open", return_value=False),
             patch(

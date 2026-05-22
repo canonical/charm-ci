@@ -1,6 +1,5 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
-
 """Tests for artifact discovery and YAML I/O."""
 
 from pathlib import Path
@@ -23,11 +22,7 @@ from opcli.models.artifacts_build import (
     GeneratedRock,
     RockOutput,
 )
-
-
-def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+from tests.conftest import write_file
 
 
 class TestDiscovery:
@@ -40,21 +35,21 @@ class TestDiscovery:
         assert plan.snaps == []
 
     def test_single_charm(self, tmp_path: Path) -> None:
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\ntype: charm\n")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\ntype: charm\n")
         plan = discover_artifacts(tmp_path)
         assert len(plan.charms) == 1
         assert plan.charms[0].name == "mycharm"
         assert plan.charms[0].charmcraft_yaml == "charmcraft.yaml"
 
     def test_single_rock(self, tmp_path: Path) -> None:
-        _write(tmp_path / "myrock" / "rockcraft.yaml", "name: myrock\n")
+        write_file(tmp_path / "myrock" / "rockcraft.yaml", "name: myrock\n")
         plan = discover_artifacts(tmp_path)
         assert len(plan.rocks) == 1
         assert plan.rocks[0].name == "myrock"
         assert plan.rocks[0].rockcraft_yaml == "myrock/rockcraft.yaml"
 
     def test_single_snap(self, tmp_path: Path) -> None:
-        _write(tmp_path / "snap_dir" / "snapcraft.yaml", "name: mysnap\n")
+        write_file(tmp_path / "snap_dir" / "snapcraft.yaml", "name: mysnap\n")
         plan = discover_artifacts(tmp_path)
         assert len(plan.snaps) == 1
         assert plan.snaps[0].name == "mysnap"
@@ -63,7 +58,7 @@ class TestDiscovery:
 
     def test_snap_under_snap_subdir(self, tmp_path: Path) -> None:
         """snapcraft.yaml under snap/ → pack_dir is the parent directory."""
-        _write(
+        write_file(
             tmp_path / "myproject" / "snap" / "snapcraft.yaml",
             "name: mysnap\n",
         )
@@ -75,7 +70,7 @@ class TestDiscovery:
 
     def test_snap_under_snap_subdir_at_root(self, tmp_path: Path) -> None:
         """snap/snapcraft.yaml at repo root → pack_dir is '.'."""
-        _write(tmp_path / "snap" / "snapcraft.yaml", "name: mysnap\n")
+        write_file(tmp_path / "snap" / "snapcraft.yaml", "name: mysnap\n")
         plan = discover_artifacts(tmp_path)
         assert len(plan.snaps) == 1
         assert plan.snaps[0].name == "mysnap"
@@ -83,31 +78,31 @@ class TestDiscovery:
         assert plan.snaps[0].pack_dir == "."
 
     def test_monorepo(self, tmp_path: Path) -> None:
-        _write(tmp_path / "charmcraft.yaml", "name: main-charm\ntype: charm\n")
-        _write(tmp_path / "rock_a" / "rockcraft.yaml", "name: rock-a\n")
-        _write(tmp_path / "rock_b" / "rockcraft.yaml", "name: rock-b\n")
-        _write(tmp_path / "snap_c" / "snapcraft.yaml", "name: snap-c\n")
+        write_file(tmp_path / "charmcraft.yaml", "name: main-charm\ntype: charm\n")
+        write_file(tmp_path / "rock_a" / "rockcraft.yaml", "name: rock-a\n")
+        write_file(tmp_path / "rock_b" / "rockcraft.yaml", "name: rock-b\n")
+        write_file(tmp_path / "snap_c" / "snapcraft.yaml", "name: snap-c\n")
         plan = discover_artifacts(tmp_path)
         assert len(plan.rocks) == 2  # noqa: PLR2004
         assert len(plan.charms) == 1
         assert len(plan.snaps) == 1
 
     def test_deep_nested_artifact(self, tmp_path: Path) -> None:
-        _write(tmp_path / "a" / "b" / "c" / "rockcraft.yaml", "name: deep-rock\n")
+        write_file(tmp_path / "a" / "b" / "c" / "rockcraft.yaml", "name: deep-rock\n")
         plan = discover_artifacts(tmp_path)
         assert len(plan.rocks) == 1
         assert plan.rocks[0].rockcraft_yaml == "a/b/c/rockcraft.yaml"
 
     def test_pruned_directories_skipped(self, tmp_path: Path) -> None:
-        _write(tmp_path / ".venv" / "rockcraft.yaml", "name: venv-rock\n")
-        _write(tmp_path / ".git" / "rockcraft.yaml", "name: git-rock\n")
-        _write(tmp_path / ".tox" / "rockcraft.yaml", "name: tox-rock\n")
+        write_file(tmp_path / ".venv" / "rockcraft.yaml", "name: venv-rock\n")
+        write_file(tmp_path / ".git" / "rockcraft.yaml", "name: git-rock\n")
+        write_file(tmp_path / ".tox" / "rockcraft.yaml", "name: tox-rock\n")
         plan = discover_artifacts(tmp_path)
         assert plan.rocks == []
 
     def test_charm_with_oci_resource_auto_links_rock(self, tmp_path: Path) -> None:
-        _write(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
-        _write(
+        write_file(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
+        write_file(
             tmp_path / "charmcraft.yaml",
             "name: mycharm\ntype: charm\nresources:\n  myrock:\n    type: oci-image\n",
         )
@@ -115,7 +110,7 @@ class TestDiscovery:
         assert plan.charms[0].resources["myrock"].rock == "myrock"
 
     def test_charm_resource_no_match_leaves_rock_none(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "charmcraft.yaml",
             "name: mycharm\ntype: charm\nresources:\n  unknown-img:\n    type: oci-image\n",
         )
@@ -123,34 +118,34 @@ class TestDiscovery:
         assert plan.charms[0].resources["unknown-img"].rock is None
 
     def test_malformed_yaml_raises(self, tmp_path: Path) -> None:
-        _write(tmp_path / "charmcraft.yaml", "- just a list\n")
+        write_file(tmp_path / "charmcraft.yaml", "- just a list\n")
         with pytest.raises(DiscoveryError, match="not contain a YAML mapping"):
             discover_artifacts(tmp_path)
 
     def test_missing_name_raises(self, tmp_path: Path) -> None:
-        _write(tmp_path / "rockcraft.yaml", "version: 1\n")
+        write_file(tmp_path / "rockcraft.yaml", "version: 1\n")
         with pytest.raises(DiscoveryError, match="missing a valid 'name'"):
             discover_artifacts(tmp_path)
 
     def test_charm_split_format_name_from_metadata_yaml(self, tmp_path: Path) -> None:
         """Legacy split format: name in metadata.yaml, not charmcraft.yaml."""
-        _write(
+        write_file(
             tmp_path / "charmcraft.yaml",
             "type: charm\nbases:\n  - run-on:\n    - name: ubuntu\n",
         )
-        _write(tmp_path / "metadata.yaml", "name: indico\nsummary: An indico charm\n")
+        write_file(tmp_path / "metadata.yaml", "name: indico\nsummary: An indico charm\n")
         plan = discover_artifacts(tmp_path)
         assert len(plan.charms) == 1
         assert plan.charms[0].name == "indico"
 
     def test_charm_split_format_resources_from_metadata_yaml(self, tmp_path: Path) -> None:
         """Legacy split format: resources in metadata.yaml, not charmcraft.yaml."""
-        _write(tmp_path / "rock_dir" / "rockcraft.yaml", "name: indico-rock\n")
-        _write(
+        write_file(tmp_path / "rock_dir" / "rockcraft.yaml", "name: indico-rock\n")
+        write_file(
             tmp_path / "charmcraft.yaml",
             "type: charm\nbases:\n  - run-on:\n    - name: ubuntu\n",
         )
-        _write(
+        write_file(
             tmp_path / "metadata.yaml",
             "name: indico\n"
             "resources:\n"
@@ -168,17 +163,17 @@ class TestDiscovery:
         self, tmp_path: Path
     ) -> None:
         """Unified format: name in charmcraft.yaml wins even if metadata.yaml exists."""
-        _write(
+        write_file(
             tmp_path / "charmcraft.yaml",
             "name: charm-from-charmcraft\ntype: charm\n",
         )
-        _write(tmp_path / "metadata.yaml", "name: charm-from-metadata\n")
+        write_file(tmp_path / "metadata.yaml", "name: charm-from-metadata\n")
         plan = discover_artifacts(tmp_path)
         assert plan.charms[0].name == "charm-from-charmcraft"
 
     def test_charm_split_format_no_metadata_yaml_raises(self, tmp_path: Path) -> None:
         """No name in charmcraft.yaml and no metadata.yaml → DiscoveryError."""
-        _write(tmp_path / "charmcraft.yaml", "type: charm\n")
+        write_file(tmp_path / "charmcraft.yaml", "type: charm\n")
         with pytest.raises(DiscoveryError, match="missing a valid 'name'"):
             discover_artifacts(tmp_path)
 

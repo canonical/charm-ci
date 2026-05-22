@@ -1,10 +1,10 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-"""Core logic for ``opcli provision prepare``, ``opcli provision load``,
-and ``opcli provision registry``.
+"""Core logic for ``opcli env provision``, ``opcli env load``,
+and ``opcli env deploy-registry``.
 
-``run`` invokes concierge to provision the test environment.
+``provision_prepare`` invokes concierge to provision the test environment.
 
 ``load`` reads ``artifacts.build.yaml`` and pushes locally-built rock
 OCI images into a container image registry so that Juju / MicroK8s can

@@ -1,6 +1,5 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
-
 """Tests for opcli artifacts commands: init, build, matrix, collect, fetch."""
 
 import json
@@ -23,19 +22,15 @@ from opcli.core.artifacts import (
 from opcli.core.exceptions import ConfigurationError, OpcliError, SubprocessError
 from opcli.core.subprocess import SubprocessResult
 from opcli.core.yaml_io import load_artifacts_build, load_artifacts_plan
-
-
-def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+from tests.conftest import write_file
 
 
 class TestArtifactsInit:
     """Tests for artifacts_init()."""
 
     def test_generates_artifacts_yaml(self, tmp_path: Path) -> None:
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\ntype: charm\n")
-        _write(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\ntype: charm\n")
+        write_file(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
 
         result = artifacts_init(tmp_path)
 
@@ -48,14 +43,14 @@ class TestArtifactsInit:
         assert plan.rocks[0].name == "myrock"
 
     def test_refuses_overwrite_without_force(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.yaml", "version: 1\n")
 
         with pytest.raises(ConfigurationError, match="already exists"):
             artifacts_init(tmp_path)
 
     def test_overwrites_with_force(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.yaml", "version: 1\n")
-        _write(tmp_path / "charmcraft.yaml", "name: new-charm\ntype: charm\n")
+        write_file(tmp_path / "artifacts.yaml", "version: 1\n")
+        write_file(tmp_path / "charmcraft.yaml", "name: new-charm\ntype: charm\n")
 
         result = artifacts_init(tmp_path, force=True)
 
@@ -78,13 +73,13 @@ class TestArtifactsBuild:
             artifacts_build(tmp_path)
 
     def test_build_single_charm(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: mycharm\n  charmcraft-yaml: charmcraft.yaml\n",
         )
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\n")
         # Simulate charmcraft pack producing a .charm file
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
 
         with patch("opcli.core.artifacts.run_command") as mock_run:
             result = artifacts_build(tmp_path)
@@ -100,15 +95,15 @@ class TestArtifactsBuild:
 
     def test_build_multi_base_charm(self, tmp_path: Path) -> None:
         """Multi-base charm: all produced files appear as flat output entries."""
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: aproxy\n  charmcraft-yaml: charmcraft.yaml\n",
         )
-        _write(tmp_path / "charmcraft.yaml", "name: aproxy\n")
+        write_file(tmp_path / "charmcraft.yaml", "name: aproxy\n")
         # Simulate charmcraft pack producing three .charm files (one per base)
-        _write(tmp_path / "aproxy_ubuntu-20.04-amd64.charm", "fake")
-        _write(tmp_path / "aproxy_ubuntu-22.04-amd64.charm", "fake")
-        _write(tmp_path / "aproxy_ubuntu-24.04-amd64.charm", "fake")
+        write_file(tmp_path / "aproxy_ubuntu-20.04-amd64.charm", "fake")
+        write_file(tmp_path / "aproxy_ubuntu-22.04-amd64.charm", "fake")
+        write_file(tmp_path / "aproxy_ubuntu-24.04-amd64.charm", "fake")
 
         with patch("opcli.core.artifacts.run_command"):
             result = artifacts_build(tmp_path)
@@ -132,16 +127,16 @@ class TestArtifactsBuild:
         charmcraft pack always rebuilds all declared bases, so after adding a
         base we must return all files in the output directory, not just new ones.
         """
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: aproxy\n  charmcraft-yaml: charmcraft.yaml\n",
         )
-        _write(tmp_path / "charmcraft.yaml", "name: aproxy\n")
+        write_file(tmp_path / "charmcraft.yaml", "name: aproxy\n")
         # Pre-existing file from a previous single-base build
-        _write(tmp_path / "aproxy_ubuntu-20.04-amd64.charm", "old")
+        write_file(tmp_path / "aproxy_ubuntu-20.04-amd64.charm", "old")
         # charmcraft pack rebuilds ubuntu-20.04 AND produces ubuntu-22.04
         # (simulated: file already existed before, pack just overwrites)
-        _write(tmp_path / "aproxy_ubuntu-22.04-amd64.charm", "new")
+        write_file(tmp_path / "aproxy_ubuntu-22.04-amd64.charm", "new")
 
         with patch("opcli.core.artifacts.run_command"):
             result = artifacts_build(tmp_path)
@@ -155,14 +150,14 @@ class TestArtifactsBuild:
         assert "./aproxy_ubuntu-22.04-amd64.charm" in paths
 
     def test_build_single_rock(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nrocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n",
         )
         rock_dir = tmp_path / "rock_dir"
         rock_dir.mkdir()
-        _write(rock_dir / "rockcraft.yaml", "name: myrock\n")
-        _write(rock_dir / "myrock_1.0_amd64.rock", "fake rock")
+        write_file(rock_dir / "rockcraft.yaml", "name: myrock\n")
+        write_file(rock_dir / "myrock_1.0_amd64.rock", "fake rock")
 
         with patch("opcli.core.artifacts.run_command") as mock_run:
             result = artifacts_build(tmp_path)
@@ -176,14 +171,14 @@ class TestArtifactsBuild:
 
     def test_build_rock_sets_experimental_extensions_env(self, tmp_path: Path) -> None:
         """Rockcraft pack must always pass ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS."""
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nrocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n",
         )
         rock_dir = tmp_path / "rock_dir"
         rock_dir.mkdir()
-        _write(rock_dir / "rockcraft.yaml", "name: myrock\n")
-        _write(rock_dir / "myrock_1.0_amd64.rock", "fake rock")
+        write_file(rock_dir / "rockcraft.yaml", "name: myrock\n")
+        write_file(rock_dir / "myrock_1.0_amd64.rock", "fake rock")
 
         with patch("opcli.core.artifacts.run_command") as mock_run:
             artifacts_build(tmp_path)
@@ -193,14 +188,14 @@ class TestArtifactsBuild:
         assert env_kwarg.get("ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS") == "1"
 
     def test_build_single_snap(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nsnaps:\n- name: mysnap\n  snapcraft-yaml: snap_dir/snapcraft.yaml\n",
         )
         snap_dir = tmp_path / "snap_dir"
         snap_dir.mkdir()
-        _write(snap_dir / "snapcraft.yaml", "name: mysnap\n")
-        _write(snap_dir / "mysnap_1.0_amd64.snap", "fake snap")
+        write_file(snap_dir / "snapcraft.yaml", "name: mysnap\n")
+        write_file(snap_dir / "mysnap_1.0_amd64.snap", "fake snap")
 
         with patch("opcli.core.artifacts.run_command") as mock_run:
             result = artifacts_build(tmp_path)
@@ -211,15 +206,15 @@ class TestArtifactsBuild:
         assert len(gen.snaps) == 1
 
     def test_build_filtered_by_charm_name(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n"
             "- name: charm-a\n  charmcraft-yaml: a/charmcraft.yaml\n"
             "- name: charm-b\n  charmcraft-yaml: b/charmcraft.yaml\n",
         )
         (tmp_path / "a").mkdir()
-        _write(tmp_path / "a" / "charmcraft.yaml", "name: charm-a\n")
-        _write(tmp_path / "a" / "charm-a_ubuntu-22.04-amd64.charm", "fake")
+        write_file(tmp_path / "a" / "charmcraft.yaml", "name: charm-a\n")
+        write_file(tmp_path / "a" / "charm-a_ubuntu-22.04-amd64.charm", "fake")
 
         with patch("opcli.core.artifacts.run_command"):
             result = artifacts_build(tmp_path, charm_names=["charm-a"])
@@ -230,15 +225,15 @@ class TestArtifactsBuild:
 
     def test_charm_filter_does_not_build_rocks(self, tmp_path: Path) -> None:
         """--charm only must not build rocks (each matrix job builds one artifact)."""
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n"
             "charms:\n- name: mycharm\n  charmcraft-yaml: charm_dir/charmcraft.yaml\n",
         )
         (tmp_path / "charm_dir").mkdir()
-        _write(tmp_path / "charm_dir" / "charmcraft.yaml", "name: mycharm\n")
-        _write(tmp_path / "charm_dir" / "mycharm_ubuntu-22.04-amd64.charm", "fake")
+        write_file(tmp_path / "charm_dir" / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "charm_dir" / "mycharm_ubuntu-22.04-amd64.charm", "fake")
 
         with patch("opcli.core.artifacts.run_command") as mock_run:
             artifacts_build(tmp_path, charm_names=["mycharm"])
@@ -249,7 +244,7 @@ class TestArtifactsBuild:
             assert "rockcraft" not in cmd[0], f"rockcraft unexpectedly invoked: {cmd}"
 
     def test_unknown_charm_name_raises(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: real\n  charmcraft-yaml: charmcraft.yaml\n",
         )
@@ -257,13 +252,13 @@ class TestArtifactsBuild:
             artifacts_build(tmp_path, charm_names=["nonexistent"])
 
     def test_no_output_file_raises(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nrocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n",
         )
         rock_dir = tmp_path / "rock_dir"
         rock_dir.mkdir()
-        _write(rock_dir / "rockcraft.yaml", "name: myrock\n")
+        write_file(rock_dir / "rockcraft.yaml", "name: myrock\n")
 
         with (
             patch("opcli.core.artifacts.run_command"),
@@ -272,17 +267,17 @@ class TestArtifactsBuild:
             artifacts_build(tmp_path)
 
     def test_build_monorepo(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n"
             "charms:\n- name: mycharm\n  charmcraft-yaml: charmcraft.yaml\n",
         )
         (tmp_path / "rock_dir").mkdir()
-        _write(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
-        _write(tmp_path / "rock_dir" / "myrock.rock", "fake")
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\n")
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
+        write_file(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
+        write_file(tmp_path / "rock_dir" / "myrock.rock", "fake")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
 
         with patch("opcli.core.artifacts.run_command"):
             result = artifacts_build(tmp_path)
@@ -292,7 +287,7 @@ class TestArtifactsBuild:
         assert len(gen.charms) == 1
 
     def test_build_propagates_resources_to_generated(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n"
@@ -303,10 +298,10 @@ class TestArtifactsBuild:
             "      rock: myrock\n",
         )
         (tmp_path / "rock_dir").mkdir()
-        _write(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
-        _write(tmp_path / "rock_dir" / "myrock_1.0_amd64.rock", "fake")
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\n")
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
+        write_file(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
+        write_file(tmp_path / "rock_dir" / "myrock_1.0_amd64.rock", "fake")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
 
         with patch("opcli.core.artifacts.run_command"):
             result = artifacts_build(tmp_path)
@@ -321,7 +316,7 @@ class TestArtifactsBuild:
 
     def test_resource_only_carries_rock_link(self, tmp_path: Path) -> None:
         """Resource referencing a rock only stores type + rock; no file/image."""
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "charms:\n- name: mycharm\n  charmcraft-yaml: charmcraft.yaml\n"
@@ -330,8 +325,8 @@ class TestArtifactsBuild:
             "      type: oci-image\n"
             "      rock: nonexistent-rock\n",
         )
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\n")
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
 
         with patch("opcli.core.artifacts.run_command"):
             result = artifacts_build(tmp_path)
@@ -344,7 +339,7 @@ class TestArtifactsBuild:
         assert res.rock == "nonexistent-rock"
 
     def test_invalid_generated_fields_rejected(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\ncharms:\n- name: c\n  source: .\n  builds:\n    file: ./c.charm\n",
         )
@@ -355,11 +350,11 @@ class TestArtifactsBuild:
         """pack-dir: a temporary rockcraft.yaml symlink is created and removed."""
         rock_subdir = tmp_path / "rocks" / "myrock"
         rock_subdir.mkdir(parents=True)
-        _write(rock_subdir / "rockcraft.yaml", "name: myrock\n")
+        write_file(rock_subdir / "rockcraft.yaml", "name: myrock\n")
         # The .rock output lands in pack_dir (repo root), not rock_subdir
-        _write(tmp_path / "myrock_1.0_amd64.rock", "fake rock")
+        write_file(tmp_path / "myrock_1.0_amd64.rock", "fake rock")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n"
@@ -387,11 +382,11 @@ class TestArtifactsBuild:
         """A real rockcraft.yaml with different content at pack-dir raises."""
         rock_subdir = tmp_path / "rocks" / "myrock"
         rock_subdir.mkdir(parents=True)
-        _write(rock_subdir / "rockcraft.yaml", "name: myrock\n")
+        write_file(rock_subdir / "rockcraft.yaml", "name: myrock\n")
         # Real file at the pack-dir location with DIFFERENT content
-        _write(tmp_path / "rockcraft.yaml", "name: other\n")
+        write_file(tmp_path / "rockcraft.yaml", "name: other\n")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n"
@@ -410,12 +405,12 @@ class TestArtifactsBuild:
         content = "name: myrock\n"
         rock_subdir = tmp_path / "rocks" / "myrock"
         rock_subdir.mkdir(parents=True)
-        _write(rock_subdir / "rockcraft.yaml", content)
+        write_file(rock_subdir / "rockcraft.yaml", content)
         # Real file at the pack-dir location with identical content
-        _write(tmp_path / "rockcraft.yaml", content)
-        _write(tmp_path / "myrock_1.0_amd64.rock", "fake rock")
+        write_file(tmp_path / "rockcraft.yaml", content)
+        write_file(tmp_path / "myrock_1.0_amd64.rock", "fake rock")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n"
@@ -439,14 +434,14 @@ class TestArtifactsBuild:
         """An existing symlink at pack-dir is replaced without error."""
         rock_subdir = tmp_path / "rocks" / "myrock"
         rock_subdir.mkdir(parents=True)
-        _write(rock_subdir / "rockcraft.yaml", "name: myrock\n")
-        _write(tmp_path / "myrock_1.0_amd64.rock", "fake rock")
+        write_file(rock_subdir / "rockcraft.yaml", "name: myrock\n")
+        write_file(tmp_path / "myrock_1.0_amd64.rock", "fake rock")
 
         # Pre-existing symlink pointing somewhere else
         existing_symlink = tmp_path / "rockcraft.yaml"
         existing_symlink.symlink_to("/dev/null")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n"
@@ -468,10 +463,10 @@ class TestArtifactsBuild:
         Even when pack-dir == dirname(yaml), rockcraft needs a file named
         'rockcraft.yaml'. A non-standard name must be symlinked.
         """
-        _write(tmp_path / "planner-rockcraft.yaml", "name: planner\n")
-        _write(tmp_path / "planner_1.0_amd64.rock", "fake rock")
+        write_file(tmp_path / "planner-rockcraft.yaml", "name: planner\n")
+        write_file(tmp_path / "planner_1.0_amd64.rock", "fake rock")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: planner\n"
@@ -499,10 +494,10 @@ class TestArtifactsBuild:
 
     def test_build_rock_standard_yaml_name_no_symlink(self, tmp_path: Path) -> None:
         """When yaml is already named rockcraft.yaml in pack-dir, no symlink needed."""
-        _write(tmp_path / "rockcraft.yaml", "name: myrock\n")
-        _write(tmp_path / "myrock_1.0_amd64.rock", "fake rock")
+        write_file(tmp_path / "rockcraft.yaml", "name: myrock\n")
+        write_file(tmp_path / "myrock_1.0_amd64.rock", "fake rock")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n"
@@ -523,7 +518,7 @@ class TestArtifactsBuild:
 
     def test_build_missing_yaml_raises(self, tmp_path: Path) -> None:
         """Missing yaml file raises ConfigurationError before running pack."""
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nrocks:\n- name: myrock\n  rockcraft-yaml: nonexistent/rockcraft.yaml\n",
         )
@@ -538,8 +533,8 @@ class TestArtifactsBuild:
 
     def test_build_missing_pack_dir_raises(self, tmp_path: Path) -> None:
         """Missing pack-dir raises ConfigurationError before running pack."""
-        _write(tmp_path / "rockcraft.yaml", "name: myrock\n")
-        _write(
+        write_file(tmp_path / "rockcraft.yaml", "name: myrock\n")
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nrocks:\n- name: myrock\n"
             "  rockcraft-yaml: rockcraft.yaml\n"
@@ -556,10 +551,10 @@ class TestArtifactsBuild:
 
     def test_build_charm_nonstandard_yaml_name_creates_symlink(self, tmp_path: Path) -> None:
         """Non-standard charmcraft yaml name triggers symlink creation during build."""
-        _write(tmp_path / "charmcraft-mycharm.yaml", "name: mycharm\n")
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
+        write_file(tmp_path / "charmcraft-mycharm.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: mycharm\n  charmcraft-yaml: charmcraft-mycharm.yaml\n",
         )
@@ -588,11 +583,11 @@ class TestArtifactsBuild:
         produce the correct charm — no symlink is needed, no error raised.
         """
         content = "name: mycharm\n"
-        _write(tmp_path / "charmcraft-mycharm.yaml", content)
-        _write(tmp_path / "charmcraft.yaml", content)  # identical content
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
+        write_file(tmp_path / "charmcraft-mycharm.yaml", content)
+        write_file(tmp_path / "charmcraft.yaml", content)  # identical content
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: mycharm\n  charmcraft-yaml: charmcraft-mycharm.yaml\n",
         )
@@ -613,10 +608,10 @@ class TestArtifactsBuild:
         This prevents silently building the wrong charm when the repo root
         already has a charmcraft.yaml pointing to a different charm.
         """
-        _write(tmp_path / "charmcraft-mycharm.yaml", "name: mycharm\n")
-        _write(tmp_path / "charmcraft.yaml", "name: some-other-charm\n")
+        write_file(tmp_path / "charmcraft-mycharm.yaml", "name: mycharm\n")
+        write_file(tmp_path / "charmcraft.yaml", "name: some-other-charm\n")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: mycharm\n  charmcraft-yaml: charmcraft-mycharm.yaml\n",
         )
@@ -631,10 +626,10 @@ class TestArtifactsBuild:
 
     def test_build_charm_standard_yaml_name_no_symlink(self, tmp_path: Path) -> None:
         """charmcraft-yaml named charmcraft.yaml in pack-dir needs no symlink."""
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\n")
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: mycharm\n  charmcraft-yaml: charmcraft.yaml\n",
         )
@@ -658,10 +653,10 @@ class TestArtifactsBuild:
         """
         charm1_content = "name: charm-a\n"
         charm2_content = "name: charm-b\n"
-        _write(tmp_path / "charmcraft-a.yaml", charm1_content)
-        _write(tmp_path / "charmcraft-b.yaml", charm2_content)
+        write_file(tmp_path / "charmcraft-a.yaml", charm1_content)
+        write_file(tmp_path / "charmcraft-b.yaml", charm2_content)
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n"
             "- name: charm-a\n  charmcraft-yaml: charmcraft-a.yaml\n"
@@ -674,12 +669,12 @@ class TestArtifactsBuild:
             call_count[0] += 1
             if call_count[0] == 1:
                 # First charm pack produces charm-a files
-                _write(tmp_path / "charm-a_ubuntu-22.04-amd64.charm", "a1")
-                _write(tmp_path / "charm-a_ubuntu-24.04-amd64.charm", "a2")
+                write_file(tmp_path / "charm-a_ubuntu-22.04-amd64.charm", "a1")
+                write_file(tmp_path / "charm-a_ubuntu-24.04-amd64.charm", "a2")
             else:
                 # Second charm pack produces charm-b files
-                _write(tmp_path / "charm-b_ubuntu-22.04-amd64.charm", "b1")
-                _write(tmp_path / "charm-b_ubuntu-24.04-amd64.charm", "b2")
+                write_file(tmp_path / "charm-b_ubuntu-22.04-amd64.charm", "b1")
+                write_file(tmp_path / "charm-b_ubuntu-24.04-amd64.charm", "b2")
 
         with patch("opcli.core.artifacts.run_command", side_effect=fake_run):
             result = artifacts_build(tmp_path)
@@ -707,11 +702,11 @@ class TestArtifactsBuild:
         files in-place (no new files appear). All pre-existing files are returned
         since they were all just rebuilt.
         """
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\n")
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "old1")
-        _write(tmp_path / "mycharm_ubuntu-24.04-amd64.charm", "old2")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "old1")
+        write_file(tmp_path / "mycharm_ubuntu-24.04-amd64.charm", "old2")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: mycharm\n  charmcraft-yaml: charmcraft.yaml\n",
         )
@@ -736,15 +731,15 @@ class TestArtifactsBuild:
         relies on the name declared in artifacts.yaml.
         """
         # charmcraft.yaml has no 'name' field (split format)
-        _write(tmp_path / "charmcraft.yaml", "type: charm\n")
+        write_file(tmp_path / "charmcraft.yaml", "type: charm\n")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: indico\n  charmcraft-yaml: charmcraft.yaml\n",
         )
 
         def fake_run(cmd: list[str], **kwargs: object) -> None:
-            _write(tmp_path / "indico_ubuntu-20.04-amd64.charm", "charm")
+            write_file(tmp_path / "indico_ubuntu-20.04-amd64.charm", "charm")
 
         with patch("opcli.core.artifacts.run_command", side_effect=fake_run):
             result = artifacts_build(tmp_path)
@@ -762,10 +757,10 @@ class TestArtifactsBuild:
         the build (unlikely but possible). The cleanup must only remove symlinks,
         not real files.
         """
-        _write(tmp_path / "charmcraft-mycharm.yaml", "name: mycharm\n")
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
+        write_file(tmp_path / "charmcraft-mycharm.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
 
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: mycharm\n  charmcraft-yaml: charmcraft-mycharm.yaml\n",
         )
@@ -775,7 +770,7 @@ class TestArtifactsBuild:
             symlink = tmp_path / "charmcraft.yaml"
             if symlink.is_symlink():
                 symlink.unlink()
-            _write(symlink, "name: mycharm\n")  # real file now
+            write_file(symlink, "name: mycharm\n")  # real file now
 
         with patch("opcli.core.artifacts.run_command", side_effect=fake_run):
             artifacts_build(tmp_path)
@@ -786,17 +781,17 @@ class TestArtifactsBuild:
 
     def test_filtered_build_merges_into_existing(self, tmp_path: Path) -> None:
         """Filtered build preserves previously built artifacts in the file."""
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n"
             "charms:\n- name: mycharm\n  charmcraft-yaml: charmcraft.yaml\n",
         )
         (tmp_path / "rock_dir").mkdir()
-        _write(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
-        _write(tmp_path / "rock_dir" / "myrock_1.0_amd64.rock", "fake")
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\n")
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
+        write_file(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
+        write_file(tmp_path / "rock_dir" / "myrock_1.0_amd64.rock", "fake")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
 
         # First: build everything (creates artifacts.build.yaml with rock + charm)
         with patch("opcli.core.artifacts.run_command"):
@@ -816,13 +811,13 @@ class TestArtifactsBuild:
 
     def test_filtered_build_replaces_same_name_entry(self, tmp_path: Path) -> None:
         """Rebuilding an artifact replaces its entry, not duplicates it."""
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nrocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n",
         )
         (tmp_path / "rock_dir").mkdir()
-        _write(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
-        _write(tmp_path / "rock_dir" / "myrock_1.0_amd64.rock", "fake")
+        write_file(tmp_path / "rock_dir" / "rockcraft.yaml", "name: myrock\n")
+        write_file(tmp_path / "rock_dir" / "myrock_1.0_amd64.rock", "fake")
 
         # Build the rock once
         with patch("opcli.core.artifacts.run_command"):
@@ -838,15 +833,15 @@ class TestArtifactsBuild:
 
     def test_unfiltered_build_does_not_merge(self, tmp_path: Path) -> None:
         """Without filters, the build file is overwritten (no merge)."""
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: mycharm\n  charmcraft-yaml: charmcraft.yaml\n",
         )
-        _write(tmp_path / "charmcraft.yaml", "name: mycharm\n")
-        _write(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake")
 
         # Manually seed a build file with a rock entry that shouldn't survive
-        _write(
+        write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\nrocks:\n- name: leftover\n  rockcraft-yaml: x.yaml\n"
             "  builds:\n  - arch: amd64\n    file: ./x.rock\n",
@@ -865,7 +860,7 @@ class TestArtifactsMatrix:
     """Tests for artifacts_matrix()."""
 
     def test_returns_include_list_for_all_types(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: my-rock\n  rockcraft-yaml: rockcraft.yaml\n"
@@ -899,7 +894,7 @@ class TestArtifactsMatrix:
         }
 
     def test_only_charms_no_rocks_no_snaps(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\ncharms:\n- name: my-charm\n  charmcraft-yaml: charmcraft.yaml\n",
         )
@@ -918,7 +913,7 @@ class TestArtifactsMatrix:
         }
 
     def test_empty_artifacts_yaml_returns_empty_include(self, tmp_path: Path) -> None:
-        _write(tmp_path / "artifacts.yaml", "version: 1\n")
+        write_file(tmp_path / "artifacts.yaml", "version: 1\n")
 
         result = artifacts_matrix(tmp_path)
 
@@ -929,7 +924,7 @@ class TestArtifactsMatrix:
             artifacts_matrix(tmp_path)
 
     def test_result_is_json_serializable(self, tmp_path: Path) -> None:
-        _write(
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\n"
             "rocks:\n- name: my-rock\n  rockcraft-yaml: rockcraft.yaml\n"
@@ -952,7 +947,7 @@ class TestArtifactsCollect:
         content: str,
     ) -> Path:
         p = tmp_path / name / "artifacts.build.yaml"
-        _write(p, content)
+        write_file(p, content)
         return p
 
     def test_merges_rock_and_charm_partials(self, tmp_path: Path) -> None:
@@ -1183,8 +1178,8 @@ class TestArtifactsBuildCIMode:
 
     def test_rock_build_pushes_to_ghcr_and_writes_image_ref(self, tmp_path: Path) -> None:
         """In CI, rock output should be a GHCR image ref, not a local file."""
-        _write(tmp_path / "rockcraft.yaml", "name: my-rock\n")
-        _write(
+        write_file(tmp_path / "rockcraft.yaml", "name: my-rock\n")
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nrocks:\n- name: my-rock\n  rockcraft-yaml: rockcraft.yaml\n",
         )
@@ -1214,8 +1209,8 @@ class TestArtifactsBuildCIMode:
 
     def test_charm_build_writes_artifact_ref(self, tmp_path: Path) -> None:
         """In CI, charm output should be a GitHub artifact reference."""
-        _write(tmp_path / "charmcraft.yaml", "name: my-charm\n")
-        _write(
+        write_file(tmp_path / "charmcraft.yaml", "name: my-charm\n")
+        write_file(
             tmp_path / "artifacts.yaml",
             ("version: 1\ncharms:\n- name: my-charm\n  charmcraft-yaml: charmcraft.yaml\n"),
         )
@@ -1237,8 +1232,8 @@ class TestArtifactsBuildCIMode:
 
     def test_snap_build_writes_artifact_ref(self, tmp_path: Path) -> None:
         """In CI, snap output should be a GitHub artifact reference."""
-        _write(tmp_path / "snap" / "snapcraft.yaml", "name: my-snap\n")
-        _write(
+        write_file(tmp_path / "snap" / "snapcraft.yaml", "name: my-snap\n")
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nsnaps:\n- name: my-snap\n  snapcraft-yaml: snap/snapcraft.yaml\n",
         )
@@ -1260,8 +1255,8 @@ class TestArtifactsBuildCIMode:
 
     def test_local_build_unchanged_when_no_github_actions(self, tmp_path: Path) -> None:
         """Without GITHUB_ACTIONS=true, build produces local file refs."""
-        _write(tmp_path / "charmcraft.yaml", "name: my-charm\n")
-        _write(
+        write_file(tmp_path / "charmcraft.yaml", "name: my-charm\n")
+        write_file(
             tmp_path / "artifacts.yaml",
             ("version: 1\ncharms:\n- name: my-charm\n  charmcraft-yaml: charmcraft.yaml\n"),
         )
@@ -1282,8 +1277,8 @@ class TestArtifactsBuildCIMode:
 
     def test_ci_missing_env_vars_raises(self, tmp_path: Path) -> None:
         """GITHUB_ACTIONS=true with missing env vars raises ConfigurationError."""
-        _write(tmp_path / "charmcraft.yaml", "name: my-charm\n")
-        _write(
+        write_file(tmp_path / "charmcraft.yaml", "name: my-charm\n")
+        write_file(
             tmp_path / "artifacts.yaml",
             ("version: 1\ncharms:\n- name: my-charm\n  charmcraft-yaml: charmcraft.yaml\n"),
         )
@@ -1309,8 +1304,8 @@ class TestArtifactsBuildCIMode:
 
     def test_owner_is_lowercased(self, tmp_path: Path) -> None:
         """GITHUB_REPOSITORY_OWNER is lowercased in the image ref."""
-        _write(tmp_path / "rockcraft.yaml", "name: my-rock\n")
-        _write(
+        write_file(tmp_path / "rockcraft.yaml", "name: my-rock\n")
+        write_file(
             tmp_path / "artifacts.yaml",
             "version: 1\nrocks:\n- name: my-rock\n  rockcraft-yaml: rockcraft.yaml\n",
         )
@@ -1390,7 +1385,7 @@ class TestArtifactsLocalize:
 
     def test_localises_charm_from_downloaded_file(self, tmp_path: Path) -> None:
         """Finds .charm file and updates output.files."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         charm_file = tmp_path / "my-charm_ubuntu-24.04-amd64.charm"
         charm_file.write_bytes(b"")
 
@@ -1416,7 +1411,7 @@ class TestArtifactsLocalize:
             "  - arch: amd64\n"
             "    path: ./my-charm_ubuntu-24.04-amd64.charm\n"
         )
-        _write(tmp_path / "artifacts.build.yaml", generated)
+        write_file(tmp_path / "artifacts.build.yaml", generated)
         charm_file = tmp_path / "my-charm_new.charm"
         charm_file.write_bytes(b"")
 
@@ -1426,7 +1421,7 @@ class TestArtifactsLocalize:
 
     def test_raises_when_no_charm_file_found(self, tmp_path: Path) -> None:
         """Raises ConfigurationError when a CI-ref charm has no matching .charm file."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
 
         with pytest.raises(ConfigurationError, match="my-charm"):
             artifacts_localize(tmp_path)
@@ -1447,7 +1442,7 @@ class TestArtifactsLocalize:
             "  - arch: amd64\n"
             "    path: ./my-charm_ubuntu-24.04-amd64.charm\n"
         )
-        _write(tmp_path / "artifacts.build.yaml", generated)
+        write_file(tmp_path / "artifacts.build.yaml", generated)
         # Create a second charm file — should not be picked up since charm
         # already has output.files
         (tmp_path / "my-charm_new.charm").write_bytes(b"")
@@ -1458,7 +1453,7 @@ class TestArtifactsLocalize:
 
     def test_does_not_match_charm_with_longer_prefix_name(self, tmp_path: Path) -> None:
         """Does not pick up 'my-charm-k8s_*.charm' when localising 'my-charm'."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         # Only the longer-prefix file exists — pattern must NOT match it
         (tmp_path / "my-charm-k8s_ubuntu-24.04-amd64.charm").write_bytes(b"")
 
@@ -1467,7 +1462,7 @@ class TestArtifactsLocalize:
 
     def test_localises_all_files_for_multi_base_charm(self, tmp_path: Path) -> None:
         """Populates output.files with all per-base .charm files."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         (tmp_path / "my-charm_ubuntu-22.04-amd64.charm").write_bytes(b"")
         (tmp_path / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
 
@@ -1541,7 +1536,7 @@ class TestArtifactsFetch:
 
     def test_downloads_generated_and_charm_artifacts(self, tmp_path: Path) -> None:
         """Downloads artifacts-build + each charm/snap artifact, then localises."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1577,7 +1572,7 @@ class TestArtifactsFetch:
 
     def test_skips_rocks_no_download(self, tmp_path: Path) -> None:
         """Rock OCI images are not downloaded — only the initial yaml + charms/snaps."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1591,7 +1586,7 @@ class TestArtifactsFetch:
 
     def test_infers_repo_from_git_remote(self, tmp_path: Path) -> None:
         """Infers owner/repo from git remote when --repo is not given."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1612,7 +1607,7 @@ class TestArtifactsFetch:
 
     def test_infers_repo_from_ssh_remote(self, tmp_path: Path) -> None:
         """Parses SSH-format git remote URLs (git@github.com:owner/repo.git)."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1626,7 +1621,7 @@ class TestArtifactsFetch:
 
     def test_infers_repo_strips_trailing_slash(self, tmp_path: Path) -> None:
         """Strips trailing slash from git remote URLs like https://github.com/o/r/."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1656,7 +1651,7 @@ class TestArtifactsFetch:
 
     def test_localises_after_download(self, tmp_path: Path) -> None:
         """artifacts.build.yaml is updated with local file paths after fetch."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1674,7 +1669,7 @@ class TestArtifactsFetch:
 
     def test_wait_retries_until_artifact_appears(self, tmp_path: Path) -> None:
         """With wait=True, retries the initial download and succeeds on 2nd attempt."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1723,7 +1718,7 @@ class TestArtifactsFetch:
             "  - arch: amd64\n"
             "    image: ghcr.io/owner/repo/my-rock:abc1234\n"
         )
-        _write(tmp_path / "artifacts.build.yaml", rocks_only)
+        write_file(tmp_path / "artifacts.build.yaml", rocks_only)
         file_exists_error = SubprocessError(
             ["gh"],
             1,
@@ -1737,7 +1732,7 @@ class TestArtifactsFetch:
             call_count += 1
             if call_count == 1:
                 raise file_exists_error
-            _write(tmp_path / "artifacts.build.yaml", rocks_only)
+            write_file(tmp_path / "artifacts.build.yaml", rocks_only)
             return gh
 
         with patch("opcli.core.artifacts.run_command", side_effect=side_effect):
@@ -1758,7 +1753,7 @@ class TestArtifactsFetch:
             "  - arch: amd64\n"
             "    image: ghcr.io/owner/repo/my-rock:abc1234\n"
         )
-        _write(tmp_path / "artifacts.build.yaml", rocks_only)
+        write_file(tmp_path / "artifacts.build.yaml", rocks_only)
         file_exists_error = SubprocessError(
             ["gh"],
             1,
@@ -1772,7 +1767,7 @@ class TestArtifactsFetch:
             call_count += 1
             if call_count == 1:
                 raise file_exists_error
-            _write(tmp_path / "artifacts.build.yaml", rocks_only)
+            write_file(tmp_path / "artifacts.build.yaml", rocks_only)
             return gh
 
         with (
@@ -1825,7 +1820,7 @@ class TestArtifactsFetch:
 
     def test_wait_continues_when_collect_job_still_running(self, tmp_path: Path) -> None:
         """With wait=True, keeps retrying when collect job conclusion is None."""
-        _write(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 

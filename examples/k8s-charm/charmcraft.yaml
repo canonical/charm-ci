@@ -1,0 +1,27 @@
+name: k8s-charm
+type: charm
+summary: Trivial k8s sidecar charm for opcli CI workflow testing.
+description: |
+  Minimal sidecar k8s charm with a rock image container, used to validate
+  the opcli CI build workflow. Not intended for real deployment.
+
+base: ubuntu@24.04
+
+platforms:
+  amd64:
+
+containers:
+  k8s-rock:
+    resource: k8s-rock-image
+
+resources:
+  k8s-rock-image:
+    type: oci-image
+    description: The rock image for the k8s charm.
+
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv
