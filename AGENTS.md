@@ -55,6 +55,7 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 3. **Never overwrite `spread.yaml`.** Always produce a transformed copy in a temp file.
 4. **Avoid `Any`.** Prefer specific types; `mypy --strict` must pass. Legacy `Any` in YAML-handling helpers is tolerated but should not spread.
 5. **CLI consistency: `run` / `expand` pairs.** Commands that execute a subprocess (`run`) and commands that print the equivalent command (`expand`) must be aligned in arguments, flags, and semantics. If `opcli foo run --bar baz` executes something, then `opcli foo expand --bar baz` must print the equivalent command with the same flags accepted. This applies to `spread`, `pytest`, and any future command groups with this pattern.
+6. **Stepdown rule.** Within each module, order functions so callers appear before callees. Public API at the top, then private helpers below in call-order. Read top-to-bottom like a narrative.
 
 ---
 

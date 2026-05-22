@@ -1,0 +1,1456 @@
+# Copyright 2025 Canonical Ltd.
+# See LICENSE file for licensing details.
+
+"""Core logic for ``opcli artifacts`` commands.
+
+``init`` discovers artifacts and writes ``artifacts.yaml``.
+``build`` reads the plan, invokes pack tools, and writes
+``artifacts.build.yaml``.
+``fetch`` downloads a completed CI run's artifacts so tests can run locally.
+"""
+
+import glob as globmod
+import json
+import logging
+import os
+import platform
+import re
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from opcli.core.discovery import discover_artifacts
+from opcli.core.exceptions import ConfigurationError, OpcliError, SubprocessError
+from opcli.core.progress import status, step
+from opcli.core.subprocess import run_command
+from opcli.core.yaml_io import (
+    dump_artifacts_build,
+    dump_artifacts_plan,
+    load_artifacts_build,
+    load_artifacts_plan,
+)
+from opcli.models.artifacts import (
+    CharmArtifact,
+    RockArtifact,
+    SnapArtifact,
+)
+from opcli.models.artifacts_build import (
+    ArtifactsGenerated,
+    CharmOutput,
+    GeneratedCharm,
+    GeneratedResource,
+    GeneratedRock,
+    GeneratedSnap,
+    RockOutput,
+    SnapOutput,
+)
+
+logger = logging.getLogger(__name__)
+
+_ARTIFACTS_YAML = "artifacts.yaml"
+_ARTIFACTS_GENERATED_YAML = "artifacts.build.yaml"
+
+
+_PACK_COMMANDS: dict[str, list[str]] = {
+    "charm": ["charmcraft", "pack", "--verbose"],
+    "rock": ["rockcraft", "pack", "--verbose"],
+    "snap": ["snapcraft", "pack", "--verbose"],
+}
+
+_ROCKCRAFT_ENV = {"ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS": "1"}
+
+_OUTPUT_GLOBS: dict[str, str] = {
+    "charm": "*.charm",
+    "rock": "*.rock",
+    "snap": "*.snap",
+}
+
+
+@dataclass
+class _CIContext:
+    """GitHub Actions environment variables needed to produce CI-format outputs."""
+
+    run_id: str
+    owner: str  # lowercased GITHUB_REPOSITORY_OWNER
+    repo: str  # repository name only (not org/repo)
+    sha: str  # GITHUB_SHA[:7]
+
+
+# Pattern: {name}_{distro}-{version}-{arch}.charm
+# e.g. aproxy_ubuntu-22.04-amd64.charm → distro=ubuntu, version=22.04, arch=amd64
+_CHARM_FILENAME_RE = re.compile(
+    r"^.+_(?P<distro>[a-z]+)-(?P<version>\d+\.\d+)-(?P<arch>[^.]+)\.charm$"
+)
+
+
+# Pattern: {name}_{version}_{arch}.snap  e.g. my-snap_1.0_amd64.snap
+_SNAP_FILENAME_RE = re.compile(r"^.+_[^_]+_(?P<arch>[^.]+)\.snap$")
+
+
+_GITHUB_URL_RE = re.compile(r"github\.com[:/](.+?)(?:\.git)?/?$")
+
+
+_WAIT_MAX_ATTEMPTS = 60
+_WAIT_SLEEP_SECONDS = 30
+# Keywords in gh CLI stderr that indicate a hard auth/permission failure
+# rather than "artifact not yet available" — retrying is pointless for these.
+_AUTH_ERROR_KEYWORDS = (
+    "authentication",
+    "credentials",
+    "unauthorized",
+    "token",
+    "403",
+    "401",
+)
+
+# Keywords that indicate the destination file already exists; we delete it and retry.
+_FILE_EXISTS_KEYWORDS = ("file exists",)
+
+# Job name (or substring) that uploads the merged artifacts-build artifact.
+# In reusable-workflow runs the API prefixes this with the caller job name
+# (e.g. "build / Collect artifacts"), so we use a substring match.
+_COLLECT_JOB_NAME = "Collect artifacts"
+
+# Conclusions that mean the artifact will never arrive — bail immediately.
+_BAIL_CONCLUSIONS: frozenset[str] = frozenset({"skipped", "failure", "cancelled"})
+
+
+def artifacts_init(root: Path, *, force: bool = False) -> Path:
+    """Discover artifacts and write ``artifacts.yaml``.
+
+    Returns:
+        The path to the written file.
+
+    Raises:
+        ConfigurationError: If the file already exists and *force* is False.
+    """
+    dest = root / _ARTIFACTS_YAML
+    if dest.exists() and not force:
+        msg = f"{_ARTIFACTS_YAML} already exists. Use --force to overwrite."
+        raise ConfigurationError(msg)
+
+    plan = discover_artifacts(root)
+    dump_artifacts_plan(plan, dest)
+    logger.info(
+        "Wrote %s (%d charms, %d rocks, %d snaps)",
+        dest,
+        len(plan.charms),
+        len(plan.rocks),
+        len(plan.snaps),
+    )
+    return dest
+
+
+def artifacts_build(
+    root: Path,
+    *,
+    charm_names: list[str] | None = None,
+    rock_names: list[str] | None = None,
+    snap_names: list[str] | None = None,
+) -> Path:
+    """Build artifacts and write ``artifacts.build.yaml``.
+
+    If *charm_names*, *rock_names*, or *snap_names* are given, only
+    those artifacts are built.  Otherwise all declared artifacts are built.
+
+    Returns:
+        The path to the written file.
+
+    Raises:
+        ConfigurationError: If ``artifacts.yaml`` does not exist.
+        OpcliError: If a build fails or no output file is found.
+    """
+    plan_path = root / _ARTIFACTS_YAML
+    if not plan_path.exists():
+        msg = f"{_ARTIFACTS_YAML} not found. Run 'opcli artifacts init' first."
+        raise ConfigurationError(msg)
+
+    plan = load_artifacts_plan(plan_path)
+
+    # If any type filter is provided, unspecified types default to empty so
+    # that `--charm foo` builds only the charm, not all rocks/snaps too.
+    any_filter = charm_names is not None or rock_names is not None or snap_names is not None
+    if any_filter:
+        rock_names = rock_names if rock_names is not None else []
+        charm_names = charm_names if charm_names is not None else []
+        snap_names = snap_names if snap_names is not None else []
+
+    rocks_to_build = _filter_by_name(plan.rocks, rock_names, "rock")
+    charms_to_build = _filter_by_name(plan.charms, charm_names, "charm")
+    snaps_to_build = _filter_by_name(plan.snaps, snap_names, "snap")
+
+    total = len(rocks_to_build) + len(charms_to_build) + len(snaps_to_build)
+    parts = []
+    if rocks_to_build:
+        parts.append(f"{len(rocks_to_build)} rock(s)")
+    if charms_to_build:
+        parts.append(f"{len(charms_to_build)} charm(s)")
+    if snaps_to_build:
+        parts.append(f"{len(snaps_to_build)} snap(s)")
+    status(f"Building {total} artifact(s): {', '.join(parts)}")
+
+    # Track absolute output paths attributed to each artifact so far, to detect
+    # collisions when multiple artifacts share a pack-dir.
+    attributed: set[str] = set()
+    gen_rocks = [_build_rock(r, root, attributed) for r in rocks_to_build]
+    gen_charms = [_build_charm(c, root, attributed) for c in charms_to_build]
+    gen_snaps = [_build_snap(s, root, attributed) for s in snaps_to_build]
+
+    # In GitHub Actions, rewrite outputs to CI-format references.
+    ci = _get_ci_context()
+    if ci is not None:
+        gen_rocks = [_push_rock_to_ghcr(r, ci, root) for r in gen_rocks]
+        gen_charms = [_to_ci_charm(c, ci) for c in gen_charms]
+        gen_snaps = [_to_ci_snap(s, ci) for s in gen_snaps]
+
+    generated = ArtifactsGenerated(
+        rocks=gen_rocks,
+        charms=gen_charms,
+        snaps=gen_snaps,
+    )
+
+    dest = root / _ARTIFACTS_GENERATED_YAML
+
+    # When a filter is active and an existing build file exists, merge new
+    # entries into the previous results so unrelated artifacts are preserved.
+    if any_filter and dest.exists():
+        existing = load_artifacts_build(dest)
+        generated = _merge_generated(existing, generated)
+
+    dump_artifacts_build(generated, dest)
+    logger.info("Wrote %s", dest)
+    return dest
+
+
+def artifacts_matrix(root: Path) -> dict[str, list[dict[str, object]]]:
+    """Read ``artifacts.yaml`` and return a GitHub Actions matrix dict.
+
+    The returned dict has a single key ``"include"`` whose value is a list of
+    entries — one per (artifact, arch) combination — each with ``"name"``,
+    ``"type"``, ``"arch"``, and ``"runner"`` keys.  ``runner`` is a list of
+    GitHub runner label strings.
+
+    Rocks come first, then charms, then snaps.  Within each kind, entries are
+    ordered by artifact declaration order, then by ``platforms`` order.
+
+    The result is JSON-serialisable and suitable for use as a GitHub Actions
+    ``strategy.matrix`` value via ``$GITHUB_OUTPUT``.
+
+    Raises:
+        ConfigurationError: If ``artifacts.yaml`` does not exist.
+    """
+    plan_path = root / _ARTIFACTS_YAML
+    if not plan_path.exists():
+        msg = f"{_ARTIFACTS_YAML} not found. Run 'opcli artifacts init' first."
+        raise ConfigurationError(msg)
+
+    plan = load_artifacts_plan(plan_path)
+    include: list[dict[str, object]] = []
+    for rock in plan.rocks:
+        for build in rock.platforms:
+            include.append(
+                {
+                    "name": rock.name,
+                    "type": "rock",
+                    "arch": build.arch,
+                    "runner": json.dumps(build.runner or ["ubuntu-latest"]),
+                }
+            )
+    for charm in plan.charms:
+        for build in charm.platforms:
+            include.append(
+                {
+                    "name": charm.name,
+                    "type": "charm",
+                    "arch": build.arch,
+                    "runner": json.dumps(build.runner or ["ubuntu-latest"]),
+                }
+            )
+    for snap in plan.snaps:
+        for build in snap.platforms:
+            include.append(
+                {
+                    "name": snap.name,
+                    "type": "snap",
+                    "arch": build.arch,
+                    "runner": json.dumps(build.runner or ["ubuntu-latest"]),
+                }
+            )
+
+    return {"include": include}
+
+
+def artifacts_collect(root: Path, partial_paths: list[Path]) -> Path:
+    """Merge partial ``artifacts.build.yaml`` files into one.
+
+    In CI, each matrix build job produces a partial file containing only the
+    artifact it built.  This function merges all partials into a single
+    ``artifacts.build.yaml`` and re-fills charm resource ``file``/``image``
+    references from the merged rock outputs (rocks and charms build in parallel
+    so charm partials have ``null`` resource refs at build time).
+
+    Args:
+        root: Repository root; the merged file is written here.
+        partial_paths: Paths to the partial ``artifacts.build.yaml`` files.
+
+    Returns:
+        The path to the written merged file.
+
+    Raises:
+        ConfigurationError: If *partial_paths* is empty or a path does not exist.
+    """
+    if not partial_paths:
+        msg = "No partial artifacts.build.yaml files provided to collect."
+        raise ConfigurationError(msg)
+
+    for p in partial_paths:
+        if not p.exists():
+            msg = f"Partial artifacts.build.yaml not found: {p}"
+            raise ConfigurationError(msg)
+
+    all_rocks: list[GeneratedRock] = []
+    all_charms: list[GeneratedCharm] = []
+    all_snaps: list[GeneratedSnap] = []
+
+    for p in partial_paths:
+        partial = load_artifacts_build(p)
+        all_rocks.extend(partial.rocks)
+        all_charms.extend(partial.charms)
+        all_snaps.extend(partial.snaps)
+
+    # Merge same-named artifacts: combine their output lists.
+    # Reject duplicate (name, arch) combinations across partials.
+    merged_rocks = _merge_artifact_outputs(all_rocks, "rock")
+    merged_charms = _merge_artifact_outputs(all_charms, "charm")
+    merged_snaps = _merge_artifact_outputs(all_snaps, "snap")
+
+    # Validate that every rock referenced by a charm resource is present.
+    rocks_by_name: dict[str, GeneratedRock] = {r.name: r for r in merged_rocks}
+    for charm in merged_charms:
+        for res_name, res in (charm.resources or {}).items():
+            if res.rock and res.rock not in rocks_by_name:
+                msg = (
+                    f"Charm '{charm.name}' resource '{res_name}' references rock "
+                    f"'{res.rock}' which was not found in the collected partials. "
+                    f"Ensure the rock build job partial is included."
+                )
+                raise ConfigurationError(msg)
+
+    generated = ArtifactsGenerated(
+        rocks=merged_rocks,
+        charms=merged_charms,
+        snaps=merged_snaps,
+    )
+    dest = root / _ARTIFACTS_GENERATED_YAML
+    dump_artifacts_build(generated, dest)
+    logger.info("Wrote merged %s", dest)
+    return dest
+
+
+def artifacts_localize(root: Path) -> int:
+    """Update ``artifacts.build.yaml`` with local artifact file paths.
+
+    In CI, charm and snap outputs are recorded as ``artifact + run-id``
+    references.  Before running integration tests, the workflow downloads
+    the artifacts to the working directory.  This command scans the project
+    tree for ``.charm`` / ``.snap`` files and rewrites
+    ``artifacts.build.yaml`` so that each :class:`CharmOutput` with only
+    a CI artifact reference gets a ``path`` entry pointing to the discovered
+    local file, and each :class:`SnapOutput` gets a ``file`` entry.
+
+    Returns the total number of arch-builds that were localised.
+
+    Raises:
+        ConfigurationError: If ``artifacts.build.yaml`` is not found or
+            if any artifact with a CI reference has no matching local file.
+    """
+    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    if not gen_path.exists():
+        msg = f"{_ARTIFACTS_GENERATED_YAML} not found."
+        raise ConfigurationError(msg)
+
+    generated = load_artifacts_build(gen_path)
+
+    updated = 0
+    missing: list[str] = []
+
+    for charm in generated.charms:
+        updated += _localize_charm(charm, root, missing)
+
+    for snap in generated.snaps:
+        for snap_build in snap.builds:
+            if snap_build.file or not snap_build.artifact:
+                continue
+            artifact_dir = _safe_artifact_dir(root, snap_build.artifact)
+            if artifact_dir.is_dir():
+                rel = _find_snap_file_in_dir(artifact_dir, root, snap_build.arch)
+            else:
+                rel = _find_local_file(root, snap.name, "snap", snap_build.arch)
+            if rel is None:
+                missing.append(f"{snap.name} ({snap_build.arch})")
+                logger.error(
+                    "No .snap file found for snap '%s' arch '%s'.",
+                    snap.name,
+                    snap_build.arch,
+                )
+                continue
+            snap_build.file = rel
+            logger.info("Localised snap '%s' (%s) → %s", snap.name, snap_build.arch, rel)
+            updated += 1
+
+    if missing:
+        msg = (
+            f"Could not find downloaded artifact files for: {', '.join(missing)}. "
+            "Ensure artifacts were downloaded before running localize."
+        )
+        raise ConfigurationError(msg)
+
+    if updated:
+        dump_artifacts_build(generated, gen_path)
+        logger.info("Updated %s with %d localised artifact(s).", gen_path, updated)
+
+    return updated
+
+
+def artifacts_fetch(  # noqa: C901
+    root: Path,
+    run_id: str,
+    repo: str | None = None,
+    *,
+    wait: bool = False,
+) -> Path:
+    """Download a CI run's artifacts and prepare for local testing.
+
+    Steps:
+    1. Infer ``owner/repo`` from the local git remote if *repo* is not given.
+    2. Download ``artifacts.build.yaml`` from the named GitHub Actions
+       artifact.  When *wait* is ``True``, retries up to
+       :data:`_WAIT_MAX_ATTEMPTS` times until the artifact appears (useful
+       when the test job starts before the build completes).
+    3. For every charm/snap that carries a CI artifact reference, download the
+       corresponding artifact archive.
+    4. Call :func:`artifacts_localize` to rewrite ``artifacts.build.yaml``
+       with the local ``.charm`` / ``.snap`` file paths.
+
+    Rock artifacts are OCI images on GHCR and need no download — their
+    ``output.image`` reference is already usable locally.
+
+    Args:
+        root: Working directory; all artifacts are downloaded here.
+        run_id: GitHub Actions workflow run ID.
+        repo: GitHub repository in ``owner/name`` format.  Inferred from the
+            local git remote when ``None``.
+        wait: When ``True``, retry the initial ``artifacts-build``
+            download until it succeeds.  Fails immediately on
+            authentication/permission errors.
+
+    Returns:
+        Path to the updated ``artifacts.build.yaml``.
+
+    Raises:
+        ConfigurationError: If the repo cannot be inferred, the yaml is
+            missing after download, or the wait timeout is exceeded.
+        SubprocessError: If ``gh run download`` fails non-transiently.
+    """
+    if repo is None:
+        repo = _infer_repo_from_git(root)
+
+    generated_cmd = [
+        "gh",
+        "run",
+        "download",
+        run_id,
+        "--repo",
+        repo,
+        "--name",
+        "artifacts-build",
+        "--dir",
+        str(root),
+    ]
+    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    if wait:
+        _gh_download_with_wait(generated_cmd, str(root), run_id, repo, dest=gen_path)
+    else:
+        _gh_download(generated_cmd, str(root), dest=gen_path)
+
+    if not gen_path.exists():
+        msg = (
+            f"{_ARTIFACTS_GENERATED_YAML} not found after download. "
+            "Ensure the CI run completed its build phase."
+        )
+        raise ConfigurationError(msg)
+
+    generated = load_artifacts_build(gen_path)
+
+    # Download each charm / snap artifact archive (deduplicated)
+    seen_artifacts: set[str] = set()
+    for charm in generated.charms:
+        for build in charm.builds:
+            if build.artifact:
+                seen_artifacts.add(build.artifact)
+    for snap in generated.snaps:
+        for snap_build in snap.builds:
+            if snap_build.artifact:
+                seen_artifacts.add(snap_build.artifact)
+
+    for name in sorted(seen_artifacts):
+        artifact_dir = _safe_artifact_dir(root, name)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        status(f"Downloading artifact '{name}'")
+        run_command(
+            [
+                "gh",
+                "run",
+                "download",
+                run_id,
+                "--repo",
+                repo,
+                "--name",
+                name,
+                "--dir",
+                str(artifact_dir),
+            ],
+            cwd=str(root),
+        )
+        logger.info("Downloaded artifact '%s'.", name)
+
+    # Rewrite artifact refs to local file paths
+    artifacts_localize(root)
+    return gen_path
+
+
+def _filter_by_name[T: (RockArtifact, CharmArtifact, SnapArtifact)](
+    items: list[T],
+    names: list[str] | None,
+    kind: str,
+) -> list[T]:
+    """Return items filtered by *names*, or all if *names* is None.
+
+    ``None`` means "no filter — build all".  An empty list means "build none".
+    """
+    if names is None:
+        return items
+    name_set = set(names)
+    available = {item.name for item in items}
+    unknown = name_set - available
+    if unknown:
+        msg = f"Unknown {kind}(s): {', '.join(sorted(unknown))}"
+        raise ConfigurationError(msg)
+    return [item for item in items if item.name in name_set]
+
+
+def _build_rock(rock: RockArtifact, root: Path, attributed: set[str]) -> GeneratedRock:
+    """Build a single rock artifact."""
+    yaml_path = (root / rock.rockcraft_yaml).resolve()
+    if not yaml_path.is_file():
+        msg = f"rockcraft-yaml not found: {rock.rockcraft_yaml}"
+        raise ConfigurationError(msg)
+    pack_dir = _resolve_pack_dir(yaml_path, rock.pack_dir, root)
+    if not pack_dir.is_dir():
+        msg = f"pack-dir not found: {rock.pack_dir}"
+        raise ConfigurationError(msg)
+
+    before = _snapshot_outputs(pack_dir, "rock")
+
+    symlink_path, symlink_created = _with_rock_symlink(yaml_path, pack_dir)
+    try:
+        with step(f"Building rock '{rock.name}' (rockcraft pack)"):
+            run_command([*_PACK_COMMANDS["rock"]], cwd=str(pack_dir), env=_ROCKCRAFT_ENV)
+    finally:
+        if symlink_created and symlink_path and symlink_path.is_symlink():
+            symlink_path.unlink()
+
+    after = _snapshot_outputs(pack_dir, "rock")
+    new_output = _pick_new_output(before, after, "rock", pack_dir, attributed)
+    output_file = _relative_to_root(new_output, root)
+    attributed.add(new_output)
+    return GeneratedRock(
+        name=rock.name,
+        **{"rockcraft-yaml": rock.rockcraft_yaml},
+        builds=[RockOutput(arch=_current_arch(), file=output_file)],
+    )
+
+
+def _build_charm(
+    charm: CharmArtifact,
+    root: Path,
+    attributed: set[str],
+) -> GeneratedCharm:
+    """Build a single charm artifact."""
+    yaml_path = (root / charm.charmcraft_yaml).resolve()
+    if not yaml_path.is_file():
+        msg = f"charmcraft-yaml not found: {charm.charmcraft_yaml}"
+        raise ConfigurationError(msg)
+    pack_dir = _resolve_pack_dir(yaml_path, charm.pack_dir, root)
+    if not pack_dir.is_dir():
+        msg = f"pack-dir not found: {charm.pack_dir}"
+        raise ConfigurationError(msg)
+
+    symlink_path, symlink_created = _with_charm_symlink(yaml_path, pack_dir)
+    try:
+        with step(f"Building charm '{charm.name}' (charmcraft pack)"):
+            run_command([*_PACK_COMMANDS["charm"]], cwd=str(pack_dir))
+    finally:
+        if symlink_created and symlink_path and symlink_path.is_symlink():
+            symlink_path.unlink()
+    after = _snapshot_outputs(pack_dir, "charm")
+    new_outputs = _pick_new_charm_outputs(after, pack_dir, charm.name, attributed)
+    attributed.update(new_outputs)
+    arch = _current_arch()
+    charm_outputs = [
+        CharmOutput(
+            arch=arch,
+            path=_relative_to_root(p, root),
+            base=_parse_base_from_charm_path(p),
+        )
+        for p in new_outputs
+    ]
+
+    resources: dict[str, GeneratedResource] = {}
+    for res_name, res_def in charm.resources.items():
+        resources[res_name] = GeneratedResource(
+            type=res_def.type,
+            rock=res_def.rock,
+        )
+
+    return GeneratedCharm(
+        name=charm.name,
+        **{"charmcraft-yaml": charm.charmcraft_yaml},
+        builds=charm_outputs,
+        resources=resources if resources else None,
+    )
+
+
+def _build_snap(snap: SnapArtifact, root: Path, attributed: set[str]) -> GeneratedSnap:
+    """Build a single snap artifact."""
+    yaml_path = (root / snap.snapcraft_yaml).resolve()
+    if not yaml_path.is_file():
+        msg = f"snapcraft-yaml not found: {snap.snapcraft_yaml}"
+        raise ConfigurationError(msg)
+    pack_dir = _resolve_pack_dir(yaml_path, snap.pack_dir, root)
+    if not pack_dir.is_dir():
+        msg = f"pack-dir not found: {snap.pack_dir}"
+        raise ConfigurationError(msg)
+
+    before = _snapshot_outputs(pack_dir, "snap")
+    with step(f"Building snap '{snap.name}' (snapcraft pack)"):
+        run_command([*_PACK_COMMANDS["snap"]], cwd=str(pack_dir))
+    after = _snapshot_outputs(pack_dir, "snap")
+    new_output = _pick_new_output(before, after, "snap", pack_dir, attributed)
+    output_file = _relative_to_root(new_output, root)
+    attributed.add(new_output)
+    return GeneratedSnap(
+        name=snap.name,
+        **{"snapcraft-yaml": snap.snapcraft_yaml},
+        builds=[SnapOutput(arch=_current_arch(), file=output_file)],
+    )
+
+
+def _get_ci_context() -> _CIContext | None:
+    """Return GitHub Actions context if running inside GitHub Actions, else ``None``.
+
+    Reads ``GITHUB_ACTIONS``, ``GITHUB_RUN_ID``, ``GITHUB_REPOSITORY_OWNER``,
+    ``GITHUB_REPOSITORY``, and ``GITHUB_SHA`` from the environment.
+
+    Raises:
+        ConfigurationError: If ``GITHUB_ACTIONS=true`` but required variables
+            are missing or empty.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return None
+
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "").lower()
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    sha = os.environ.get("GITHUB_SHA", "")
+
+    missing = [
+        name
+        for name, val in [
+            ("GITHUB_RUN_ID", run_id),
+            ("GITHUB_REPOSITORY_OWNER", owner),
+            ("GITHUB_REPOSITORY", repository),
+            ("GITHUB_SHA", sha),
+        ]
+        if not val.strip()
+    ]
+    if missing:
+        msg = f"GITHUB_ACTIONS=true but required variables are missing: {', '.join(missing)}"
+        raise ConfigurationError(msg)
+
+    repo = repository.split("/", 1)[-1]
+    if not repo.strip():
+        msg = f"GITHUB_REPOSITORY must be in 'owner/repo' format, got: {repository!r}"
+        raise ConfigurationError(msg)
+    return _CIContext(run_id=run_id, owner=owner, repo=repo, sha=sha[:7])
+
+
+def _push_rock_to_ghcr(rock: GeneratedRock, ci: _CIContext, root: Path) -> GeneratedRock:
+    """Push a locally-built rock to GHCR and return an updated ``GeneratedRock``.
+
+    The rock ``.rock`` file is pushed to
+    ``ghcr.io/<owner>/<repo>/<name>:<sha7>-<arch>`` using ``skopeo copy``.
+    The returned object has its ``builds`` rewritten to a single
+    :class:`RockArchBuild` with ``image`` set and no ``file``.
+
+    Raises:
+        OpcliError: If the rock output list is empty or has no local file.
+        SubprocessError: If the skopeo push fails.
+    """
+    if not rock.builds:
+        msg = f"Rock '{rock.name}' has no build output to push to GHCR."
+        raise OpcliError(msg)
+    if len(rock.builds) > 1:
+        msg = (
+            f"Rock '{rock.name}' has {len(rock.builds)} builds — "
+            "multi-arch GHCR push is not yet implemented."
+        )
+        raise OpcliError(msg)
+    build = rock.builds[0]
+    if not build.file:
+        msg = f"Rock '{rock.name}' has no local file to push to GHCR."
+        raise OpcliError(msg)
+
+    rock_path = Path(build.file)
+    if not rock_path.is_absolute():
+        rock_path = (root / rock_path).resolve()
+    if not rock_path.exists():
+        msg = f"Rock file not found: {rock_path}"
+        raise OpcliError(msg)
+
+    image_ref = f"ghcr.io/{ci.owner}/{ci.repo}/{rock.name}:{ci.sha}-{build.arch}"
+    with step(f"Pushing rock '{rock.name}' to GHCR"):
+        run_command(
+            [
+                "skopeo",
+                "--insecure-policy",
+                "copy",
+                f"oci-archive:{rock_path}",
+                f"docker://{image_ref}",
+            ],
+            cwd=str(root),
+        )
+    logger.info("Pushed rock '%s' to %s", rock.name, image_ref)
+    return GeneratedRock(
+        name=rock.name,
+        **{"rockcraft-yaml": rock.rockcraft_yaml},
+        builds=[RockOutput(arch=build.arch, image=image_ref)],
+    )
+
+
+def _to_ci_charm(charm: GeneratedCharm, ci: _CIContext) -> GeneratedCharm:
+    """Return a copy of *charm* with CI artifact-reference output.
+
+    The artifact name includes the architecture so parallel multi-arch builds
+    produce distinct artifact names (e.g. ``built-charm-my-charm-amd64``).
+    """
+    arch = charm.builds[0].arch if charm.builds else _current_arch()
+    return GeneratedCharm(
+        name=charm.name,
+        **{"charmcraft-yaml": charm.charmcraft_yaml},
+        builds=[
+            CharmOutput.model_validate(
+                {
+                    "arch": arch,
+                    "artifact": f"built-charm-{charm.name}-{arch}",
+                    "run-id": ci.run_id,
+                }
+            )
+        ],
+        resources=charm.resources,
+    )
+
+
+def _to_ci_snap(snap: GeneratedSnap, ci: _CIContext) -> GeneratedSnap:
+    """Return a copy of *snap* with CI artifact-reference output.
+
+    The artifact name includes the architecture so parallel multi-arch builds
+    produce distinct artifact names (e.g. ``built-snap-my-snap-amd64``).
+    """
+    arch = snap.builds[0].arch if snap.builds else _current_arch()
+    return GeneratedSnap(
+        name=snap.name,
+        **{"snapcraft-yaml": snap.snapcraft_yaml},
+        builds=[
+            SnapOutput.model_validate(
+                {
+                    "arch": arch,
+                    "artifact": f"built-snap-{snap.name}-{arch}",
+                    "run-id": ci.run_id,
+                }
+            )
+        ],
+    )
+
+
+def _merge_generated(existing: ArtifactsGenerated, new: ArtifactsGenerated) -> ArtifactsGenerated:
+    """Merge *new* build entries into *existing*, replacing by name."""
+
+    def _merge_by_name[T: (GeneratedRock, GeneratedCharm, GeneratedSnap)](
+        old_list: list[T], new_list: list[T]
+    ) -> list[T]:
+        new_names = {item.name for item in new_list}
+        # Keep existing entries whose name was NOT rebuilt, then append new.
+        merged = [item for item in old_list if item.name not in new_names]
+        merged.extend(new_list)
+        return merged
+
+    return ArtifactsGenerated(
+        rocks=_merge_by_name(existing.rocks, new.rocks),
+        charms=_merge_by_name(existing.charms, new.charms),
+        snaps=_merge_by_name(existing.snaps, new.snaps),
+    )
+
+
+def _resolve_pack_dir(yaml_path: Path, pack_dir_str: str | None, root: Path) -> Path:
+    """Resolve the directory from which the pack command should run."""
+    if pack_dir_str:
+        return (root / pack_dir_str).resolve()
+    return yaml_path.parent.resolve()
+
+
+def _snapshot_outputs(pack_dir: Path, kind: str) -> set[str]:
+    """Return the set of existing output files in *pack_dir* for *kind*."""
+    return set(globmod.glob(str(pack_dir / _OUTPUT_GLOBS[kind])))
+
+
+def _with_rock_symlink(
+    yaml_path: Path,
+    pack_dir: Path,
+) -> tuple[Path | None, bool]:
+    """Prepare a ``rockcraft.yaml`` symlink in *pack_dir* if needed.
+
+    Rockcraft always looks for a file literally named ``rockcraft.yaml`` in
+    the working directory, regardless of the actual filename of the craft YAML.
+    This function creates ``<pack_dir>/rockcraft.yaml → <relative-path>`` when
+    the source file is not already named ``rockcraft.yaml`` and located in
+    ``pack_dir``.
+
+    The symlink target is always **relative** so that it remains valid when
+    rockcraft copies the pack-dir into a managed LXC container (where the
+    host absolute path does not exist).
+
+    Returns ``(symlink_path, created)`` where *created* is ``True`` when this
+    call created the symlink (and the caller must remove it afterwards).
+
+    Raises:
+        ConfigurationError: If a real (non-symlink) ``rockcraft.yaml`` already
+            exists in *pack_dir* and its content differs from *yaml_path*.
+    """
+    target = pack_dir / "rockcraft.yaml"
+    if target.resolve() == yaml_path.resolve():
+        # Already the right file — no symlink needed.
+        return None, False
+
+    if target.exists() and not target.is_symlink():
+        if target.read_bytes() == yaml_path.read_bytes():
+            # Identical content — rockcraft will use it correctly.
+            return None, False
+        msg = (
+            f"A regular file already exists at {target} and it differs from "
+            f"{yaml_path}. Remove it or set pack-dir to a directory without a "
+            "rockcraft.yaml."
+        )
+        raise ConfigurationError(msg)
+    if target.is_symlink():
+        target.unlink()
+    target.symlink_to(os.path.relpath(yaml_path, pack_dir))
+    return target, True
+
+
+def _with_charm_symlink(
+    yaml_path: Path,
+    pack_dir: Path,
+) -> tuple[Path | None, bool]:
+    """Prepare a ``charmcraft.yaml`` symlink in *pack_dir* if needed.
+
+    Charmcraft always looks for a file literally named ``charmcraft.yaml`` in
+    the working directory.  This function creates
+    ``<pack_dir>/charmcraft.yaml → <relative-path>`` when the source file is
+    not already named ``charmcraft.yaml`` and located in *pack_dir*.
+
+    The symlink target is always **relative** so that it remains valid if
+    charmcraft copies the directory into a managed container.
+
+    Returns ``(symlink_path, created)`` where *created* is ``True`` when this
+    call created the symlink (and the caller must remove it afterwards).
+
+    Raises:
+        ConfigurationError: If a real (non-symlink) ``charmcraft.yaml`` already
+            exists in *pack_dir* and points to a different file than *yaml_path*.
+            This prevents silently building the wrong charm.
+    """
+    target = pack_dir / "charmcraft.yaml"
+    if target.resolve() == yaml_path.resolve():
+        # Already the right file — no symlink needed.
+        return None, False
+
+    if target.exists() and not target.is_symlink():
+        if target.read_bytes() == yaml_path.read_bytes():
+            # A real charmcraft.yaml already exists with identical content
+            # (e.g. a copy kept alongside a non-standard filename).
+            # Charmcraft will use it and produce the correct charm — no action.
+            return None, False
+        msg = (
+            f"A regular file already exists at {target} and it differs from "
+            f"{yaml_path}. Remove it or set pack-dir to a directory without a "
+            "charmcraft.yaml."
+        )
+        raise ConfigurationError(msg)
+    if target.is_symlink():
+        target.unlink()
+    target.symlink_to(os.path.relpath(yaml_path, pack_dir))
+    return target, True
+
+
+def _pick_new_output(
+    before: set[str],
+    after: set[str],
+    kind: str,
+    pack_dir: Path,
+    attributed: set[str] | None = None,
+) -> str:
+    """Return the new output file produced by pack, relative to repo root.
+
+    *attributed* is the set of paths already claimed by previous artifact builds
+    in this session.  If the overwrite-in-place fallback would return a path that
+    is already attributed, a collision is detected and an error is raised.
+
+    Three cases:
+    1. New files appeared (``after - before`` non-empty) — use those.
+    2. No files at all — raise error.
+    3. Same files before and after — the build overwrote an existing file in
+       place.  Unambiguous only when there is exactly one file; otherwise we
+       cannot determine which file was just produced.
+    """
+    new_files = sorted(after - before)
+    if new_files:
+        if len(new_files) > 1:
+            logger.warning(
+                "Multiple new %s files in %s; using %s",
+                _OUTPUT_GLOBS[kind],
+                pack_dir,
+                new_files[0],
+            )
+        return new_files[0]
+
+    # No new files — check overwrite-in-place case.
+    if not after:
+        msg = f"No {_OUTPUT_GLOBS[kind]} found in {pack_dir} after pack"
+        raise OpcliError(msg)
+
+    if len(after) == 1:
+        # Exactly one pre-existing file; the build overwrote it in place.
+        path = next(iter(after))
+        if attributed and path in attributed:
+            msg = (
+                f"Output file {path} was already produced by another artifact. "
+                "Two artifacts cannot share the same output filename in the same "
+                "pack-dir. Use separate pack-dirs or ensure each artifact produces "
+                "a unique filename."
+            )
+            raise OpcliError(msg)
+        return path
+
+    # Multiple pre-existing files, none added — cannot determine which was built.
+    msg = (
+        f"Cannot determine which {_OUTPUT_GLOBS[kind]} in {pack_dir} was just "
+        "built: the pack tool overwrote an existing file but multiple "
+        f"{_OUTPUT_GLOBS[kind]} files already exist. "
+        "Use a dedicated pack-dir that does not contain pre-existing output files."
+    )
+    raise OpcliError(msg)
+
+
+def _pick_new_charm_outputs(
+    after: set[str],
+    pack_dir: Path,
+    charm_name: str,
+    attributed: set[str] | None = None,
+) -> list[str]:
+    """Return the charm files for *charm_name* from the pack output.
+
+    Charmcraft names consist of lowercase letters, digits, and hyphens only
+    (no underscores).  Packed filenames follow ``{name}_{suffix}.charm`` so
+    filtering by the prefix ``{charm_name}_`` gives an exact name match —
+    no other charm name can be a prefix of ``{charm_name}_``.
+
+    After name-filtering, already-attributed files are removed.  If all
+    matches are already attributed, two artifacts share the same internal
+    charmcraft name (collision) and an error is raised.
+    """
+    if not after:
+        msg = f"No *.charm found in {pack_dir} after pack"
+        raise OpcliError(msg)
+
+    prefix = f"{charm_name}_"
+    matching = {p for p in after if Path(p).name.startswith(prefix)}
+    if not matching:
+        msg = (
+            f"No *.charm files for charm '{charm_name}' found in {pack_dir}. "
+            "Ensure the 'name' in artifacts.yaml matches the charm name produced "
+            "by charmcraft (from charmcraft.yaml or metadata.yaml for split format)."
+        )
+        raise OpcliError(msg)
+
+    unclaimed = matching - (attributed or set())
+    if not unclaimed:
+        msg = (
+            f"Output files {sorted(matching)} were already produced by another "
+            "artifact. Two artifacts cannot share the same output filenames in "
+            "the same pack-dir. Use separate pack-dirs or ensure each charm "
+            "produces unique filenames."
+        )
+        raise OpcliError(msg)
+
+    return sorted(unclaimed)
+
+
+def _relative_to_root(path_str: str, root: Path) -> str:
+    """Return *path_str* as a ``./``-prefixed relative path from *root*.
+
+    The ``./`` prefix makes the path unambiguously local (required by Juju
+    when distinguishing a local charm/rock from a CharmHub reference).
+    """
+    resolved = Path(path_str).resolve()
+    try:
+        rel = str(resolved.relative_to(root.resolve()))
+        return f"./{rel}"
+    except ValueError as exc:
+        msg = f"Built artifact {resolved} is outside repository root {root}"
+        raise OpcliError(msg) from exc
+
+
+def _current_arch() -> str:
+    """Return the normalised architecture of the current machine.
+
+    Maps ``x86_64`` → ``amd64`` and ``aarch64`` → ``arm64``.
+    All other values are returned as-is (lower-cased).
+    """
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "amd64"
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    return machine
+
+
+def _merge_artifact_outputs[T: (GeneratedRock, GeneratedCharm, GeneratedSnap)](
+    items: list[T],
+    kind: str,
+) -> list[T]:
+    """Merge artifacts with the same name by combining their builds lists.
+
+    In a multi-arch CI build, each arch produces a separate partial file for
+    the same artifact but with a different arch entry in ``builds``.  This
+    function groups them by name and concatenates the ``builds`` lists so that
+    the collected file holds all arches for each artifact.
+
+    For rocks and snaps, raises :class:`ConfigurationError` if the same
+    ``(name, arch)`` pair appears in more than one partial (genuine conflict).
+    For charms (flat format), raises if the same ``(arch, path, artifact)``
+    tuple appears in more than one partial.
+    """
+    merged: dict[str, T] = {}
+    for item in items:
+        if item.name not in merged:
+            merged[item.name] = item
+        else:
+            existing = merged[item.name]
+            existing_keys = {_output_key(b) for b in existing.builds}
+            for build in item.builds:
+                key = _output_key(build)
+                if key in existing_keys:
+                    msg = (
+                        f"Duplicate {kind} '{item.name}' output {key!r} across "
+                        "collected partials. Each (artifact, arch) must appear in "
+                        "exactly one partial file."
+                    )
+                    raise ConfigurationError(msg)
+            existing.builds.extend(item.builds)
+    return list(merged.values())
+
+
+def _output_key(
+    build: RockOutput | CharmOutput | SnapOutput,
+) -> tuple[object, ...]:
+    """Return a hashable key that uniquely identifies a build output entry.
+
+    For :class:`CharmOutput` (flat format), multiple entries per arch are valid
+    (different bases/paths), so the key includes ``path`` and ``artifact``.
+    For :class:`RockOutput` and :class:`SnapOutput`, ``arch`` alone is the
+    unique key since there is one entry per arch.
+    """
+    if isinstance(build, CharmOutput):
+        return (build.arch, build.path, build.artifact)
+    return (build.arch,)
+
+
+def _localize_charm(
+    charm: GeneratedCharm,
+    root: Path,
+    missing: list[str],
+) -> int:
+    """Localize CI-only charm entries by replacing them with local file entries.
+
+    Returns the number of arch-groups that were localized.
+    """
+    indices_to_replace: list[int] = []
+    new_entries: list[CharmOutput] = []
+    localized = 0
+
+    for idx, build in enumerate(charm.builds):
+        if build.path or not build.artifact:
+            continue
+        artifact_dir = _safe_artifact_dir(root, build.artifact)
+        if artifact_dir.is_dir():
+            charm_files = _find_charm_files_in_dir(artifact_dir, root, build.arch)
+        else:
+            charm_files = _find_local_charm_files(root, charm.name, build.arch)
+        if not charm_files:
+            missing.append(f"{charm.name} ({build.arch})")
+            logger.error(
+                "No .charm file found for charm '%s' arch '%s'.",
+                charm.name,
+                build.arch,
+            )
+            continue
+        indices_to_replace.append(idx)
+        for path, base in charm_files:
+            new_entries.append(
+                CharmOutput.model_validate(
+                    {
+                        "arch": build.arch,
+                        "path": path,
+                        "base": base,
+                        "artifact": build.artifact,
+                        "run-id": build.run_id,
+                    }
+                )
+            )
+        logger.info(
+            "Localised charm '%s' (%s) → %d file(s).",
+            charm.name,
+            build.arch,
+            len(charm_files),
+        )
+        localized += 1
+
+    if indices_to_replace:
+        replace_set = set(indices_to_replace)
+        charm.builds = [
+            b for i, b in enumerate(charm.builds) if i not in replace_set
+        ] + new_entries
+
+    return localized
+
+
+def _find_snap_file_in_dir(search_dir: Path, root: Path, arch: str | None = None) -> str | None:
+    """Find a single ``.snap`` file under *search_dir*.
+
+    Like :func:`_find_charm_files_in_dir`, this searches by extension only —
+    not by snap name — so it works correctly when the artifact directory name
+    differs from the internal snap name.  Returns a path relative to *root*.
+    """
+    pattern = str(search_dir / "**" / "*.snap")
+    matches = sorted(globmod.glob(pattern, recursive=True))
+    if arch is not None:
+        matches = [m for m in matches if _parse_arch_from_snap_path(m) in (arch, None)]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        logger.warning(
+            "Multiple .snap files found in '%s'; using %s.",
+            search_dir,
+            matches[0],
+        )
+    return "./" + str(Path(matches[0]).relative_to(root))
+
+
+def _find_local_file(root: Path, name: str, extension: str, arch: str | None = None) -> str | None:
+    """Find a single ``name_*.{extension}`` file under *root*.
+
+    When *arch* is given and the filename follows the expected naming
+    convention, only files whose parsed arch matches are considered.
+
+    Returns the relative path (``./...``) on success, or ``None`` if no file
+    is found.  Logs a warning when multiple matches exist and picks the first.
+    """
+    pattern = str(root / "**" / f"{name}_*.{extension}")
+    matches = sorted(globmod.glob(pattern, recursive=True))
+    if arch is not None and extension == "snap":
+        matches = [m for m in matches if _parse_arch_from_snap_path(m) in (arch, None)]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        logger.warning(
+            "Multiple .%s files found for '%s'; using %s.",
+            extension,
+            name,
+            matches[0],
+        )
+    return "./" + str(Path(matches[0]).relative_to(root))
+
+
+def _find_charm_files_in_dir(
+    search_dir: Path, root: Path, arch: str | None = None
+) -> list[tuple[str, str | None]]:
+    """Find all ``.charm`` files under *search_dir*.
+
+    Returns (root-relative path, base) pairs.  Unlike
+    :func:`_find_local_charm_files`, this function does not filter by charm
+    name — it returns every ``.charm`` file found.  This is the correct
+    approach when searching an artifact-specific subdirectory
+    (e.g. ``root/built-charm-my-charm-amd64/``) because the internal charm
+    name baked into the filename may differ from the opcli artifact name.
+
+    When *arch* is given, only files whose parsed arch matches (or whose arch
+    cannot be determined) are returned.  Paths are returned relative to *root*.
+    """
+    pattern = str(search_dir / "**" / "*.charm")
+    matches = sorted(globmod.glob(pattern, recursive=True))
+    if arch is not None:
+        matches = [m for m in matches if _parse_arch_from_charm_path(m) in (arch, None)]
+    return [
+        (
+            "./" + str(Path(m).relative_to(root)),
+            _parse_base_from_charm_path(m),
+        )
+        for m in matches
+    ]
+
+
+def _find_local_charm_files(
+    root: Path, name: str, arch: str | None = None
+) -> list[tuple[str, str | None]]:
+    """Find all ``name_*.charm`` files under *root* and return (path, base) pairs.
+
+    When *arch* is given, only files whose parsed arch matches (or whose arch
+    cannot be determined) are returned.  Returns an empty list when no files
+    are found.  Multiple matches are expected for multi-base charms — each
+    file gets its base parsed from the filename.
+    """
+    pattern = str(root / "**" / f"{name}_*.charm")
+    matches = sorted(globmod.glob(pattern, recursive=True))
+    if arch is not None:
+        matches = [m for m in matches if _parse_arch_from_charm_path(m) in (arch, None)]
+    return [
+        (
+            "./" + str(Path(m).relative_to(root)),
+            _parse_base_from_charm_path(m),
+        )
+        for m in matches
+    ]
+
+
+def _parse_arch_from_charm_path(path: str) -> str | None:
+    """Return the arch (e.g. ``amd64``) parsed from a charm filename.
+
+    Returns ``None`` if the filename does not follow the expected convention.
+    """
+    filename = Path(path).name
+    m = _CHARM_FILENAME_RE.match(filename)
+    return m.group("arch") if m else None
+
+
+def _parse_arch_from_snap_path(path: str) -> str | None:
+    """Return the arch (e.g. ``amd64``) parsed from a snap filename.
+
+    Returns ``None`` if the filename does not follow the expected convention.
+    """
+    filename = Path(path).name
+    m = _SNAP_FILENAME_RE.match(filename)
+    return m.group("arch") if m else None
+
+
+def _parse_base_from_charm_path(path: str) -> str | None:
+    """Return the base string (e.g. ``ubuntu@22.04``) parsed from a charm filename.
+
+    Returns ``None`` if the filename does not follow the expected
+    ``{name}_{distro}-{version}-{arch}.charm`` convention.
+    """
+    filename = Path(path).name
+    m = _CHARM_FILENAME_RE.match(filename)
+    if not m:
+        return None
+    return f"{m.group('distro')}@{m.group('version')}"
+
+
+# ---------------------------------------------------------------------------
+# artifacts fetch
+# ---------------------------------------------------------------------------
+
+
+def _infer_repo_from_git(root: Path) -> str:
+    """Return ``owner/repo`` inferred from the git remote of *root*.
+
+    Raises:
+        ConfigurationError: If the git remote URL cannot be parsed.
+    """
+    try:
+        result = run_command(["git", "remote", "get-url", "origin"], cwd=str(root))
+    except Exception as exc:
+        msg = "Could not read git remote 'origin'. Use --repo to specify the repository."
+        raise ConfigurationError(msg) from exc
+
+    url = result.stdout.strip()
+    m = _GITHUB_URL_RE.search(url)
+    if not m:
+        msg = (
+            f"Could not parse a GitHub 'owner/repo' from remote URL {url!r}. "
+            "Use --repo to specify the repository."
+        )
+        raise ConfigurationError(msg)
+    return m.group(1)
+
+
+def _gh_download_with_wait(
+    cmd: list[str], cwd: str, run_id: str, repo: str, dest: Path | None = None
+) -> None:
+    """Run ``gh run download``, retrying until the artifact appears.
+
+    Retries up to :data:`_WAIT_MAX_ATTEMPTS` times with
+    :data:`_WAIT_SLEEP_SECONDS` between each attempt.  Fails immediately if
+    the error looks like an authentication/permission problem, a deterministic
+    failure (e.g. "file exists", handled via delete-and-retry), or if the
+    ``Collect artifacts`` job is known to have been skipped, failed, or
+    cancelled (meaning the artifact will never arrive).
+
+    Args:
+        cmd: Full ``gh run download ...`` command list.
+        cwd: Working directory for the subprocess.
+        run_id: GitHub Actions run ID.
+        repo: GitHub repository in ``owner/name`` format, used to query job
+            status on each retry.
+        dest: Path of the expected output file.  When provided and ``gh``
+            reports "file exists", the file is deleted and the download is
+            retried once before giving up.
+
+    Raises:
+        ConfigurationError: On auth/permission errors, when the
+            ``Collect artifacts`` job has a terminal failure conclusion, or
+            when the timeout is exceeded (includes the last error message).
+        SubprocessError: Propagated for unexpected non-retryable failures.
+    """
+    last_exc: SubprocessError | None = None
+    for attempt in range(1, _WAIT_MAX_ATTEMPTS + 1):
+        try:
+            run_command(cmd, cwd=cwd)
+            return
+        except SubprocessError as exc:
+            stderr_lower = exc.stderr.lower()
+            if any(kw in stderr_lower for kw in _AUTH_ERROR_KEYWORDS):
+                msg = (
+                    f"Authentication/permission error downloading artifact "
+                    f"from run {run_id!r}. Check GH_TOKEN and repository "
+                    f"permissions.\n{exc.stderr.strip()}"
+                )
+                raise ConfigurationError(msg) from exc
+            if dest is not None and any(kw in stderr_lower for kw in _FILE_EXISTS_KEYWORDS):
+                dest.unlink(missing_ok=True)
+                run_command(cmd, cwd=cwd)
+                return
+            last_exc = exc
+            conclusion = _check_collect_job_conclusion(run_id, repo)
+            if conclusion in _BAIL_CONCLUSIONS:
+                msg = (
+                    f"Build artifacts were not collected — the "
+                    f"'{_COLLECT_JOB_NAME}' job {conclusion}. "
+                    f"Check the build job logs."
+                )
+                raise ConfigurationError(msg) from exc
+            logger.info(
+                "Artifact not yet available (attempt %d/%d): %s — retrying in %ds...",
+                attempt,
+                _WAIT_MAX_ATTEMPTS,
+                exc.stderr.strip(),
+                _WAIT_SLEEP_SECONDS,
+            )
+            time.sleep(_WAIT_SLEEP_SECONDS)
+
+    last_msg = last_exc.stderr.strip() if last_exc else ""
+    msg = (
+        f"Timed out waiting for artifacts-build artifact from run "
+        f"{run_id!r} after {_WAIT_MAX_ATTEMPTS * _WAIT_SLEEP_SECONDS}s. "
+        f"Last error: {last_msg}"
+    )
+    raise ConfigurationError(msg)
+
+
+def _gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None:
+    """Run ``gh run download``, raising :class:`SubprocessError` on failure.
+
+    If ``gh`` reports that the destination file already exists (older ``gh``
+    versions lack ``--clobber``), the file is deleted and the download is
+    retried once.
+    """
+    try:
+        run_command(cmd, cwd=cwd)
+    except SubprocessError as exc:
+        if dest is not None and any(kw in exc.stderr.lower() for kw in _FILE_EXISTS_KEYWORDS):
+            dest.unlink(missing_ok=True)
+            run_command(cmd, cwd=cwd)
+        else:
+            raise
+
+
+def _check_collect_job_conclusion(run_id: str, repo: str) -> str | None:
+    """Return the conclusion of the ``Collect artifacts`` job, or ``None``.
+
+    Queries ``gh run view --json jobs`` and searches for any job whose name
+    contains :data:`_COLLECT_JOB_NAME` (a substring match handles the
+    ``"build / Collect artifacts"`` prefix that GitHub prepends in
+    reusable-workflow runs).
+
+    Returns the conclusion string (e.g. ``"success"``, ``"skipped"``,
+    ``"failure"``, ``"cancelled"``) when found and the job has finished, or
+    ``None`` when the job is still running (``conclusion`` is ``null``), the
+    job is not yet listed, or the API call fails for any reason.  The caller
+    should treat ``None`` as "don't know yet — keep retrying".
+    """
+    try:
+        result = run_command(
+            ["gh", "run", "view", run_id, "--repo", repo, "--json", "jobs"],
+            stream=False,
+        )
+    except Exception:
+        return None
+
+    try:
+        data: object = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    jobs = data.get("jobs")
+    if not isinstance(jobs, list):
+        return None
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        name = job.get("name")
+        if not isinstance(name, str):
+            continue
+        if _COLLECT_JOB_NAME in name:
+            conclusion = job.get("conclusion")
+            return conclusion if isinstance(conclusion, str) else None
+    return None
+
+
+def _safe_artifact_dir(root: Path, name: str) -> Path:
+    """Resolve an artifact name to a directory under root, preventing traversal.
+
+    Raises ConfigurationError if the resolved path escapes the root directory.
+    """
+    artifact_dir = (root / name).resolve()
+    root_resolved = root.resolve()
+    if not (
+        artifact_dir == root_resolved or str(artifact_dir).startswith(str(root_resolved) + os.sep)
+    ):
+        msg = (
+            f"Artifact name {name!r} resolves outside the project root "
+            f"({root_resolved}). This may indicate a malicious artifacts.build.yaml."
+        )
+        raise ConfigurationError(msg)
+    return artifact_dir
