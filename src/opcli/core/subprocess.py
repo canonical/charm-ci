@@ -35,32 +35,6 @@ class SubprocessResult:
     returncode: int
 
 
-def _stream_pipe(
-    pipe: io.TextIOWrapper,
-    buf: list[str],
-    dest: io.TextIOWrapper,
-) -> None:
-    """Read *pipe* line-by-line, echo to *dest*, accumulate in *buf*."""
-    for line in pipe:
-        buf.append(line)
-        dest.write(line)
-        dest.flush()
-
-
-def _write_stdin(pipe: io.TextIOWrapper, data: str) -> None:
-    """Write *data* to *pipe* and close it.
-
-    ``BrokenPipeError`` and ``ValueError`` are silently swallowed — they
-    mean the subprocess closed its stdin early, which is normal for commands
-    that consume all their input before exiting.
-    """
-    try:
-        pipe.write(data)
-        pipe.close()
-    except (BrokenPipeError, ValueError):
-        pass
-
-
 def run_command(  # noqa: PLR0913
     cmd: list[str],
     *,
@@ -115,13 +89,6 @@ def run_command(  # noqa: PLR0913
     return _run_captured(cmd, cwd=cwd, timeout=timeout, check=check, stdin=stdin, env=merged_env)
 
 
-def _log_command(cmd: list[str], cwd: str | None, *, err: bool = False) -> None:
-    """Print the command and working directory for reproducibility."""
-    typer.echo(f"$ {shlex.join(cmd)}", err=err)
-    if cwd:
-        typer.echo(f"  cwd: {cwd}", err=err)
-
-
 def _run_interactive(
     cmd: list[str],
     *,
@@ -150,6 +117,13 @@ def _run_interactive(
         )
 
     return result
+
+
+def _log_command(cmd: list[str], cwd: str | None, *, err: bool = False) -> None:
+    """Print the command and working directory for reproducibility."""
+    typer.echo(f"$ {shlex.join(cmd)}", err=err)
+    if cwd:
+        typer.echo(f"  cwd: {cwd}", err=err)
 
 
 def _run_streaming(  # noqa: PLR0913
@@ -246,6 +220,32 @@ def _run_streaming(  # noqa: PLR0913
         )
 
     return result
+
+
+def _stream_pipe(
+    pipe: io.TextIOWrapper,
+    buf: list[str],
+    dest: io.TextIOWrapper,
+) -> None:
+    """Read *pipe* line-by-line, echo to *dest*, accumulate in *buf*."""
+    for line in pipe:
+        buf.append(line)
+        dest.write(line)
+        dest.flush()
+
+
+def _write_stdin(pipe: io.TextIOWrapper, data: str) -> None:
+    """Write *data* to *pipe* and close it.
+
+    ``BrokenPipeError`` and ``ValueError`` are silently swallowed — they
+    mean the subprocess closed its stdin early, which is normal for commands
+    that consume all their input before exiting.
+    """
+    try:
+        pipe.write(data)
+        pipe.close()
+    except (BrokenPipeError, ValueError):
+        pass
 
 
 def _run_captured(  # noqa: PLR0913

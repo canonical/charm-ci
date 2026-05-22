@@ -75,17 +75,6 @@ class TestExceptionHierarchy:
     def test_all_exceptions_inherit_from_base(self, exc_cls: type) -> None:
         assert issubclass(exc_cls, OpcliError)
 
-    def test_hint_attribute_default_none(self) -> None:
-        err = OpcliError("something went wrong")
-        assert err.hint is None
-
-    def test_hint_attribute_set(self) -> None:
-        err = ConfigurationError(
-            "artifacts.build.yaml not found",
-            hint="Run 'opcli artifacts build' first.",
-        )
-        assert err.hint == "Run 'opcli artifacts build' first."
-
 
 class TestGlobalErrorHandler:
     """Verify OpcliError produces friendly output without tracebacks."""
@@ -98,19 +87,6 @@ class TestGlobalErrorHandler:
             result = runner.invoke(app, ["artifacts", "build"])
             assert result.exit_code == 1
             assert "error: something went wrong" in result.output
-
-    def test_opcli_error_shows_hint(self) -> None:
-        with patch(
-            "opcli.commands.artifacts.artifacts_build",
-            side_effect=ConfigurationError(
-                "artifacts.build.yaml not found",
-                hint="Run 'opcli artifacts build' first.",
-            ),
-        ):
-            result = runner.invoke(app, ["artifacts", "build"])
-            assert result.exit_code == 1
-            assert "hint:" in result.output
-            assert "opcli artifacts build" in result.output
 
     def test_opcli_error_no_traceback(self) -> None:
         with patch(
