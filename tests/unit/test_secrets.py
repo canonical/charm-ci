@@ -3,16 +3,11 @@
 
 """Tests for ``opcli.core.secrets``."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from opcli.core.secrets import load_secrets_env
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 class TestLoadSecretsEnv:

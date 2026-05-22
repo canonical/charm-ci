@@ -3,8 +3,6 @@
 
 """Tests for the central subprocess wrapper."""
 
-from __future__ import annotations
-
 import pytest
 
 from opcli.core.exceptions import SubprocessError

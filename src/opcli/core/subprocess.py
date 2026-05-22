@@ -11,18 +11,13 @@ Every invocation prints the command and working directory so that
 failures can be reproduced manually by copy-pasting from the output.
 """
 
-from __future__ import annotations
-
+import io
 import os
 import shlex
 import subprocess
 import sys
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import io
 
 import typer
 

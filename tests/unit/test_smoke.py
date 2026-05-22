@@ -3,8 +3,6 @@
 
 """Smoke test to verify the test infrastructure works."""
 
-from __future__ import annotations
-
 import opcli
 
 
