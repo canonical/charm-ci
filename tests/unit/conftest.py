@@ -12,8 +12,6 @@ Tests that explicitly cover CI mode (e.g. TestArtifactsBuildCIMode) set
 GITHUB_ACTIONS=true themselves via ``patch.dict(os.environ, ...)``.
 """
 
-from __future__ import annotations
-
 import pytest
 
 

@@ -3,8 +3,6 @@
 
 """Top-level Typer application for opcli."""
 
-from __future__ import annotations
-
 import typer
 
 app = typer.Typer(name="opcli", no_args_is_help=True)
