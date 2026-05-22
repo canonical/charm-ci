@@ -9,5 +9,5 @@ import opcli
 
 
 def test_import_opcli() -> None:
-    """opcli package can be imported."""
+    """Verify opcli package can be imported."""
     assert opcli.__version__

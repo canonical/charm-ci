@@ -22,14 +22,46 @@ packages = ["src/opcli"]
 [tool.ruff]
 src = ["src", "tests"]
 target-version = "py312"
+line-length = 99
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "PL", "RUF"]
-ignore = ["B008"]  # typer.Option/Argument in defaults is the standard pattern
+select = ["A", "B", "C", "D", "E", "F", "I", "N", "PL", "RUF", "S", "SIM", "TC", "UP", "W"]
+ignore = [
+    "B008",   # typer.Option/Argument in defaults is the standard pattern
+    "B904",
+    "D107",
+    "D203",
+    "D204",
+    "D205",
+    "D213",
+    "D215",
+    "D400",
+    "D404",
+    "D406",
+    "D407",
+    "D408",
+    "D409",
+    "D413",
+    "E501",
+    "S105",
+    "S603",
+    "TC002",
+    "TC006",
+    "UP006",
+    "UP007",
+    "UP035",
+    "UP045",
+]
 
 [tool.ruff.lint.per-file-ignores]
-# Shell script strings embedded as constants may exceed 88 chars
+"tests/*" = ["B011", "D100", "D101", "D102", "D103", "D104", "D212", "D415", "D417", "S"]
 "src/opcli/core/spread.py" = ["E501"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.mypy]
 python_version = "3.12"
@@ -45,9 +77,26 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "bandit[toml]>=1.7",
+    "codespell>=2.2",
     "mypy>=1.20.2",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
     "pytest-mock>=3.15.1",
     "ruff>=0.15.11",
 ]
+
+[tool.codespell]
+skip = "build,lib,venv,.tox,.git,.mypy_cache,.ruff_cache,.coverage,htmlcov,uv.lock"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.bandit]
+exclude_dirs = ["/venv/"]
+
+[tool.bandit.assert_used]
+skips = ["*/*test.py", "*/test_*.py", "*tests/*.py"]
