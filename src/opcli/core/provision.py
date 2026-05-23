@@ -67,6 +67,7 @@ def provision_load(
     root: Path,
     *,
     registry: str = _DEFAULT_REGISTRY,
+    missing_registry: str = "skip",
 ) -> list[str]:
     """Push locally-built rock images to *registry*.
 
@@ -74,11 +75,21 @@ def provision_load(
     ``file`` output, converts the ``.rock`` archive to an OCI image and
     pushes it to the target registry using ``skopeo``.
 
+    Args:
+        root: Project root directory.
+        registry: Target image registry address.
+        missing_registry: Policy when registry is unreachable:
+            ``"skip"`` — silently return (default, backward-compatible).
+            ``"deploy"`` — call :func:`provision_registry` first, then push.
+            ``"fail"`` — raise :class:`ConfigurationError`.
+
     Returns:
         List of image references that were pushed.
 
     Raises:
-        ConfigurationError: If ``artifacts.build.yaml`` is missing.
+        ConfigurationError: If ``artifacts.build.yaml`` is missing, if
+            *missing_registry* is ``"fail"`` and registry is unreachable,
+            or if ``"deploy"`` is used with a non-local registry.
         SubprocessError: If a push command fails.
     """
     gen_path = root / _ARTIFACTS_GENERATED_YAML
@@ -86,14 +97,16 @@ def provision_load(
         logger.info("No %s found — nothing to load.", _ARTIFACTS_GENERATED_YAML)
         return []
 
-    if not _is_port_open("localhost", _REGISTRY_PORT):
-        logger.info(
-            "Registry not reachable at localhost:%d — skipping load.",
-            _REGISTRY_PORT,
-        )
+    generated = load_artifacts_build(gen_path)
+
+    has_pushable_rocks = any(build.file for rock in generated.rocks for build in rock.builds)
+    if not has_pushable_rocks:
+        logger.info("No rocks with local file output — nothing to push.")
         return []
 
-    generated = load_artifacts_build(gen_path)
+    if not _ensure_registry_available(root, registry, missing_registry):
+        return []
+
     pushed: list[str] = []
 
     for rock in generated.rocks:
@@ -133,6 +146,55 @@ def provision_load(
         dump_artifacts_build(generated, gen_path)
 
     return pushed
+
+
+def _ensure_registry_available(root: Path, registry: str, missing_registry: str) -> bool:
+    """Ensure the registry is reachable, applying the *missing_registry* policy.
+
+    Returns:
+        ``True`` if the registry is available and pushing can proceed.
+        ``False`` if the policy is ``"skip"`` and the registry is unreachable.
+
+    Raises:
+        ConfigurationError: If the policy is ``"fail"`` or if ``"deploy"``
+            cannot resolve the situation.
+    """
+    if _is_port_open("localhost", _REGISTRY_PORT):
+        return True
+
+    if missing_registry == "skip":
+        logger.info(
+            "Registry not reachable at localhost:%d — skipping load.",
+            _REGISTRY_PORT,
+        )
+        return False
+
+    if missing_registry == "deploy":
+        if registry != _DEFAULT_REGISTRY:
+            msg = (
+                f"--missing-registry=deploy only works with the managed local "
+                f"registry ({_DEFAULT_REGISTRY}), not '{registry}'."
+            )
+            raise ConfigurationError(msg)
+        status("Registry not reachable — deploying local registry")
+        result = provision_registry(root)
+        if result == "skipped":
+            logger.info("Registry deployment skipped (no k8s provider).")
+            return False
+        if not _is_port_open("localhost", _REGISTRY_PORT):
+            msg = (
+                "Registry was deployed but is still not reachable at "
+                f"localhost:{_REGISTRY_PORT}. Check k8s cluster health."
+            )
+            raise ConfigurationError(msg)
+        return True
+
+    # missing_registry == "fail"
+    msg = (
+        f"Registry not reachable at localhost:{_REGISTRY_PORT} and "
+        "--missing-registry=fail was specified."
+    )
+    raise ConfigurationError(msg)
 
 
 def provision_registry(

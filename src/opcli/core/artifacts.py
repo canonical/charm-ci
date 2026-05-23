@@ -191,7 +191,12 @@ def artifacts_build(
     # In GitHub Actions, rewrite outputs to CI-format references.
     ci = _get_ci_context()
     if ci is not None:
-        gen_rocks = [_push_rock_to_ghcr(r, ci, root) for r in gen_rocks]
+        upload_mode = _get_upload_mode()
+        if upload_mode == "registry":
+            gen_rocks = [_push_rock_to_ghcr(r, ci, root) for r in gen_rocks]
+        else:
+            # artifact mode: keep file: reference, add artifact + run-id metadata
+            gen_rocks = [_to_ci_rock_artifact(r, ci) for r in gen_rocks]
         gen_charms = [_to_ci_charm(c, ci) for c in gen_charms]
         gen_snaps = [_to_ci_snap(s, ci) for s in gen_snaps]
 
@@ -404,7 +409,7 @@ def artifacts_localize(root: Path) -> int:
     return updated
 
 
-def artifacts_fetch(  # noqa: C901
+def artifacts_fetch(  # noqa: C901, PLR0912
     root: Path,
     run_id: str,
     repo: str | None = None,
@@ -419,13 +424,14 @@ def artifacts_fetch(  # noqa: C901
        artifact.  When *wait* is ``True``, retries up to
        :data:`_WAIT_MAX_ATTEMPTS` times until the artifact appears (useful
        when the test job starts before the build completes).
-    3. For every charm/snap that carries a CI artifact reference, download the
-       corresponding artifact archive.
+    3. For every charm/snap/rock that carries a CI artifact reference,
+       download the corresponding artifact archive.
     4. Call :func:`artifacts_localize` to rewrite ``artifacts.build.yaml``
        with the local ``.charm`` / ``.snap`` file paths.
 
-    Rock artifacts are OCI images on GHCR and need no download — their
-    ``output.image`` reference is already usable locally.
+    Rock artifacts with ``image:`` references (GHCR) need no download.
+    Rock artifacts with ``artifact:`` references (fork-PR mode) are
+    downloaded alongside charms and snaps.
 
     Args:
         root: Working directory; all artifacts are downloaded here.
@@ -474,12 +480,18 @@ def artifacts_fetch(  # noqa: C901
 
     generated = load_artifacts_build(gen_path)
 
-    # Download each charm / snap artifact archive (deduplicated)
+    # Download each charm / snap / rock artifact archive (deduplicated).
+    # Rocks with artifact: are fork-PR builds that were uploaded as GH artifacts
+    # instead of pushed to GHCR.
     seen_artifacts: set[str] = set()
+    for rock in generated.rocks:
+        for rock_build in rock.builds:
+            if rock_build.artifact:
+                seen_artifacts.add(rock_build.artifact)
     for charm in generated.charms:
-        for build in charm.builds:
-            if build.artifact:
-                seen_artifacts.add(build.artifact)
+        for charm_build in charm.builds:
+            if charm_build.artifact:
+                seen_artifacts.add(charm_build.artifact)
     for snap in generated.snaps:
         for snap_build in snap.builds:
             if snap_build.artifact:
@@ -862,6 +874,26 @@ def _get_ci_context() -> _CIContext | None:
     return _CIContext(run_id=run_id, owner=owner, repo=repo, sha=sha[:7])
 
 
+def _get_upload_mode() -> str:
+    """Return the rock upload mode from ``OPCLI_ROCK_UPLOAD``.
+
+    Returns:
+        ``"registry"`` (default) or ``"artifact"``.
+
+    Raises:
+        ConfigurationError: If the env var contains an unrecognised value.
+    """
+    raw = os.environ.get("OPCLI_ROCK_UPLOAD", "registry").strip().lower()
+    valid = ("registry", "artifact")
+    if raw not in valid:
+        msg = (
+            f"OPCLI_ROCK_UPLOAD must be one of {valid!r}, got: {raw!r}. "
+            "Set to 'artifact' for fork PRs or 'registry' (default) to push to GHCR."
+        )
+        raise ConfigurationError(msg)
+    return raw
+
+
 def _push_rock_to_ghcr(rock: GeneratedRock, ci: _CIContext, root: Path) -> GeneratedRock:
     """Push a locally-built rock to GHCR and return an updated ``GeneratedRock``.
 
@@ -912,6 +944,39 @@ def _push_rock_to_ghcr(rock: GeneratedRock, ci: _CIContext, root: Path) -> Gener
         name=rock.name,
         **{"rockcraft-yaml": rock.rockcraft_yaml},
         builds=[RockOutput(arch=build.arch, image=image_ref)],
+    )
+
+
+def _to_ci_rock_artifact(rock: GeneratedRock, ci: _CIContext) -> GeneratedRock:
+    """Return a copy of *rock* with artifact-mode output (no GHCR push).
+
+    Keeps the local ``file`` reference and adds ``artifact`` + ``run-id``
+    metadata so the downstream fetch/collect steps know how to retrieve
+    the ``.rock`` file from GitHub Artifacts.
+    """
+    artifact_name = f"built-rock-{rock.name}-{rock.builds[0].arch}" if rock.builds else ""
+    new_builds = [
+        RockOutput(
+            arch=b.arch,
+            file=b.file,
+            artifact=f"built-rock-{rock.name}-{b.arch}",
+            **{"run-id": ci.run_id},
+        )
+        for b in rock.builds
+        if b.file
+    ]
+    if not new_builds:
+        msg = f"Rock '{rock.name}' has no local file for artifact-mode output."
+        raise OpcliError(msg)
+    logger.info(
+        "Rock '%s' in artifact mode — skipping GHCR push (artifact=%s)",
+        rock.name,
+        artifact_name,
+    )
+    return GeneratedRock(
+        name=rock.name,
+        **{"rockcraft-yaml": rock.rockcraft_yaml},
+        builds=new_builds,
     )
 
 

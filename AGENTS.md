@@ -90,6 +90,7 @@ Concierge respects `SUDO_USER` (via its `realUser()` function) to write configs 
 |---|---|---|
 | `CI` | Spread backend expansion (`-local` vs `-ci`) | `core/spread.py` |
 | `GITHUB_ACTIONS=true` | CI-format artifact output (GHCR + artifact refs) | `core/artifacts.py` |
+| `OPCLI_ROCK_UPLOAD` | Rock upload mode: `registry` (default, push to GHCR) or `artifact` (keep local `.rock`, upload as GH artifact — used for fork PRs) | `core/artifacts.py` |
 
 ---
 
@@ -117,6 +118,8 @@ These encode hard-won correctness lessons — do not violate.
 3. **`after - before` for output detection.** Never use `sorted(after)` alone. The set difference identifies files produced by *this* specific build invocation.
 
 4. **CI artifact download.** `artifacts_fetch` downloads to `root/{artifact-name}/` subdirectories to prevent filename collisions. All artifact names are validated via `_safe_artifact_dir()` to ensure they resolve under the project root (path traversal prevention).
+
+5. **Fork PR rock handling.** Fork PRs get read-only `GITHUB_TOKEN` and cannot push to GHCR. The workflow sets `OPCLI_ROCK_UPLOAD=artifact`; `artifacts_build` keeps the `.rock` file local and writes `artifact:` + `run-id:` metadata. After `artifacts_fetch` downloads the `.rock`, `push-images --missing-registry deploy` auto-deploys a local registry and pushes there. This converges with the local development path.
 
 ---
 

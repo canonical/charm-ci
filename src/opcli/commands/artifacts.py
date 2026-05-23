@@ -136,9 +136,18 @@ def push_images(
     registry: str = typer.Option(
         "localhost:32000", "-r", "--registry", help="Target image registry."
     ),
+    missing_registry: str = typer.Option(
+        "skip",
+        "--missing-registry",
+        help="Policy when registry is unreachable: skip, deploy, or fail.",
+    ),
 ) -> None:
     """Load OCI image artifacts (rocks) into a local image registry."""
-    pushed = provision_load(Path.cwd(), registry=registry)
+    valid_policies = ("skip", "deploy", "fail")
+    if missing_registry not in valid_policies:
+        typer.echo(f"Error: --missing-registry must be one of {valid_policies!r}", err=True)
+        raise typer.Exit(code=1)
+    pushed = provision_load(Path.cwd(), registry=registry, missing_registry=missing_registry)
     if pushed:
         for ref in pushed:
             typer.echo(f"Pushed {ref}")
