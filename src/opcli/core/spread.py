@@ -576,8 +576,6 @@ opcli install tox
 opcli install concierge
 opcli env provision -c "$CONCIERGE"
 usermod -aG lxd ubuntu || true
-runuser -l ubuntu -c \
-  "cd \\"${SPREAD_PATH}\\" && opcli env deploy-registry"
 opcli artifacts push-images --missing-registry deploy
 """
 
