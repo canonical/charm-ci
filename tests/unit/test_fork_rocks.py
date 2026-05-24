@@ -253,7 +253,8 @@ class TestRockLocalize:
 
     def test_localize_rewrites_rock_file_path(self, tmp_path: Path) -> None:
         """Rock with artifact field gets file rewritten to downloaded location."""
-        # Create artifacts.build.yaml with a rock that has artifact set
+        # Create artifacts.build.yaml with a rock that has artifact + stale file path
+        # (simulates post-collect state: file points to build runner path that doesn't exist)
         build_yaml = tmp_path / "artifacts.build.yaml"
         build_yaml.write_text(
             "rocks:\n"

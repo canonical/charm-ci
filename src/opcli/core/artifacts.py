@@ -77,6 +77,7 @@ _CHARM_FILENAME_RE = re.compile(
 
 # Pattern: {name}_{version}_{arch}.snap  e.g. my-snap_1.0_amd64.snap
 _SNAP_FILENAME_RE = re.compile(r"^.+_[^_]+_(?P<arch>[^.]+)\.snap$")
+_ROCK_FILENAME_RE = re.compile(r"^.+_[^_]+_(?P<arch>[^.]+)\.rock$")
 
 
 _GITHUB_URL_RE = re.compile(r"github\.com[:/](.+?)(?:\.git)?/?$")
@@ -1122,6 +1123,9 @@ def _localize_rock(
     for rock_build in rock.builds:
         if not rock_build.artifact:
             continue
+        # Unlike snaps, we do NOT skip when file is set — artifact-mode rocks
+        # retain the build-runner file path which won't exist on the test runner.
+        # Localization rewrites it to the actual download location.
         artifact_dir = _safe_artifact_dir(root, rock_build.artifact)
         if artifact_dir.is_dir():
             rel = _find_rock_file_in_dir(artifact_dir, root, rock.name, rock_build.arch)
@@ -1316,6 +1320,8 @@ def _find_rock_file_in_dir(
         # Also try without name prefix (in case the artifact contains a differently-named file)
         pattern = str(search_dir / "**" / "*.rock")
         matches = sorted(globmod.glob(pattern, recursive=True))
+    if arch is not None:
+        matches = [m for m in matches if _parse_arch_from_rock_path(m) in (arch, None)]
     if not matches:
         return None
     if len(matches) > 1:
@@ -1325,6 +1331,16 @@ def _find_rock_file_in_dir(
             matches[0],
         )
     return "./" + str(Path(matches[0]).relative_to(root))
+
+
+def _parse_arch_from_rock_path(path: str) -> str | None:
+    """Return the arch (e.g. ``amd64``) parsed from a rock filename.
+
+    Returns ``None`` if the filename does not follow the expected convention.
+    """
+    filename = Path(path).name
+    m = _ROCK_FILENAME_RE.match(filename)
+    return m.group("arch") if m else None
 
 
 def _parse_arch_from_snap_path(path: str) -> str | None:
