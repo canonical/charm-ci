@@ -347,13 +347,13 @@ def artifacts_collect(root: Path, partial_paths: list[Path]) -> Path:
 def artifacts_localize(root: Path) -> int:
     """Update ``artifacts.build.yaml`` with local artifact file paths.
 
-    In CI, charm and snap outputs are recorded as ``artifact + run-id``
+    In CI, charm, snap, and rock outputs are recorded as ``artifact + run-id``
     references.  Before running integration tests, the workflow downloads
     the artifacts to the working directory.  This command scans the project
-    tree for ``.charm`` / ``.snap`` files and rewrites
-    ``artifacts.build.yaml`` so that each :class:`CharmOutput` with only
-    a CI artifact reference gets a ``path`` entry pointing to the discovered
-    local file, and each :class:`SnapOutput` gets a ``file`` entry.
+    tree for ``.charm`` / ``.snap`` / ``.rock`` files and rewrites
+    ``artifacts.build.yaml`` so that each output with only a CI artifact
+    reference gets a local path entry (``path`` for charms, ``file`` for
+    snaps and rocks).
 
     Returns the total number of arch-builds that were localised.
 
@@ -375,25 +375,10 @@ def artifacts_localize(root: Path) -> int:
         updated += _localize_charm(charm, root, missing)
 
     for snap in generated.snaps:
-        for snap_build in snap.builds:
-            if snap_build.file or not snap_build.artifact:
-                continue
-            artifact_dir = _safe_artifact_dir(root, snap_build.artifact)
-            if artifact_dir.is_dir():
-                rel = _find_snap_file_in_dir(artifact_dir, root, snap_build.arch)
-            else:
-                rel = _find_local_file(root, snap.name, "snap", snap_build.arch)
-            if rel is None:
-                missing.append(f"{snap.name} ({snap_build.arch})")
-                logger.error(
-                    "No .snap file found for snap '%s' arch '%s'.",
-                    snap.name,
-                    snap_build.arch,
-                )
-                continue
-            snap_build.file = rel
-            logger.info("Localised snap '%s' (%s) → %s", snap.name, snap_build.arch, rel)
-            updated += 1
+        updated += _localize_snap(snap, root, missing)
+
+    for rock in generated.rocks:
+        updated += _localize_rock(rock, root, missing)
 
     if missing:
         msg = (
@@ -1092,6 +1077,72 @@ def _output_key(
     return (build.arch,)
 
 
+def _localize_snap(
+    snap: GeneratedSnap,
+    root: Path,
+    missing: list[str],
+) -> int:
+    """Localize CI-only snap entries by resolving local ``.snap`` file paths.
+
+    Returns the number of builds that were localized.
+    """
+    localized = 0
+    for snap_build in snap.builds:
+        if snap_build.file or not snap_build.artifact:
+            continue
+        artifact_dir = _safe_artifact_dir(root, snap_build.artifact)
+        if artifact_dir.is_dir():
+            rel = _find_snap_file_in_dir(artifact_dir, root, snap_build.arch)
+        else:
+            rel = _find_local_file(root, snap.name, "snap", snap_build.arch)
+        if rel is None:
+            missing.append(f"{snap.name} ({snap_build.arch})")
+            logger.error(
+                "No .snap file found for snap '%s' arch '%s'.",
+                snap.name,
+                snap_build.arch,
+            )
+            continue
+        snap_build.file = rel
+        logger.info("Localised snap '%s' (%s) → %s", snap.name, snap_build.arch, rel)
+        localized += 1
+    return localized
+
+
+def _localize_rock(
+    rock: GeneratedRock,
+    root: Path,
+    missing: list[str],
+) -> int:
+    """Localize artifact-mode rock entries by resolving local ``.rock`` file paths.
+
+    Returns the number of builds that were localized.
+    """
+    localized = 0
+    for rock_build in rock.builds:
+        if not rock_build.artifact:
+            continue
+        artifact_dir = _safe_artifact_dir(root, rock_build.artifact)
+        if artifact_dir.is_dir():
+            rel = _find_rock_file_in_dir(artifact_dir, root, rock.name, rock_build.arch)
+            if rel is None:
+                rel = _find_local_file(root, rock.name, "rock", rock_build.arch)
+        else:
+            rel = _find_local_file(root, rock.name, "rock", rock_build.arch)
+        if rel is None:
+            missing.append(f"{rock.name} ({rock_build.arch})")
+            logger.error(
+                "No .rock file found for rock '%s' arch '%s'.",
+                rock.name,
+                rock_build.arch,
+            )
+            continue
+        rock_build.file = rel
+        logger.info("Localised rock '%s' (%s) → %s", rock.name, rock_build.arch, rel)
+        localized += 1
+    return localized
+
+
 def _localize_charm(
     charm: GeneratedCharm,
     root: Path,
@@ -1246,6 +1297,30 @@ def _find_snap_file_in_dir(search_dir: Path, root: Path, arch: str | None = None
     if len(matches) > 1:
         logger.warning(
             "Multiple .snap files found in '%s'; using %s.",
+            search_dir,
+            matches[0],
+        )
+    return "./" + str(Path(matches[0]).relative_to(root))
+
+
+def _find_rock_file_in_dir(
+    search_dir: Path, root: Path, name: str, arch: str | None = None
+) -> str | None:
+    """Find a ``.rock`` file under *search_dir*, returning a path relative to *root*.
+
+    Searches for ``{name}_*.rock`` files.  Returns the first match or ``None``.
+    """
+    pattern = str(search_dir / "**" / f"{name}_*.rock")
+    matches = sorted(globmod.glob(pattern, recursive=True))
+    if not matches:
+        # Also try without name prefix (in case the artifact contains a differently-named file)
+        pattern = str(search_dir / "**" / "*.rock")
+        matches = sorted(globmod.glob(pattern, recursive=True))
+    if not matches:
+        return None
+    if len(matches) > 1:
+        logger.warning(
+            "Multiple .rock files found in '%s'; using %s.",
             search_dir,
             matches[0],
         )

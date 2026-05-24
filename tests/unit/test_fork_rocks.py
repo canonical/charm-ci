@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-from opcli.core.artifacts import artifacts_build, artifacts_fetch
+from opcli.core.artifacts import artifacts_build, artifacts_fetch, artifacts_localize
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.provision import provision_load
 from opcli.core.spread import _CI_PREPARE_AFTER_USER, _LOCAL_PREPARE_BEFORE_USER
@@ -245,4 +245,40 @@ class TestCIPrepareScript:
         """_LOCAL_PREPARE_BEFORE_USER should call push-images --missing-registry deploy."""
         assert (
             "opcli artifacts push-images --missing-registry deploy" in _LOCAL_PREPARE_BEFORE_USER
+        )
+
+
+class TestRockLocalize:
+    """Test artifacts_localize rewrites rock artifact paths."""
+
+    def test_localize_rewrites_rock_file_path(self, tmp_path: Path) -> None:
+        """Rock with artifact field gets file rewritten to downloaded location."""
+        # Create artifacts.build.yaml with a rock that has artifact set
+        build_yaml = tmp_path / "artifacts.build.yaml"
+        build_yaml.write_text(
+            "rocks:\n"
+            "- name: k8s-rock\n"
+            "  rockcraft-yaml: k8s-rock/rockcraft.yaml\n"
+            "  builds:\n"
+            "  - arch: amd64\n"
+            "    file: k8s-rock/k8s-rock_1.0_amd64.rock\n"
+            "    artifact: built-rock-k8s-rock-amd64\n"
+            "    run-id: '12345'\n"
+            "charms: []\n"
+            "snaps: []\n"
+        )
+
+        # Simulate the downloaded artifact directory
+        artifact_dir = tmp_path / "built-rock-k8s-rock-amd64"
+        artifact_dir.mkdir()
+        rock_file = artifact_dir / "k8s-rock_1.0_amd64.rock"
+        rock_file.write_bytes(b"fake rock")
+
+        updated = artifacts_localize(tmp_path)
+
+        assert updated == 1
+        # Verify the file was rewritten in the YAML
+        result = load_artifacts_build(build_yaml)
+        assert (
+            result.rocks[0].builds[0].file == "./built-rock-k8s-rock-amd64/k8s-rock_1.0_amd64.rock"
         )
