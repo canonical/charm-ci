@@ -9,6 +9,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      upload-image:
+        description: "Rock upload mode: 'artifact' to test fork-PR path, empty for default (registry)"
+        type: string
+        default: ""
 
 concurrency:
   group: integration-${{ github.ref }}
@@ -19,6 +24,7 @@ jobs:
     uses: ./.github/workflows/integration-test.yml
     with:
       working-directory: examples
+      upload-image: ${{ inputs.upload-image || '' }}
     secrets: inherit
     permissions:
       packages: write
