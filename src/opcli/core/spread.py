@@ -607,6 +607,7 @@ chown -R ubuntu:ubuntu /home/ubuntu
 """
 
 _CI_PREPARE_AFTER_USER = """\
+export HOME=/root
 if [ -n "${GITHUB_RUN_ID:-}" ]; then
   export GH_TOKEN="${GITHUB_TOKEN}"
   cd "${SPREAD_PATH}" && opcli artifacts fetch \
