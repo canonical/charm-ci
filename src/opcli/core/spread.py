@@ -51,8 +51,9 @@ _TASK_YAML_CONTENT = (
     "\n"
     "execute: |\n"
     '    cd "${SPREAD_PATH}"\n'
-    '    opcli pytest run -e "${TOX_ENV:-integration}"'
-    ' -- --model testing --keep-models -k "$MODULE"\n'
+    '    PYTEST_CMD=$(opcli pytest expand -e "${TOX_ENV:-integration}"'
+    ' -- --model testing --keep-models -k "$MODULE") || exit 1\n'
+    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && ${PYTEST_CMD}\"\n"
 )
 
 
