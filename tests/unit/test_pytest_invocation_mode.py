@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from opcli.commands.pytest_cmd import _resolve_mode
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.pytest_args import assemble_tox_argv, pytest_run
 from opcli.core.spread import get_pytest_invocation_mode, spread_expand
@@ -128,6 +129,69 @@ class TestPytestRunObservabilityMode:
         assert env is not None
         assert "CHARM_PATH" in env
         assert "traefik-k8s" in env["CHARM_PATH"]
+
+
+class TestPytestRunModeOverride:
+    """Tests for pytest_run with explicit mode parameter."""
+
+    def test_mode_override_skips_spread_yaml(self, tmp_path: Path) -> None:
+        """When mode is passed explicitly, spread.yaml is not consulted."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        # No spread.yaml — would default to pfe, but we override to observability
+
+        with (
+            patch("opcli.core.pytest_args.current_arch", return_value="amd64"),
+            patch("opcli.core.artifacts.current_arch", return_value="amd64"),
+            patch("opcli.core.pytest_args.run_command") as mock_run,
+        ):
+            pytest_run(tmp_path, ci=True, mode="observability")
+
+        mock_run.assert_called_once()
+        call_kwargs = mock_run.call_args
+        env = call_kwargs.kwargs.get("env") or call_kwargs[1].get("env")
+        assert env is not None
+        assert "CHARM_PATH" in env
+
+    def test_mode_override_pfe_ignores_spread_yaml(self, tmp_path: Path) -> None:
+        """Explicit pfe mode overrides observability in spread.yaml."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(tmp_path / "spread.yaml", _SPREAD_YAML_OBSERVABILITY)
+
+        with (
+            patch("opcli.core.pytest_args.current_arch", return_value="amd64"),
+            patch("opcli.core.pytest_args.run_command") as mock_run,
+        ):
+            pytest_run(tmp_path, ci=True, mode="pfe")
+
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        joined = " ".join(cmd)
+        assert "--charm-file=" in joined
+
+
+class TestCLIInvocationModeFlag:
+    """Tests for the --invocation-mode CLI flag validation."""
+
+    def test_invalid_mode_raises(self) -> None:
+
+        with pytest.raises(ConfigurationError, match="Invalid --invocation-mode"):
+            _resolve_mode("invalid-mode")
+
+    def test_valid_pfe_mode(self) -> None:
+
+        assert _resolve_mode("pfe") == "pfe"
+
+    def test_valid_observability_mode(self) -> None:
+
+        assert _resolve_mode("observability") == "observability"
+
+    def test_none_falls_through_to_spread_yaml(self, tmp_path: Path) -> None:
+
+        with patch("opcli.commands.pytest_cmd.Path") as mock_path:
+            mock_path.cwd.return_value = tmp_path
+            result = _resolve_mode(None)
+
+        assert result == "pfe"
 
 
 class TestSpreadExpandStripsKey:
