@@ -5,6 +5,8 @@ juju:
     automatically-retry-hooks: "false"
 
 providers:
-  lxd:
+  microk8s:
     enable: true
     bootstrap: true
+    addons:
+      - hostpath-storage

@@ -25,4 +25,5 @@ suites:
     environment:
       MODULE/test_k8s_charm: test_k8s_charm
       MODULE/test_machine_charm: test_machine_charm
+      CONCIERGE/test_k8s_charm: concierge-microk8s.yaml
 
