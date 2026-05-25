@@ -575,7 +575,7 @@ opcli install spread
 opcli install tox
 opcli install concierge
 opcli env provision -c "$CONCIERGE"
-chown -R ubuntu:ubuntu /home/ubuntu/.local 2>/dev/null || true
+chown -R ubuntu:ubuntu /home/ubuntu
 usermod -aG lxd ubuntu || true
 opcli artifacts push-images --missing-registry deploy
 """
@@ -603,7 +603,7 @@ opcli install concierge
 usermod -aG lxd ubuntu || true
 export HOME=/home/ubuntu
 opcli env provision -c "$CONCIERGE"
-chown -R ubuntu:ubuntu /home/ubuntu/.local 2>/dev/null || true
+chown -R ubuntu:ubuntu /home/ubuntu
 """
 
 _CI_PREPARE_AFTER_USER = """\
