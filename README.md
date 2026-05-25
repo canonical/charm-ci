@@ -103,8 +103,17 @@ opcli pytest run -- -k test_charm   # run tests via tox
 
 | Command | Description |
 |---|---|
-| `run` | Assemble and execute the tox integration test command. `-e` for env, `--` forwards args. |
-| `expand` | Print full `tox -e integration -- <flags>` command. `-e` for env, `--` forwards args. |
+| `run` | Assemble and execute the tox integration test command. `-e` for env, `-m` for invocation mode, `--` forwards args. |
+| `expand` | Print full `tox -e integration -- <flags>` command. `-e` for env, `-m` for invocation mode, `--` forwards args. |
+
+Both commands accept `--invocation-mode` (`-m`) to override the pytest invocation mode without needing a `spread.yaml`:
+
+```bash
+opcli pytest run -m observability        # force observability mode
+opcli pytest expand -m pfe -- -k test_x  # force pfe mode, filter tests
+```
+
+Precedence: `--invocation-mode` flag → `pytest-invocation-mode` in `spread.yaml` → default `pfe`.
 
 ### `opcli tutorial`
 
@@ -172,7 +181,7 @@ Controls how `opcli pytest run` and `opcli pytest expand` pass built artifacts t
 | `pfe` (default) | Passes `--charm-file=<path>` and `--<rock>-image=<ref>` as CLI flags. Supports multi-charm, multi-rock repos. |
 | `observability` | Sets `CHARM_PATH` environment variable. Assumes single charm, no rocks. Errors if >1 charm found. |
 
-When absent, defaults to `pfe`. This key is read at runtime by `opcli pytest run/expand`, so it works both inside spread and when running directly on the developer's machine.
+When absent, defaults to `pfe`. This key is read at runtime by `opcli pytest run/expand`, so it works both inside spread and when running directly on the developer's machine. It can also be overridden via the `--invocation-mode` (`-m`) CLI flag, which takes precedence over the `spread.yaml` value.
 
 ## CI vs local
 
