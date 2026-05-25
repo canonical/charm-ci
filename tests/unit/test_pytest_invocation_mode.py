@@ -6,8 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from typer.testing import CliRunner
 
 from opcli.commands.pytest_cmd import _resolve_mode
+from opcli.commands.pytest_cmd import app as pytest_app
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.pytest_args import assemble_tox_argv, pytest_run
 from opcli.core.spread import get_pytest_invocation_mode, spread_expand
@@ -75,6 +77,11 @@ class TestGetPytestInvocationMode:
     def test_invalid_mode_raises(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _SPREAD_YAML_INVALID_MODE)
         with pytest.raises(ConfigurationError, match="Invalid pytest-invocation-mode"):
+            get_pytest_invocation_mode(tmp_path)
+
+    def test_malformed_yaml_raises(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", ": invalid: yaml: [unclosed")
+        with pytest.raises(ConfigurationError, match="Failed to parse"):
             get_pytest_invocation_mode(tmp_path)
 
 
@@ -173,25 +180,88 @@ class TestCLIInvocationModeFlag:
     """Tests for the --invocation-mode CLI flag validation."""
 
     def test_invalid_mode_raises(self) -> None:
-
         with pytest.raises(ConfigurationError, match="Invalid --invocation-mode"):
             _resolve_mode("invalid-mode")
 
     def test_valid_pfe_mode(self) -> None:
-
         assert _resolve_mode("pfe") == "pfe"
 
     def test_valid_observability_mode(self) -> None:
-
         assert _resolve_mode("observability") == "observability"
 
     def test_none_falls_through_to_spread_yaml(self, tmp_path: Path) -> None:
-
+        write_file(tmp_path / "spread.yaml", _SPREAD_YAML_OBSERVABILITY)
         with patch("opcli.commands.pytest_cmd.Path") as mock_path:
             mock_path.cwd.return_value = tmp_path
             result = _resolve_mode(None)
 
-        assert result == "pfe"
+        assert result == "observability"
+
+
+class TestCLIRunnerInvocationMode:
+    """CliRunner tests for opcli pytest run/expand -m flag."""
+
+    def test_expand_with_mode_flag_pfe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
+            result = runner.invoke(pytest_app, ["expand", "-m", "pfe"], catch_exceptions=False)
+
+        assert result.exit_code == 0, result.output
+        assert "--charm-file=" in result.output
+
+    def test_expand_with_mode_flag_observability(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
+            result = runner.invoke(
+                pytest_app, ["expand", "-m", "observability"], catch_exceptions=False
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "CHARM_PATH=" in result.output
+        assert "--charm-file" not in result.output
+
+    def test_expand_with_invalid_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        result = runner.invoke(pytest_app, ["expand", "-m", "bogus"])
+
+        assert result.exit_code == 1
+
+    def test_expand_mode_flag_with_extra_args(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
+            result = runner.invoke(
+                pytest_app,
+                ["expand", "-m", "pfe", "--", "-k", "test_foo"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "-k" in result.output
+        assert "test_foo" in result.output
 
 
 class TestSpreadExpandStripsKey:

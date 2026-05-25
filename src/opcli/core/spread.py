@@ -27,6 +27,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ruamel.yaml.error import YAMLError
+
 from opcli.core.env import is_ci as _is_ci
 from opcli.core.exceptions import ConfigurationError, ValidationError
 from opcli.core.progress import status
@@ -224,7 +226,8 @@ def get_pytest_invocation_mode(root: Path) -> str:
     ``spread.yaml`` exists.
 
     Raises:
-        ConfigurationError: If the value is not a recognised mode.
+        ConfigurationError: If the file exists but is malformed, or if
+            the value is not a recognised mode.
     """
     spread_path = root / _SPREAD_YAML
     if not spread_path.exists():
@@ -232,8 +235,9 @@ def get_pytest_invocation_mode(root: Path) -> str:
 
     try:
         data = load_yaml(spread_path)
-    except ValueError:
-        return "pfe"
+    except (ValueError, YAMLError) as exc:
+        msg = f"Failed to parse {_SPREAD_YAML}: {exc}"
+        raise ConfigurationError(msg) from exc
 
     backends = data.get("backends")
     if not isinstance(backends, dict):
