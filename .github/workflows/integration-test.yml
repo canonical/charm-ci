@@ -47,6 +47,10 @@ on:
         description: "Name of secret #5 to pass to integration tests"
         type: string
         default: ""
+      upload-image:
+        description: "Rock upload mode passed to build-artifacts (registry or artifact)"
+        type: string
+        default: ""
 
 jobs:
   # ── Job 1: build all artifacts ──────────────────────────────────────────────
@@ -54,6 +58,7 @@ jobs:
     uses: ./.github/workflows/build-artifacts.yml
     with:
       working-directory: ${{ inputs.working-directory }}
+      upload-image: ${{ inputs.upload-image }}
     permissions:
       contents: read
       packages: write

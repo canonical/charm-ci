@@ -56,8 +56,7 @@ opcli artifacts init
 opcli artifacts build
 opcli install tox              # install tox + tox-uv (if not already present)
 opcli env provision            # provision with concierge
-opcli env deploy-registry      # deploy local OCI registry (if k8s enabled)
-opcli artifacts push-images    # push rocks to registry
+opcli artifacts push-images --missing-registry deploy  # deploy registry + push rocks
 opcli pytest run -- -k test_charm   # run tests via tox
 ```
 
@@ -73,7 +72,7 @@ opcli pytest run -- -k test_charm   # run tests via tox
 | `collect <partial>...` | Merge partial `artifacts.build.yaml` from parallel jobs. |
 | `fetch` | Download CI artifacts and rewrite to local paths. `--run-id` (required), `--repo`, `--wait`. |
 | `localize` | Rewrite CI artifact refs to local paths (after manual download). |
-| `push-images` | Load rock OCI images into a local registry. `-r` for registry (default: `localhost:32000`). |
+| `push-images` | Load rock OCI images into a local registry. `-r` for registry (default: `localhost:32000`). `--missing-registry`: `skip` (default), `deploy` (auto-provision), or `fail`. |
 
 ### `opcli install`
 
@@ -168,6 +167,7 @@ The `runner`, `cpu`, `memory`, and `disk` fields are opcli-only metadata — the
 |---|---|---|---|
 | `CI` | Spread backend expansion | `*-local` (LXD VM) | `*-ci` (current runner) |
 | `GITHUB_ACTIONS` | Artifact output format | Local file paths | GHCR images + artifact refs |
+| `OPCLI_ROCK_UPLOAD` | Rock build output mode | — (not set) | `registry` (push to GHCR) or `artifact` (upload `.rock` as GH artifact, for fork PRs) |
 | `OPCLI_GIT_REF` | opcli version inside spread VM | defaults to `main` | set by workflow |
 
 ## GitHub Actions reusable workflows
@@ -191,6 +191,7 @@ jobs:
       actions: read
     with:
       working-directory: .
+      # upload-image: artifact  # uncomment for fork PRs (no GHCR push)
 
   test:
     needs: build
@@ -201,6 +202,16 @@ jobs:
 ```
 
 Pinning to a SHA or tag automatically installs the matching `opcli` version via `canonical/get-workflow-version-action`.
+
+### Fork PR support
+
+When a pull request comes from a fork, the `GITHUB_TOKEN` is read-only and cannot push OCI images to GHCR. The `build-artifacts.yml` workflow handles this automatically:
+
+1. **Fork detection** — checks `github.event.pull_request.head.repo.fork` and sets `OPCLI_ROCK_UPLOAD=artifact`.
+2. **Artifact mode** — the `.rock` file is uploaded as a GitHub Actions artifact instead of being pushed to GHCR.
+3. **Test phase** — `opcli artifacts fetch` downloads the `.rock` artifact, `opcli artifacts localize` rewrites paths, and `opcli artifacts push-images --missing-registry deploy` provisions a local registry and pushes the rock there.
+
+To manually test the fork path, pass `upload-image: artifact` to `build-artifacts.yml` (or use `workflow_dispatch` if configured).
 
 ## Secrets for integration tests
 

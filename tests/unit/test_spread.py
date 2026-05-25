@@ -194,8 +194,7 @@ suites:
         prepare = local["prepare"]
         assert "opcli install concierge" in prepare
         assert "opcli env provision" in prepare
-        assert "opcli env deploy-registry" in prepare
-        assert "opcli artifacts push-images" in prepare
+        assert "opcli artifacts push-images --missing-registry deploy" in prepare
         assert "opcli install spread" in prepare
         assert "opcli install tox" in prepare
         # Local uses uv (not pipx) with dev-mode detection, same as CI

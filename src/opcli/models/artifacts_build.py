@@ -29,18 +29,25 @@ class RockOutput(BaseModel):
     """Rock build output entry.
 
     Local builds populate ``file``; CI builds populate ``image``.
+    Fork-PR builds in CI populate ``file`` + ``artifact`` + ``run-id``
+    (the rock is uploaded as a GitHub artifact instead of pushed to GHCR).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     arch: str
     file: str | None = None
     image: str | None = None
+    artifact: str | None = None
+    run_id: str | None = Field(default=None, alias="run-id")
 
     @model_validator(mode="after")
     def _at_least_one_output(self) -> "RockOutput":
         if not self.file and not self.image:
             msg = "RockOutput must specify file or image"
+            raise ValueError(msg)
+        if self.artifact and not self.run_id:
+            msg = "run-id is required when artifact is set"
             raise ValueError(msg)
         return self
 

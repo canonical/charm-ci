@@ -25,6 +25,14 @@ on:
         description: "Directory containing artifacts.yaml (relative to workspace root)"
         type: string
         default: "."
+      upload-image:
+        description: >-
+          How rock images are published. "registry" pushes to GHCR (default for
+          same-repo PRs). "artifact" uploads the .rock as a GitHub artifact
+          (required for fork PRs with read-only GITHUB_TOKEN). Empty string
+          auto-detects based on fork status.
+        type: string
+        default: ""
 
 jobs:
   # ── Job 1: produce the build matrix ────────────────────────────────────────
@@ -37,12 +45,26 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       opcli-sha: ${{ steps.workflow-version.outputs.sha }}
+      rock-upload-mode: ${{ steps.upload-mode.outputs.mode }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Determine rock upload mode
+        id: upload-mode
+        run: |
+          input="${{ inputs.upload-image }}"
+          if [ -n "$input" ]; then
+            echo "mode=$input" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            echo "mode=artifact" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=registry" >> "$GITHUB_OUTPUT"
+          fi
+        working-directory: .
 
       - name: Get workflow version
         id: workflow-version
@@ -128,16 +150,18 @@ jobs:
         run: sudo snap install snapcraft --classic
 
       - name: Login to GHCR
-        if: matrix.type == 'rock'
+        if: matrix.type == 'rock' && needs.build-matrix.outputs.rock-upload-mode == 'registry'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             skopeo login ghcr.io --username "${{ github.actor }}" --password-stdin
 
       - name: Build ${{ matrix.type }} ${{ matrix.name }}
         run: opcli artifacts build --${{ matrix.type }} ${{ matrix.name }}
+        env:
+          OPCLI_ROCK_UPLOAD: ${{ needs.build-matrix.outputs.rock-upload-mode }}
 
       - name: Upload ${{ matrix.type }} ${{ matrix.name }}
-        if: matrix.type != 'rock'
+        if: matrix.type != 'rock' || needs.build-matrix.outputs.rock-upload-mode == 'artifact'
         uses: actions/upload-artifact@v4
         with:
           name: built-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}

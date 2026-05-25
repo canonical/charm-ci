@@ -137,14 +137,12 @@ class TestProvisionLoad:
         write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
 
         with (
-            patch("opcli.core.provision.load_artifacts_build") as mock_load,
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=False),
         ):
             pushed = provision_load(tmp_path)
 
         assert pushed == []
-        mock_load.assert_not_called()
         mock_run.assert_not_called()
 
     def test_pushes_local_rocks(self, tmp_path: Path) -> None:

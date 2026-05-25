@@ -77,6 +77,7 @@ _CHARM_FILENAME_RE = re.compile(
 
 # Pattern: {name}_{version}_{arch}.snap  e.g. my-snap_1.0_amd64.snap
 _SNAP_FILENAME_RE = re.compile(r"^.+_[^_]+_(?P<arch>[^.]+)\.snap$")
+_ROCK_FILENAME_RE = re.compile(r"^.+_[^_]+_(?P<arch>[^.]+)\.rock$")
 
 
 _GITHUB_URL_RE = re.compile(r"github\.com[:/](.+?)(?:\.git)?/?$")
@@ -191,7 +192,12 @@ def artifacts_build(
     # In GitHub Actions, rewrite outputs to CI-format references.
     ci = _get_ci_context()
     if ci is not None:
-        gen_rocks = [_push_rock_to_ghcr(r, ci, root) for r in gen_rocks]
+        upload_mode = _get_upload_mode()
+        if upload_mode == "registry":
+            gen_rocks = [_push_rock_to_ghcr(r, ci, root) for r in gen_rocks]
+        else:
+            # artifact mode: keep file: reference, add artifact + run-id metadata
+            gen_rocks = [_to_ci_rock_artifact(r, ci) for r in gen_rocks]
         gen_charms = [_to_ci_charm(c, ci) for c in gen_charms]
         gen_snaps = [_to_ci_snap(s, ci) for s in gen_snaps]
 
@@ -342,13 +348,13 @@ def artifacts_collect(root: Path, partial_paths: list[Path]) -> Path:
 def artifacts_localize(root: Path) -> int:
     """Update ``artifacts.build.yaml`` with local artifact file paths.
 
-    In CI, charm and snap outputs are recorded as ``artifact + run-id``
+    In CI, charm, snap, and rock outputs are recorded as ``artifact + run-id``
     references.  Before running integration tests, the workflow downloads
     the artifacts to the working directory.  This command scans the project
-    tree for ``.charm`` / ``.snap`` files and rewrites
-    ``artifacts.build.yaml`` so that each :class:`CharmOutput` with only
-    a CI artifact reference gets a ``path`` entry pointing to the discovered
-    local file, and each :class:`SnapOutput` gets a ``file`` entry.
+    tree for ``.charm`` / ``.snap`` / ``.rock`` files and rewrites
+    ``artifacts.build.yaml`` so that each output with only a CI artifact
+    reference gets a local path entry (``path`` for charms, ``file`` for
+    snaps and rocks).
 
     Returns the total number of arch-builds that were localised.
 
@@ -370,25 +376,10 @@ def artifacts_localize(root: Path) -> int:
         updated += _localize_charm(charm, root, missing)
 
     for snap in generated.snaps:
-        for snap_build in snap.builds:
-            if snap_build.file or not snap_build.artifact:
-                continue
-            artifact_dir = _safe_artifact_dir(root, snap_build.artifact)
-            if artifact_dir.is_dir():
-                rel = _find_snap_file_in_dir(artifact_dir, root, snap_build.arch)
-            else:
-                rel = _find_local_file(root, snap.name, "snap", snap_build.arch)
-            if rel is None:
-                missing.append(f"{snap.name} ({snap_build.arch})")
-                logger.error(
-                    "No .snap file found for snap '%s' arch '%s'.",
-                    snap.name,
-                    snap_build.arch,
-                )
-                continue
-            snap_build.file = rel
-            logger.info("Localised snap '%s' (%s) → %s", snap.name, snap_build.arch, rel)
-            updated += 1
+        updated += _localize_snap(snap, root, missing)
+
+    for rock in generated.rocks:
+        updated += _localize_rock(rock, root, missing)
 
     if missing:
         msg = (
@@ -404,7 +395,7 @@ def artifacts_localize(root: Path) -> int:
     return updated
 
 
-def artifacts_fetch(  # noqa: C901
+def artifacts_fetch(  # noqa: C901, PLR0912
     root: Path,
     run_id: str,
     repo: str | None = None,
@@ -419,13 +410,14 @@ def artifacts_fetch(  # noqa: C901
        artifact.  When *wait* is ``True``, retries up to
        :data:`_WAIT_MAX_ATTEMPTS` times until the artifact appears (useful
        when the test job starts before the build completes).
-    3. For every charm/snap that carries a CI artifact reference, download the
-       corresponding artifact archive.
+    3. For every charm/snap/rock that carries a CI artifact reference,
+       download the corresponding artifact archive.
     4. Call :func:`artifacts_localize` to rewrite ``artifacts.build.yaml``
        with the local ``.charm`` / ``.snap`` file paths.
 
-    Rock artifacts are OCI images on GHCR and need no download — their
-    ``output.image`` reference is already usable locally.
+    Rock artifacts with ``image:`` references (GHCR) need no download.
+    Rock artifacts with ``artifact:`` references (fork-PR mode) are
+    downloaded alongside charms and snaps.
 
     Args:
         root: Working directory; all artifacts are downloaded here.
@@ -474,12 +466,18 @@ def artifacts_fetch(  # noqa: C901
 
     generated = load_artifacts_build(gen_path)
 
-    # Download each charm / snap artifact archive (deduplicated)
+    # Download each charm / snap / rock artifact archive (deduplicated).
+    # Rocks with artifact: are fork-PR builds that were uploaded as GH artifacts
+    # instead of pushed to GHCR.
     seen_artifacts: set[str] = set()
+    for rock in generated.rocks:
+        for rock_build in rock.builds:
+            if rock_build.artifact:
+                seen_artifacts.add(rock_build.artifact)
     for charm in generated.charms:
-        for build in charm.builds:
-            if build.artifact:
-                seen_artifacts.add(build.artifact)
+        for charm_build in charm.builds:
+            if charm_build.artifact:
+                seen_artifacts.add(charm_build.artifact)
     for snap in generated.snaps:
         for snap_build in snap.builds:
             if snap_build.artifact:
@@ -862,6 +860,26 @@ def _get_ci_context() -> _CIContext | None:
     return _CIContext(run_id=run_id, owner=owner, repo=repo, sha=sha[:7])
 
 
+def _get_upload_mode() -> str:
+    """Return the rock upload mode from ``OPCLI_ROCK_UPLOAD``.
+
+    Returns:
+        ``"registry"`` (default) or ``"artifact"``.
+
+    Raises:
+        ConfigurationError: If the env var contains an unrecognised value.
+    """
+    raw = os.environ.get("OPCLI_ROCK_UPLOAD", "registry").strip().lower()
+    valid = ("registry", "artifact")
+    if raw not in valid:
+        msg = (
+            f"OPCLI_ROCK_UPLOAD must be one of {valid!r}, got: {raw!r}. "
+            "Set to 'artifact' for fork PRs or 'registry' (default) to push to GHCR."
+        )
+        raise ConfigurationError(msg)
+    return raw
+
+
 def _push_rock_to_ghcr(rock: GeneratedRock, ci: _CIContext, root: Path) -> GeneratedRock:
     """Push a locally-built rock to GHCR and return an updated ``GeneratedRock``.
 
@@ -912,6 +930,39 @@ def _push_rock_to_ghcr(rock: GeneratedRock, ci: _CIContext, root: Path) -> Gener
         name=rock.name,
         **{"rockcraft-yaml": rock.rockcraft_yaml},
         builds=[RockOutput(arch=build.arch, image=image_ref)],
+    )
+
+
+def _to_ci_rock_artifact(rock: GeneratedRock, ci: _CIContext) -> GeneratedRock:
+    """Return a copy of *rock* with artifact-mode output (no GHCR push).
+
+    Keeps the local ``file`` reference and adds ``artifact`` + ``run-id``
+    metadata so the downstream fetch/collect steps know how to retrieve
+    the ``.rock`` file from GitHub Artifacts.
+    """
+    artifact_name = f"built-rock-{rock.name}-{rock.builds[0].arch}" if rock.builds else ""
+    new_builds = [
+        RockOutput(
+            arch=b.arch,
+            file=b.file,
+            artifact=f"built-rock-{rock.name}-{b.arch}",
+            **{"run-id": ci.run_id},
+        )
+        for b in rock.builds
+        if b.file
+    ]
+    if not new_builds:
+        msg = f"Rock '{rock.name}' has no local file for artifact-mode output."
+        raise OpcliError(msg)
+    logger.info(
+        "Rock '%s' in artifact mode — skipping GHCR push (artifact=%s)",
+        rock.name,
+        artifact_name,
+    )
+    return GeneratedRock(
+        name=rock.name,
+        **{"rockcraft-yaml": rock.rockcraft_yaml},
+        builds=new_builds,
     )
 
 
@@ -1025,6 +1076,75 @@ def _output_key(
     if isinstance(build, CharmOutput):
         return (build.arch, build.path, build.artifact)
     return (build.arch,)
+
+
+def _localize_snap(
+    snap: GeneratedSnap,
+    root: Path,
+    missing: list[str],
+) -> int:
+    """Localize CI-only snap entries by resolving local ``.snap`` file paths.
+
+    Returns the number of builds that were localized.
+    """
+    localized = 0
+    for snap_build in snap.builds:
+        if snap_build.file or not snap_build.artifact:
+            continue
+        artifact_dir = _safe_artifact_dir(root, snap_build.artifact)
+        if artifact_dir.is_dir():
+            rel = _find_snap_file_in_dir(artifact_dir, root, snap_build.arch)
+        else:
+            rel = _find_local_file(root, snap.name, "snap", snap_build.arch)
+        if rel is None:
+            missing.append(f"{snap.name} ({snap_build.arch})")
+            logger.error(
+                "No .snap file found for snap '%s' arch '%s'.",
+                snap.name,
+                snap_build.arch,
+            )
+            continue
+        snap_build.file = rel
+        logger.info("Localised snap '%s' (%s) → %s", snap.name, snap_build.arch, rel)
+        localized += 1
+    return localized
+
+
+def _localize_rock(
+    rock: GeneratedRock,
+    root: Path,
+    missing: list[str],
+) -> int:
+    """Localize artifact-mode rock entries by resolving local ``.rock`` file paths.
+
+    Returns the number of builds that were localized.
+    """
+    localized = 0
+    for rock_build in rock.builds:
+        if not rock_build.artifact:
+            continue
+        # Unlike snaps, we do NOT skip when file is set — artifact-mode rocks
+        # retain the build-runner file path which won't exist on the test runner.
+        # Localization rewrites it to the actual download location.
+        artifact_dir = _safe_artifact_dir(root, rock_build.artifact)
+        if artifact_dir.is_dir():
+            rel = _find_rock_file_in_dir(artifact_dir, root, rock.name, rock_build.arch)
+            if rel is None:
+                rel = _find_local_file(root, rock.name, "rock", rock_build.arch)
+        else:
+            rel = _find_local_file(root, rock.name, "rock", rock_build.arch)
+        if rel is None:
+            missing.append(f"{rock.name} ({rock_build.arch})")
+            logger.error(
+                "No .rock file found for rock '%s' arch '%s'.",
+                rock.name,
+                rock_build.arch,
+            )
+            continue
+        rock_build.file = rel
+        logger.info("Localised rock '%s' (%s) → %s", rock.name, rock_build.arch, rel)
+        localized += 1
+    return localized
 
 
 def _localize_charm(
@@ -1185,6 +1305,42 @@ def _find_snap_file_in_dir(search_dir: Path, root: Path, arch: str | None = None
             matches[0],
         )
     return "./" + str(Path(matches[0]).relative_to(root))
+
+
+def _find_rock_file_in_dir(
+    search_dir: Path, root: Path, name: str, arch: str | None = None
+) -> str | None:
+    """Find a ``.rock`` file under *search_dir*, returning a path relative to *root*.
+
+    Searches for ``{name}_*.rock`` files.  Returns the first match or ``None``.
+    """
+    pattern = str(search_dir / "**" / f"{name}_*.rock")
+    matches = sorted(globmod.glob(pattern, recursive=True))
+    if not matches:
+        # Also try without name prefix (in case the artifact contains a differently-named file)
+        pattern = str(search_dir / "**" / "*.rock")
+        matches = sorted(globmod.glob(pattern, recursive=True))
+    if arch is not None:
+        matches = [m for m in matches if _parse_arch_from_rock_path(m) in (arch, None)]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        logger.warning(
+            "Multiple .rock files found in '%s'; using %s.",
+            search_dir,
+            matches[0],
+        )
+    return "./" + str(Path(matches[0]).relative_to(root))
+
+
+def _parse_arch_from_rock_path(path: str) -> str | None:
+    """Return the arch (e.g. ``amd64``) parsed from a rock filename.
+
+    Returns ``None`` if the filename does not follow the expected convention.
+    """
+    filename = Path(path).name
+    m = _ROCK_FILENAME_RE.match(filename)
+    return m.group("arch") if m else None
 
 
 def _parse_arch_from_snap_path(path: str) -> str | None:
