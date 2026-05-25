@@ -16,6 +16,7 @@ from opcli.core.artifacts import (
     artifacts_init,
     artifacts_localize,
     artifacts_matrix,
+    artifacts_path,
 )
 from opcli.core.provision import provision_load
 
@@ -153,3 +154,30 @@ def push_images(
             typer.echo(f"Pushed {ref}")
     else:
         typer.echo("No rock images to push.")
+
+
+@app.command()
+def path(
+    name: Annotated[
+        str | None,
+        typer.Argument(help="Artifact name to filter by."),
+    ] = None,
+    *,
+    artifact_type: Annotated[
+        str | None,
+        typer.Option("--type", "-t", help="Filter by type: charm, rock, or snap."),
+    ] = None,
+    arch: Annotated[
+        str | None,
+        typer.Option("--arch", help="Architecture override (default: current machine)."),
+    ] = None,
+) -> None:
+    """Resolve and display built artifact locations.
+
+    Reads artifacts.build.yaml and outputs one resolved absolute file
+    location per line. Useful for scripting or passing artifact locations
+    via environment variables.
+    """
+    paths = artifacts_path(Path.cwd(), name=name, artifact_type=artifact_type, arch=arch)
+    for p in paths:
+        typer.echo(str(p))

@@ -8,7 +8,9 @@ from pathlib import Path
 
 import typer
 
+from opcli.core.artifacts import artifacts_path
 from opcli.core.pytest_args import assemble_tox_argv, pytest_run
+from opcli.core.spread import get_pytest_invocation_mode
 
 app = typer.Typer(
     help="Assemble pytest flags from build output and run integration tests.",
@@ -42,6 +44,15 @@ def expand(
     """Print the full tox command assembled from artifacts.build.yaml.
 
     Extra args after -- are forwarded into the printed command.
+    In observability mode, outputs the CHARM_PATH env var prefix.
     """
-    argv = assemble_tox_argv(Path.cwd(), tox_env=tox_env, extra_args=ctx.args or None)
-    typer.echo(shlex.join(argv))
+    root = Path.cwd()
+    mode = get_pytest_invocation_mode(root)
+    argv = assemble_tox_argv(root, tox_env=tox_env, extra_args=ctx.args or None, mode=mode)
+
+    if mode == "observability":
+        paths = artifacts_path(root, artifact_type="charm")
+        prefix = f"CHARM_PATH={shlex.quote(str(paths[0]))} "
+        typer.echo(prefix + shlex.join(argv))
+    else:
+        typer.echo(shlex.join(argv))

@@ -94,6 +94,26 @@ Concierge respects `SUDO_USER` (via its `realUser()` function) to write configs 
 
 ---
 
+## Spread virtual backend keys
+
+The virtual backend in `spread.yaml` accepts opcli-only keys that are stripped during expansion:
+
+| Key | Values | Default | Effect |
+|---|---|---|---|
+| `type` | `integration-test`, `tutorial` | (required) | Selects the backend template |
+| `pytest-invocation-mode` | `pfe`, `observability` | `pfe` | Controls how `opcli pytest run/expand` passes artifacts to the test framework |
+| `runner` | JSON array of labels | — | CI runner labels for GitHub Actions matrix |
+| `cpu`, `memory`, `disk` | integer | 4, 8, 20 | Local LXD VM resource allocation |
+
+### `pytest-invocation-mode` details
+
+- **`pfe`**: Passes `--charm-file=<path>` and `--<rock>-image=<ref>` as CLI flags to tox/pytest. Used by Platform Engineering repos. Supports multi-charm, multi-rock.
+- **`observability`**: Sets `CHARM_PATH` environment variable when running tox. Assumes single charm, no rocks. Errors if >1 charm found. Used by Observability repos that read `CHARM_PATH` in conftest.
+
+When absent (or no `spread.yaml` exists), defaults to `pfe`.
+
+---
+
 ## Data model: Pydantic vs ruamel.yaml
 
 | File | Approach |

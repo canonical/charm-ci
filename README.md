@@ -73,6 +73,7 @@ opcli pytest run -- -k test_charm   # run tests via tox
 | `fetch` | Download CI artifacts and rewrite to local paths. `--run-id` (required), `--repo`, `--wait`. |
 | `localize` | Rewrite CI artifact refs to local paths (after manual download). |
 | `push-images` | Load rock OCI images into a local registry. `-r` for registry (default: `localhost:32000`). `--missing-registry`: `skip` (default), `deploy` (auto-provision), or `fail`. |
+| `path` | Print absolute path(s) to built artifacts. Optional `NAME` arg, `--type`, `--arch`. |
 
 ### `opcli install`
 
@@ -148,6 +149,7 @@ opcli recognises virtual backend types (`integration-test`, `tutorial`) and expa
 backends:
   integration-test:
     type: integration-test
+    pytest-invocation-mode: observability  # optional; default: pfe
     systems:
       - ubuntu-24.04:
           runner: [self-hosted, noble]   # CI runner labels
@@ -159,7 +161,18 @@ backends:
 - Locally (`CI` unset): expands to `integration-test-local` with an LXD backend.
 - In CI (`CI=true`): expands to `integration-test-ci` with an adhoc backend targeting the current runner.
 
-The `runner`, `cpu`, `memory`, and `disk` fields are opcli-only metadata — they are stripped before spread sees the YAML.
+The `runner`, `cpu`, `memory`, `disk`, and `pytest-invocation-mode` fields are opcli-only metadata — they are stripped before spread sees the YAML.
+
+### `pytest-invocation-mode`
+
+Controls how `opcli pytest run` and `opcli pytest expand` pass built artifacts to the test framework:
+
+| Value | Behaviour |
+|---|---|
+| `pfe` (default) | Passes `--charm-file=<path>` and `--<rock>-image=<ref>` as CLI flags. Supports multi-charm, multi-rock repos. |
+| `observability` | Sets `CHARM_PATH` environment variable. Assumes single charm, no rocks. Errors if >1 charm found. |
+
+When absent, defaults to `pfe`. This key is read at runtime by `opcli pytest run/expand`, so it works both inside spread and when running directly on the developer's machine.
 
 ## CI vs local
 

@@ -55,7 +55,7 @@ class TestSpreadInit:
         assert "integration-test" in content
 
         task_content = task_path.read_text()
-        assert 'opcli pytest expand -e "${TOX_ENV:-integration}"' in task_content
+        assert 'opcli pytest run -e "${TOX_ENV:-integration}"' in task_content
 
     def test_generates_required_fields(self, tmp_path: Path) -> None:
         spread_path, _ = spread_init(tmp_path)
@@ -138,7 +138,7 @@ class TestSpreadInit:
 
         spread_path, task_path = spread_init(tmp_path, force=True)
         assert "integration-test" in spread_path.read_text()
-        tox_env_flag = 'opcli pytest expand -e "${TOX_ENV:-integration}"'
+        tox_env_flag = 'opcli pytest run -e "${TOX_ENV:-integration}"'
         assert tox_env_flag in task_path.read_text()
 
     def test_project_name_from_directory(self, tmp_path: Path) -> None:

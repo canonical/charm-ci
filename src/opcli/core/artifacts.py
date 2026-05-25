@@ -22,7 +22,12 @@ from pathlib import Path
 
 from opcli.core.discovery import discover_artifacts
 from opcli.core.env import current_arch
-from opcli.core.exceptions import ConfigurationError, OpcliError, SubprocessError
+from opcli.core.exceptions import (
+    ConfigurationError,
+    DiscoveryError,
+    OpcliError,
+    SubprocessError,
+)
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
 from opcli.core.yaml_io import (
@@ -132,6 +137,121 @@ def artifacts_init(root: Path, *, force: bool = False) -> Path:
         len(plan.snaps),
     )
     return dest
+
+
+def artifacts_path(
+    root: Path,
+    *,
+    name: str | None = None,
+    artifact_type: str | None = None,
+    arch: str | None = None,
+) -> list[Path]:
+    """Return absolute paths to built artifacts from ``artifacts.build.yaml``.
+
+    Args:
+        root: Project root directory.
+        name: Optional artifact name filter.
+        artifact_type: Optional type filter (``charm``, ``rock``, ``snap``).
+        arch: Architecture filter. Defaults to the current machine's arch.
+
+    Returns:
+        List of resolved absolute paths.
+
+    Raises:
+        ConfigurationError: If ``artifacts.build.yaml`` does not exist.
+        DiscoveryError: If no artifacts match, or if multiple artifacts match
+            without a *name* filter.
+    """
+    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    if not gen_path.exists():
+        msg = f"{_ARTIFACTS_GENERATED_YAML} not found. Run 'opcli artifacts build' first."
+        raise ConfigurationError(msg)
+
+    generated = load_artifacts_build(gen_path)
+    target_arch = arch or current_arch()
+    paths: list[Path] = []
+
+    if artifact_type is None or artifact_type == "charm":
+        paths.extend(_collect_charm_paths(generated, target_arch, name))
+
+    if artifact_type is None or artifact_type == "rock":
+        paths.extend(_collect_rock_paths(generated, target_arch, name))
+
+    if artifact_type is None or artifact_type == "snap":
+        paths.extend(_collect_snap_paths(generated, target_arch, name))
+
+    if not paths:
+        if name:
+            msg = f"No built artifact named '{name}' found in {_ARTIFACTS_GENERATED_YAML}."
+        else:
+            msg = f"No built artifacts with local paths found in {_ARTIFACTS_GENERATED_YAML}."
+        raise DiscoveryError(msg)
+
+    if not name and len(paths) > 1 and artifact_type == "charm":
+        names = [c.name for c in generated.charms]
+        if len(generated.charms) > 1:
+            msg = f"Multiple charms found: {', '.join(names)}. Specify a name to disambiguate."
+            raise DiscoveryError(msg)
+
+    return [(root / p).resolve() for p in paths]
+
+
+def _collect_charm_paths(generated: ArtifactsGenerated, arch: str, name: str | None) -> list[Path]:
+    """Extract local charm paths matching filters."""
+    paths: list[Path] = []
+    for charm in generated.charms:
+        if name and charm.name != name:
+            continue
+        for build in charm.builds:
+            if build.arch == arch and build.path:
+                paths.append(Path(build.path))
+    # Graceful degradation: if no arch match, try all builds
+    if not paths:
+        for charm in generated.charms:
+            if name and charm.name != name:
+                continue
+            for build in charm.builds:
+                if build.path:
+                    paths.append(Path(build.path))
+    return paths
+
+
+def _collect_rock_paths(generated: ArtifactsGenerated, arch: str, name: str | None) -> list[Path]:
+    """Extract local rock paths matching filters."""
+    paths: list[Path] = []
+    for rock in generated.rocks:
+        if name and rock.name != name:
+            continue
+        for build in rock.builds:
+            if build.arch == arch and build.file:
+                paths.append(Path(build.file))
+    if not paths:
+        for rock in generated.rocks:
+            if name and rock.name != name:
+                continue
+            for build in rock.builds:
+                if build.file:
+                    paths.append(Path(build.file))
+    return paths
+
+
+def _collect_snap_paths(generated: ArtifactsGenerated, arch: str, name: str | None) -> list[Path]:
+    """Extract local snap paths matching filters."""
+    paths: list[Path] = []
+    for snap in generated.snaps:
+        if name and snap.name != name:
+            continue
+        for build in snap.builds:
+            if build.arch == arch and build.file:
+                paths.append(Path(build.file))
+    if not paths:
+        for snap in generated.snaps:
+            if name and snap.name != name:
+                continue
+            for build in snap.builds:
+                if build.file:
+                    paths.append(Path(build.file))
+    return paths
 
 
 def artifacts_build(
