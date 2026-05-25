@@ -54,6 +54,7 @@ def pytest_run(
     tox_env: str = "integration",
     extra_args: list[str] | None = None,
     ci: bool | None = None,
+    mode: str | None = None,
 ) -> None:
     """Assemble the tox command and execute it interactively.
 
@@ -66,12 +67,15 @@ def pytest_run(
     - ``pfe`` (default): passes ``--charm-file`` and rock image flags.
     - ``observability``: sets ``CHARM_PATH`` environment variable.
 
+    When *mode* is passed explicitly it takes precedence over the value
+    discovered from ``spread.yaml``.
+
     Raises:
         ConfigurationError: If ``artifacts.build.yaml`` is missing.
         SubprocessError: If tox exits non-zero.
     """
-    mode = get_pytest_invocation_mode(root)
-    cmd = assemble_tox_argv(root, tox_env=tox_env, extra_args=extra_args, mode=mode)
+    resolved_mode = mode or get_pytest_invocation_mode(root)
+    cmd = assemble_tox_argv(root, tox_env=tox_env, extra_args=extra_args, mode=resolved_mode)
 
     is_ci_env = ci if ci is not None else is_ci()
     env: dict[str, str] = {}
@@ -80,7 +84,7 @@ def pytest_run(
         if loaded:
             env.update(loaded)
 
-    if mode == "observability":
+    if resolved_mode == "observability":
         paths = artifacts_path(root, artifact_type="charm")
         env["CHARM_PATH"] = str(paths[0])
 
