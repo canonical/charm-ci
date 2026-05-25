@@ -254,6 +254,7 @@ suites:
         assert "GITHUB_RUN_ID" in ci_env
         assert "GITHUB_REPOSITORY" in ci_env
         assert "GITHUB_WORKSPACE" in ci_env
+        assert "DOCKERHUB_MIRROR" in ci_env
         # CI backend does NOT override SUDO_USER; ubuntu is created in allocate
         assert "SUDO_USER" in ci_env
         assert ci_env["SUDO_USER"] == "ubuntu"
@@ -263,6 +264,8 @@ suites:
         assert "astral-uv" in ci["prepare"]
         # spread installed via opcli install spread
         assert "opcli install spread" in ci["prepare"]
+        # CI prepare passes --image-registry for DockerHub mirror
+        assert '--image-registry "${DOCKERHUB_MIRROR:-}"' in ci["prepare"]
         assert "discard" not in ci
         # CI injects username: root per-system for SSH access
         systems = ci["systems"]

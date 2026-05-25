@@ -26,7 +26,7 @@ from pathlib import Path
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.progress import status
 from opcli.core.subprocess import run_command
-from opcli.core.yaml_io import dump_artifacts_build, load_artifacts_build
+from opcli.core.yaml_io import dump_artifacts_build, dump_yaml, load_artifacts_build, load_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +39,23 @@ _REGISTRY_YAML = Path(__file__).parent.parent / "data" / "registry.yaml"
 _REGISTRY_DEPLOYMENT = "deployment/registry"
 _REGISTRY_NAMESPACE = "container-registry"
 
+# Concierge providers that support the image-registry config (container runtimes
+# that pull from Docker Hub).  LXD doesn't use OCI images from Docker Hub.
+_IMAGE_REGISTRY_PROVIDERS: frozenset[str] = frozenset({"microk8s", "k8s"})
+
 
 def provision_prepare(
     root: Path,
     *,
     concierge_file: str = _CONCIERGE_YAML,
+    image_registry: str = "",
 ) -> None:
     """Run ``concierge prepare`` to provision the test environment.
+
+    When *image_registry* is non-empty, patches the concierge file to inject
+    ``image-registry: {url: <value>}`` into each enabled provider section
+    before invoking concierge.  This configures a Docker Hub mirror (e.g. on
+    self-hosted runners) without requiring manual edits to ``concierge.yaml``.
 
     Raises:
         ConfigurationError: If the concierge file does not exist.
@@ -56,11 +66,46 @@ def provision_prepare(
         msg = f"{concierge_file} not found. Create a concierge.yaml in the repository root."
         raise ConfigurationError(msg)
 
+    if image_registry:
+        _patch_concierge_image_registry(concierge_path, image_registry)
+
     run_command(
         ["concierge", "prepare", "-c", str(concierge_path)],
         cwd=str(root),
     )
     status("Provisioning complete")
+
+
+def _patch_concierge_image_registry(concierge_path: Path, url: str) -> None:
+    """Inject ``image-registry: {url: <url>}`` into container-runtime providers.
+
+    Only patches ``microk8s`` and ``k8s`` providers that declare ``enable: true``.
+    LXD and other providers are left untouched — they don't pull OCI images from
+    Docker Hub.  The file is rewritten in place using ruamel.yaml to preserve
+    comments.
+    """
+    data = load_yaml(concierge_path)
+    providers = data.get("providers")
+    if not isinstance(providers, dict):
+        logger.info(
+            "No 'providers' section in %s — skipping image-registry patch.", concierge_path
+        )
+        return
+
+    patched = False
+    for name, provider_cfg in providers.items():
+        if not isinstance(provider_cfg, dict):
+            continue
+        if name not in _IMAGE_REGISTRY_PROVIDERS:
+            continue
+        if not provider_cfg.get("enable", False):
+            continue
+        provider_cfg["image-registry"] = {"url": url}
+        patched = True
+
+    if patched:
+        dump_yaml(data, concierge_path)
+        logger.info("Patched %s with image-registry url: %s", concierge_path, url)
 
 
 def provision_load(

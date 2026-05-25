@@ -427,6 +427,7 @@ def _build_concrete_backend(
             "GITHUB_RUN_ID": '$(HOST: echo "${GITHUB_RUN_ID:-}")',
             "GITHUB_REPOSITORY": '$(HOST: echo "${GITHUB_REPOSITORY:-}")',
             "GITHUB_WORKSPACE": '$(HOST: echo "${GITHUB_WORKSPACE:-}")',
+            "DOCKERHUB_MIRROR": '$(HOST: echo "${DOCKERHUB_MIRROR:-}")',
             **existing_env,
         }
         if isinstance(systems, list):
@@ -602,7 +603,7 @@ opcli install tox
 opcli install concierge
 usermod -aG lxd ubuntu || true
 export HOME=/home/ubuntu
-opcli env provision -c "$CONCIERGE"
+opcli env provision -c "$CONCIERGE" --image-registry "${DOCKERHUB_MIRROR:-}"
 chown -R ubuntu:ubuntu /home/ubuntu
 """
 
