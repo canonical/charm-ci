@@ -27,6 +27,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ruamel.yaml.error import YAMLError
+
 from opcli.core.env import is_ci as _is_ci
 from opcli.core.exceptions import ConfigurationError, ValidationError
 from opcli.core.progress import status
@@ -213,6 +215,55 @@ def spread_jobs(root: Path) -> list[dict[str, str]]:
     return entries
 
 
+# Valid values for the pytest-invocation-mode key.
+_VALID_INVOCATION_MODES = ("pfe", "observability")
+
+
+def get_pytest_invocation_mode(root: Path) -> str:
+    """Read ``pytest-invocation-mode`` from the virtual backend in spread.yaml.
+
+    Returns ``"pfe"`` (default) when the key is absent or when no
+    ``spread.yaml`` exists.
+
+    Raises:
+        ConfigurationError: If the file exists but is malformed, or if
+            the value is not a recognised mode.
+    """
+    spread_path = root / _SPREAD_YAML
+    if not spread_path.exists():
+        return "pfe"
+
+    try:
+        data = load_yaml(spread_path)
+    except (ValueError, YAMLError) as exc:
+        msg = f"Failed to parse {_SPREAD_YAML}: {exc}"
+        raise ConfigurationError(msg) from exc
+
+    backends = data.get("backends")
+    if not isinstance(backends, dict):
+        return "pfe"
+
+    for backend_entry in backends.values():
+        if not isinstance(backend_entry, dict):
+            continue
+        raw_type = backend_entry.get("type")
+        backend_type = raw_type if isinstance(raw_type, str) else None
+        if backend_type not in _BACKEND_CONFIGS:
+            continue
+        mode = backend_entry.get("pytest-invocation-mode")
+        if mode is None:
+            return "pfe"
+        if mode not in _VALID_INVOCATION_MODES:
+            msg = (
+                f"Invalid pytest-invocation-mode '{mode}' in spread.yaml. "
+                f"Valid values: {', '.join(_VALID_INVOCATION_MODES)}"
+            )
+            raise ConfigurationError(msg)
+        return str(mode)
+
+    return "pfe"
+
+
 def _discover_test_modules(root: Path) -> list[str]:
     """Find ``test_*.py`` files under ``tests/integration/``."""
     integration_dir = root / "tests" / "integration"
@@ -354,8 +405,10 @@ def _expand_backend(
         found_any = True
 
         prepare_parts = _BACKEND_CONFIGS[backend_type]
-        # Strip the virtual type field; _build_concrete_backend sets type: adhoc
-        virtual = {k: v for k, v in backend_entry.items() if k != "type"}
+        # Strip opcli-only fields; _build_concrete_backend sets type: adhoc
+        virtual = {
+            k: v for k, v in backend_entry.items() if k not in ("type", "pytest-invocation-mode")
+        }
         del backends[backend_name]
 
         concrete_name = f"{backend_name}-ci" if use_ci else f"{backend_name}-local"

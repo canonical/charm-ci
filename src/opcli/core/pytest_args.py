@@ -30,9 +30,11 @@ import logging
 from pathlib import Path
 from typing import overload
 
+from opcli.core.artifacts import artifacts_path
 from opcli.core.env import current_arch, is_ci
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.secrets import load_secrets_env
+from opcli.core.spread import get_pytest_invocation_mode
 from opcli.core.subprocess import run_command
 from opcli.core.yaml_io import load_artifacts_build
 from opcli.models.artifacts_build import (
@@ -52,6 +54,7 @@ def pytest_run(
     tox_env: str = "integration",
     extra_args: list[str] | None = None,
     ci: bool | None = None,
+    mode: str | None = None,
 ) -> None:
     """Assemble the tox command and execute it interactively.
 
@@ -59,20 +62,33 @@ def pytest_run(
     passed as environment variables to the tox subprocess.  In CI mode the
     variables are expected to already be in the environment.
 
+    The ``pytest-invocation-mode`` key from ``spread.yaml`` controls how
+    artifact paths are communicated to the test framework:
+    - ``pfe`` (default): passes ``--charm-file`` and rock image flags.
+    - ``observability``: sets ``CHARM_PATH`` environment variable.
+
+    When *mode* is passed explicitly it takes precedence over the value
+    discovered from ``spread.yaml``.
+
     Raises:
         ConfigurationError: If ``artifacts.build.yaml`` is missing.
         SubprocessError: If tox exits non-zero.
     """
-    cmd = assemble_tox_argv(root, tox_env=tox_env, extra_args=extra_args)
+    resolved_mode = mode or get_pytest_invocation_mode(root)
+    cmd = assemble_tox_argv(root, tox_env=tox_env, extra_args=extra_args, mode=resolved_mode)
 
     is_ci_env = ci if ci is not None else is_ci()
-    secrets_env: dict[str, str] | None = None
+    env: dict[str, str] = {}
     if not is_ci_env:
         loaded = load_secrets_env(root)
         if loaded:
-            secrets_env = loaded
+            env.update(loaded)
 
-    run_command(cmd, cwd=str(root), interactive=True, env=secrets_env)
+    if resolved_mode == "observability":
+        paths = artifacts_path(root, artifact_type="charm")
+        env["CHARM_PATH"] = str(paths[0])
+
+    run_command(cmd, cwd=str(root), interactive=True, env=env or None)
 
 
 def assemble_tox_argv(
@@ -80,6 +96,7 @@ def assemble_tox_argv(
     *,
     tox_env: str = "integration",
     extra_args: list[str] | None = None,
+    mode: str | None = None,
 ) -> list[str]:
     """Build the full tox argv for running integration tests.
 
@@ -90,8 +107,13 @@ def assemble_tox_argv(
     Raises:
         ConfigurationError: If required YAML files are missing.
     """
-    assembled = assemble_pytest_args(root)
-    pytest_args = assembled + (extra_args or [])
+    resolved_mode = mode or get_pytest_invocation_mode(root)
+
+    if resolved_mode == "observability":
+        pytest_args = list(extra_args or [])
+    else:
+        assembled = assemble_pytest_args(root)
+        pytest_args = assembled + (extra_args or [])
 
     cmd: list[str] = ["tox", "-e", tox_env]
     if pytest_args:
