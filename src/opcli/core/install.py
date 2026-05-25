@@ -9,6 +9,7 @@ environment.  They are designed to be called from the spread ``prepare:``
 script after opcli itself has been bootstrapped.
 """
 
+import os
 import shutil
 
 from opcli.core.progress import status, step
@@ -34,16 +35,21 @@ def install_spread() -> None:
 def install_tox() -> None:
     """Install tox with tox-uv via uv tool.
 
-    Uses /usr/local/bin as the tool bin directory so that tox is
-    available system-wide.
+    When running as root (e.g. inside spread prepare scripts), installs to
+    /usr/local/bin so tox is available system-wide.  When running as a
+    normal user (local testing without spread), uses the default user-local
+    paths (~/.local/bin).
     """
+    env: dict[str, str] | None = None
+    if os.getuid() == 0:
+        env = {
+            "UV_TOOL_BIN_DIR": "/usr/local/bin",
+            "UV_TOOL_DIR": "/usr/local/share/uv-tools",
+        }
     with step("Installing tox"):
         run_command(
             ["uv", "tool", "install", "tox", "--with", "tox-uv", "--quiet"],
-            env={
-                "UV_TOOL_BIN_DIR": "/usr/local/bin",
-                "UV_TOOL_DIR": "/usr/local/share/uv-tools",
-            },
+            env=env,
         )
 
 
