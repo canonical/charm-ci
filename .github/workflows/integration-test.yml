@@ -214,15 +214,20 @@ jobs:
           fi
 
       # ── Fix LXD+Docker connectivity ─────────────────────────────────────
-      # Docker sets the global FORWARD policy to DROP, which prevents LXD from
-      # forwarding traffic.  Enabling IPv4 forwarding before LXD starts and
-      # resetting the policy avoids this.
+      # Docker sets the FORWARD policy to DROP and filters via the DOCKER-USER
+      # chain, which blocks LXD bridge traffic.  Insert allow rules for lxdbr0
+      # into the chain (if it exists) rather than resetting the global policy.
       # See https://documentation.ubuntu.com/lxd/latest/howto/network_bridge_firewalld/#network-lxd-docker
       - name: Fix LXD+Docker forwarding
         run: |
-          echo "net.ipv4.conf.all.forwarding=1" | sudo tee /etc/sysctl.d/99-forwarding.conf
-          sudo systemctl restart systemd-sysctl
-          sudo iptables -P FORWARD ACCEPT
+          if sudo iptables -nL DOCKER-USER 2>/dev/null; then
+            sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+            sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+          fi
+          if sudo ip6tables -nL DOCKER-USER 2>/dev/null; then
+            sudo ip6tables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+            sudo ip6tables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+          fi
 
       # ── Run the spread task ───────────────────────────────────────────────
       # Artifact download happens inside spread _CI_PREPARE (after provisioning).
@@ -233,6 +238,10 @@ jobs:
           # Spread captures it via $(HOST: echo "${GITHUB_TOKEN:-}") and the
           # _CI_PREPARE script uses it to authenticate `gh run download`.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # DOCKERHUB_MIRROR is set on self-hosted runners to avoid rate limits.
+          # Spread forwards it to the test environment where opcli patches
+          # concierge.yaml with the mirror URL before provisioning.
+          DOCKERHUB_MIRROR: ${{ vars.DOCKERHUB_MIRROR || '' }}
         run: opcli spread run -- -vv ${{ matrix.selector }}
 
       - name: Juju status (on failure)

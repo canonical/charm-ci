@@ -24,9 +24,14 @@ def provision(
         "--concierge",
         help="Path to concierge.yaml (relative to the project root).",
     ),
+    image_registry: str = typer.Option(
+        "",
+        "--image-registry",
+        help="Docker Hub mirror URL to inject into concierge.yaml providers. Empty = no-op.",
+    ),
 ) -> None:
     """Run concierge prepare to provision the test environment."""
-    provision_prepare(Path.cwd(), concierge_file=concierge_file)
+    provision_prepare(Path.cwd(), concierge_file=concierge_file, image_registry=image_registry)
     typer.echo("Provisioning complete.")
 
 

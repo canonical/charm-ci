@@ -512,7 +512,9 @@ class TestEnvCli:
             result = _RUNNER.invoke(env_app, ["provision", "--concierge", "concierge_juju4.yaml"])
 
         assert result.exit_code == 0
-        mock_prepare.assert_called_once_with(tmp_path, concierge_file="concierge_juju4.yaml")
+        mock_prepare.assert_called_once_with(
+            tmp_path, concierge_file="concierge_juju4.yaml", image_registry=""
+        )
         assert result.stdout == "Provisioning complete.\n"
 
     @pytest.mark.parametrize(
