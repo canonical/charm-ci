@@ -7,7 +7,6 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-import click
 import typer
 from typer.core import TyperGroup
 
@@ -29,20 +28,20 @@ def app(args: Sequence[str] | None = None) -> None:
         if exc.code:
             sys.exit(exc.code)
     except OpcliError as exc:
-        # Fallback in case the Click group handler doesn't catch it
+        # Fallback in case the Typer group handler doesn't catch it
         # (e.g. errors raised during Typer parameter processing).
-        click.echo(f"error: {exc}", err=True)
+        typer.echo(f"error: {exc}", err=True)
         sys.exit(1)
 
 
 class _ErrorHandlingGroup(TyperGroup):
-    """Click group that catches OpcliError and prints user-friendly messages."""
+    """Typer group that catches OpcliError and prints user-friendly messages."""
 
-    def invoke(self, ctx: click.Context) -> Any:
+    def invoke(self, ctx: Any) -> Any:
         try:
             return super().invoke(ctx)
         except OpcliError as exc:
-            click.echo(f"error: {exc}", err=True)
+            typer.echo(f"error: {exc}", err=True)
             ctx.exit(1)
             return None
 
