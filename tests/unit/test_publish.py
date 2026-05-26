@@ -92,6 +92,10 @@ def _setup_project(tmp_path: Path, artifacts_yaml: str, build_yaml: str) -> Path
     (tmp_path / "machine-charm").mkdir(exist_ok=True)
     # Create .rock file so path resolution works
     (tmp_path / "k8s-rock" / "k8s-rock_amd64.rock").write_bytes(b"fake")
+    # Create .charm files so upload path checks pass
+    (tmp_path / "k8s-charm" / "k8s-charm_ubuntu-24.04-amd64.charm").write_bytes(b"fake")
+    (tmp_path / "k8s-charm" / "k8s-charm_ubuntu-22.04-amd64.charm").write_bytes(b"fake")
+    (tmp_path / "machine-charm" / "machine-charm_ubuntu-24.04-amd64.charm").write_bytes(b"fake")
     return tmp_path
 
 
@@ -264,6 +268,8 @@ resources:
     upstream-source: docker.io/ubuntu/traefik:2-22.04
 """
         )
+        # Create .charm file
+        (root / "traefik-k8s_ubuntu-20.04-amd64.charm").write_bytes(b"fake")
 
         calls: list[list[str]] = []
 
@@ -488,6 +494,296 @@ charms:
 
         with (
             pytest.raises(DiscoveryError, match="not found"),
+            patch("opcli.core.publish.run_command"),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+# ---------------------------------------------------------------------------
+#  Additional coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestMissingManifestFiles:
+    """Error when artifacts.yaml or artifacts.build.yaml is missing."""
+
+    def test_missing_artifacts_yaml(self, tmp_path: Path) -> None:
+        (tmp_path / "artifacts.build.yaml").write_text("version: 1\nrocks: []\ncharms: []\n")
+        with pytest.raises(ConfigurationError, match=r"artifacts\.yaml not found"):
+            artifacts_publish(tmp_path, channel="latest/edge")
+
+    def test_missing_build_yaml(self, tmp_path: Path) -> None:
+        (tmp_path / "artifacts.yaml").write_text("version: 1\nrocks: []\ncharms: []\n")
+        with pytest.raises(ConfigurationError, match=r"artifacts\.build\.yaml not found"):
+            artifacts_publish(tmp_path, channel="latest/edge")
+
+
+class TestUnknownCharmFilter:
+    """Error when --charm specifies a name not in the build manifest."""
+
+    def test_unknown_charm_name(self, tmp_path: Path) -> None:
+        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_LOCAL)
+        with pytest.raises(ConfigurationError, match="Charm 'nonexistent' not found"):
+            artifacts_publish(root, channel="latest/edge", charm_names=["nonexistent"])
+
+
+class TestMalformedCharmcraftOutput:
+    """Handle malformed JSON from charmcraft gracefully."""
+
+    def test_invalid_json(self, tmp_path: Path) -> None:
+        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_REGISTRY)
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                return _mock_result(stdout="not json at all")
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with (
+            pytest.raises(ConfigurationError, match="Failed to parse JSON"),
+            patch("opcli.core.publish.run_command", side_effect=fake_run),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+    def test_missing_revision_key(self, tmp_path: Path) -> None:
+        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_REGISTRY)
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"status": "ok"}))
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with (
+            pytest.raises(ConfigurationError, match=r"expected.*revision"),
+            patch("opcli.core.publish.run_command", side_effect=fake_run),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+class TestRockNoBuilds:
+    """Error when rock exists but has no builds."""
+
+    def test_rock_no_builds(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+    builds: []
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        path: k8s-charm/k8s-charm_ubuntu-24.04-amd64.charm
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+        root = _setup_project(tmp_path, _ARTIFACTS_YAML, build_yaml)
+
+        with (
+            pytest.raises(DiscoveryError, match="has no builds"),
+            patch("opcli.core.publish.run_command"),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+class TestTransportPrefixHandling:
+    """Already-qualified refs should not get double-prefixed."""
+
+    def test_docker_prefix_passthrough(self, tmp_path: Path) -> None:
+        """An upstream-source that already has docker:// prefix."""
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: traefik-k8s
+    charmcraft-yaml: charmcraft.yaml
+    resources:
+      traefik-image:
+        type: oci-image
+"""
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: traefik-k8s
+    charmcraft-yaml: charmcraft.yaml
+    builds:
+      - arch: amd64
+        path: traefik-k8s.charm
+    resources:
+      traefik-image:
+        type: oci-image
+"""
+        root = tmp_path
+        (root / "artifacts.yaml").write_text(artifacts_yaml)
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        (root / "charmcraft.yaml").write_text(
+            "name: traefik-k8s\ntype: charm\nresources:\n"
+            "  traefik-image:\n    type: oci-image\n"
+            "    upstream-source: docker://ghcr.io/canonical/traefik:latest\n"
+        )
+        (root / "traefik-k8s.charm").write_bytes(b"fake")
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge")
+
+        res_cmd = next(c for c in calls if "upload-resource" in c)
+        image_arg = next(a for a in res_cmd if a.startswith("--image="))
+        # Should NOT double-prefix to docker://docker://...
+        assert image_arg == "--image=docker://ghcr.io/canonical/traefik:latest"
+
+    def test_oci_archive_prefix_passthrough(self, tmp_path: Path) -> None:
+        """An upstream-source with oci-archive: prefix passes through."""
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: test-charm
+    charmcraft-yaml: charmcraft.yaml
+    resources:
+      img:
+        type: oci-image
+"""
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: test-charm
+    charmcraft-yaml: charmcraft.yaml
+    builds:
+      - arch: amd64
+        path: test-charm.charm
+    resources:
+      img:
+        type: oci-image
+"""
+        root = tmp_path
+        (root / "artifacts.yaml").write_text(artifacts_yaml)
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        (root / "charmcraft.yaml").write_text(
+            "name: test-charm\ntype: charm\nresources:\n"
+            "  img:\n    type: oci-image\n"
+            "    upstream-source: oci-archive:/path/to/image.tar\n"
+        )
+        (root / "test-charm.charm").write_bytes(b"fake")
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge")
+
+        res_cmd = next(c for c in calls if "upload-resource" in c)
+        image_arg = next(a for a in res_cmd if a.startswith("--image="))
+        assert image_arg == "--image=oci-archive:/path/to/image.tar"
+
+
+class TestEmptyCharmBuilds:
+    """Error when charm has no builds."""
+
+    def test_empty_builds(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+    builds: []
+"""
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+"""
+        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+
+        with (
+            pytest.raises(ConfigurationError, match="has no builds"),
+            patch("opcli.core.publish.run_command"),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+class TestMissingCharmFile:
+    """Error when a charm .charm file doesn't exist on disk."""
+
+    def test_missing_charm_file(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        path: machine-charm/nonexistent.charm
+"""
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+"""
+        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+
+        with (
+            pytest.raises(DiscoveryError, match="not found"),
+            patch("opcli.core.publish.run_command"),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+class TestMalformedYamlError:
+    """Malformed YAML in metadata raises ConfigurationError, not silent fallthrough."""
+
+    def test_invalid_yaml_in_charmcraft(self, tmp_path: Path) -> None:
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: my-charm
+    charmcraft-yaml: charmcraft.yaml
+    resources:
+      img:
+        type: oci-image
+"""
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: my-charm
+    charmcraft-yaml: charmcraft.yaml
+    builds:
+      - arch: amd64
+        path: my-charm.charm
+    resources:
+      img:
+        type: oci-image
+"""
+        root = tmp_path
+        (root / "artifacts.yaml").write_text(artifacts_yaml)
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        # Write truly invalid YAML (unclosed flow sequence)
+        (root / "charmcraft.yaml").write_text("resources: [unclosed\n")
+        (root / "my-charm.charm").write_bytes(b"fake")
+
+        with (
+            pytest.raises(ConfigurationError, match="Failed to parse"),
             patch("opcli.core.publish.run_command"),
         ):
             artifacts_publish(root, channel="latest/edge")

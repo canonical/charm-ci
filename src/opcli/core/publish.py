@@ -10,10 +10,13 @@ Resolves resource→rock→image references from opcli's own manifests, avoiding
 
 import json
 import logging
+import re
 import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from ruamel.yaml.error import YAMLError
 
 from opcli.core.exceptions import ConfigurationError, DiscoveryError
 from opcli.core.progress import status, step
@@ -136,6 +139,58 @@ def _select_charms(
     return [c for c in generated.charms if c.name in set(charm_names)]
 
 
+def _print_dry_run(
+    charms: list[GeneratedCharm],
+    rocks_by_name: dict[str, GeneratedRock],
+    plan_resources: dict[str, dict[str, str | None]],
+    channel: str,
+    root: Path,
+) -> None:
+    """Print what would be published without executing."""
+    out = sys.stderr
+
+    out.write("Dry run — the following would be published:\n\n")
+
+    for charm in charms:
+        out.write(f"{charm.name} → {channel}:\n")
+
+        resource_map = plan_resources.get(charm.name, {})
+        if resource_map:
+            out.write("  Resources:\n")
+            for resource_name, rock_name in resource_map.items():
+                image_ref = _resolve_image_ref(
+                    charm, resource_name, rock_name, rocks_by_name, root
+                )
+                source_desc = f"rock: {rock_name}" if rock_name else "upstream-source"
+                out.write(f"    {resource_name} ({source_desc}) → {image_ref}\n")
+                cmd = [
+                    "charmcraft",
+                    "upload-resource",
+                    charm.name,
+                    resource_name,
+                    f"--image={image_ref}",
+                    "--format=json",
+                ]
+                out.write(f"    $ {shlex.join(cmd)}\n")
+        else:
+            out.write("  Resources: (none)\n")
+
+        out.write("  Charm files:\n")
+        for build in charm.builds:
+            if not build.path and build.artifact and build.run_id:
+                out.write(f"    {build.artifact} — NOT FETCHED (run-id: {build.run_id})\n")
+                continue
+            base_str = f"{build.base} " if build.base else ""
+            out.write(f"    {build.path} ({base_str}{build.arch})\n")
+            cmd = ["charmcraft", "upload", build.path or "<unknown>", f"--release={channel}"]
+            if resource_map:
+                cmd.append("--resource=<name>:<rev>")
+            cmd.append("--format=json")
+            out.write(f"    $ {shlex.join(cmd)}\n")
+
+        out.write("\n")
+
+
 def _publish_charm(
     charm: GeneratedCharm,
     rocks_by_name: dict[str, GeneratedRock],
@@ -144,6 +199,10 @@ def _publish_charm(
     root: Path,
 ) -> PublishResult:
     """Publish a single charm: upload resources, then upload+release charm files."""
+    if not charm.builds:
+        msg = f"Charm '{charm.name}' has no builds in {_ARTIFACTS_GENERATED_YAML}."
+        raise ConfigurationError(msg)
+
     resource_flags = _upload_resources(charm, rocks_by_name, plan_resources, root)
 
     releases: list[ReleaseEntry] = []
@@ -213,7 +272,12 @@ def _resolve_image_ref(
 def _resolve_rock_image_ref(
     rock_name: str, rocks_by_name: dict[str, GeneratedRock], root: Path
 ) -> str:
-    """Get the image ref for a rock from the build manifest."""
+    """Get the image ref for a rock from the build manifest.
+
+    Prefers a registry ``image`` ref (shared manifest list across all arches)
+    over a local ``file``.  If only files exist and the rock has multiple arch
+    builds, logs a warning — only the first file is uploaded (single-arch).
+    """
     rock = rocks_by_name.get(rock_name)
     if rock is None:
         msg = (
@@ -227,12 +291,29 @@ def _resolve_rock_image_ref(
         msg = f"Rock '{rock_name}' has no builds in {_ARTIFACTS_GENERATED_YAML}."
         raise DiscoveryError(msg)
 
-    # Prefer image: (registry ref) over file: (local archive)
-    build = rock.builds[0]
-    if build.image:
-        return f"docker://{build.image}"
-    if build.file:
-        return str((root / build.file).resolve())
+    # Prefer image: (registry ref) over file: (local archive).
+    # In CI, all arch builds share the same registry manifest-list ref.
+    for build in rock.builds:
+        if build.image:
+            return _add_transport_prefix(build.image)
+
+    # Fall back to local file — only the first arch's file is uploaded.
+    for build in rock.builds:
+        if build.file:
+            if len(rock.builds) > 1:
+                logger.warning(
+                    "Rock '%s' has %d arch builds but only local files. "
+                    "Uploading only '%s' (%s). Use a registry for multi-arch.",
+                    rock_name,
+                    len(rock.builds),
+                    build.file,
+                    build.arch,
+                )
+            file_path = root / build.file
+            if not file_path.exists():
+                msg = f"Rock file '{build.file}' for rock '{rock_name}' not found at {file_path}."
+                raise DiscoveryError(msg)
+            return str(file_path.resolve())
 
     msg = f"Rock '{rock_name}' build has neither image nor file."
     raise DiscoveryError(msg)
@@ -255,25 +336,43 @@ def _resolve_upstream_source(charm: GeneratedCharm, resource_name: str, root: Pa
         )
         raise ConfigurationError(msg)
 
-    return f"docker://{upstream_source}"
+    return _add_transport_prefix(upstream_source)
 
 
 def _read_upstream_source(yaml_path: Path, resource_name: str) -> str | None:
-    """Extract upstream-source for a resource from a YAML file."""
+    """Extract upstream-source for a resource from a YAML file.
+
+    Returns ``None`` only when the file doesn't exist or the resource/field
+    is simply absent.  Raises ``ConfigurationError`` on malformed YAML.
+    """
     if not yaml_path.exists():
         return None
     try:
         data = load_yaml(yaml_path)
-    except (ValueError, OSError):
-        return None
+    except (YAMLError, ValueError, OSError) as exc:
+        msg = f"Failed to parse {yaml_path}: {exc}"
+        raise ConfigurationError(msg) from exc
 
-    resources = data.get("resources", {})
+    if not isinstance(data, dict):
+        msg = f"Expected a YAML mapping in {yaml_path}, got {type(data).__name__}."
+        raise ConfigurationError(msg)
+
+    resources = data.get("resources")
+    if resources is None:
+        return None
     if not isinstance(resources, dict):
-        return None
+        msg = f"'resources' in {yaml_path} must be a mapping, got {type(resources).__name__}."
+        raise ConfigurationError(msg)
 
-    resource = resources.get(resource_name, {})
-    if not isinstance(resource, dict):
+    resource = resources.get(resource_name)
+    if resource is None:
         return None
+    if not isinstance(resource, dict):
+        msg = (
+            f"Resource '{resource_name}' in {yaml_path} must be a mapping, "
+            f"got {type(resource).__name__}."
+        )
+        raise ConfigurationError(msg)
 
     upstream = resource.get("upstream-source")
     return str(upstream) if upstream else None
@@ -290,8 +389,7 @@ def _do_upload_resource(charm_name: str, resource_name: str, image_ref: str, roo
         "--format=json",
     ]
     result = run_command(cmd, cwd=str(root), stream=False)
-    parsed = json.loads(result.stdout)
-    revision: int = parsed["revision"]
+    revision = _parse_revision(result.stdout, cmd)
     status(f"Uploaded resource '{resource_name}' → revision {revision}")
     return revision
 
@@ -304,6 +402,11 @@ def _upload_charm_file(
     root: Path,
 ) -> int:
     """Upload a .charm file and release it to the channel. Returns revision."""
+    full_path = root / charm_path
+    if not full_path.exists():
+        msg = f"Charm file '{charm_path}' not found at {full_path}."
+        raise DiscoveryError(msg)
+
     cmd = [
         "charmcraft",
         "upload",
@@ -317,59 +420,45 @@ def _upload_charm_file(
     with step(f"Uploading '{charm_path}' to {channel}"):
         result = run_command(cmd, cwd=str(root), stream=False)
 
-    parsed = json.loads(result.stdout)
-    revision: int = parsed["revision"]
+    revision = _parse_revision(result.stdout, cmd)
     status(f"Uploaded charm '{charm_name}' → revision {revision}")
     return revision
 
 
-def _print_dry_run(
-    charms: list[GeneratedCharm],
-    rocks_by_name: dict[str, GeneratedRock],
-    plan_resources: dict[str, dict[str, str | None]],
-    channel: str,
-    root: Path,
-) -> None:
-    """Print what would be published without executing."""
-    out = sys.stderr
+# ---------------------------------------------------------------------------
+#  Lowest-level utilities
+# ---------------------------------------------------------------------------
 
-    out.write("Dry run — the following would be published:\n\n")
+_TRANSPORT_PREFIX_RE = "^[a-z][a-z0-9+.-]*:"
 
-    for charm in charms:
-        out.write(f"{charm.name} → {channel}:\n")
 
-        resource_map = plan_resources.get(charm.name, {})
-        if resource_map:
-            out.write("  Resources:\n")
-            for resource_name, rock_name in resource_map.items():
-                image_ref = _resolve_image_ref(
-                    charm, resource_name, rock_name, rocks_by_name, root
-                )
-                source_desc = f"rock: {rock_name}" if rock_name else "upstream-source"
-                out.write(f"    {resource_name} ({source_desc}) → {image_ref}\n")
-                cmd = [
-                    "charmcraft",
-                    "upload-resource",
-                    charm.name,
-                    resource_name,
-                    f"--image={image_ref}",
-                    "--format=json",
-                ]
-                out.write(f"    $ {shlex.join(cmd)}\n")
-        else:
-            out.write("  Resources: (none)\n")
+def _add_transport_prefix(ref: str) -> str:
+    """Ensure a registry ref has a skopeo transport prefix.
 
-        out.write("  Charm files:\n")
-        for build in charm.builds:
-            if not build.path and build.artifact and build.run_id:
-                out.write(f"    {build.artifact} — NOT FETCHED (run-id: {build.run_id})\n")
-                continue
-            base_str = f"{build.base} " if build.base else ""
-            out.write(f"    {build.path} ({base_str}{build.arch})\n")
-            cmd = ["charmcraft", "upload", build.path or "<unknown>", f"--release={channel}"]
-            if resource_map:
-                cmd.append("--resource=<name>:<rev>")
-            cmd.append("--format=json")
-            out.write(f"    $ {shlex.join(cmd)}\n")
+    If the ref already contains a transport (e.g. ``docker://``, ``oci-archive:``),
+    returns it unchanged.  Otherwise prepends ``docker://``.
+    """
+    if re.match(_TRANSPORT_PREFIX_RE, ref):
+        return ref
+    return f"docker://{ref}"
 
-        out.write("\n")
+
+def _parse_revision(stdout: str, cmd: list[str]) -> int:
+    """Parse the revision number from charmcraft's JSON output.
+
+    Raises ``ConfigurationError`` with context if output is malformed.
+    """
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        msg = f"Failed to parse JSON output from {shlex.join(cmd)}: {exc}\nOutput was: {stdout!r}"
+        raise ConfigurationError(msg) from exc
+
+    if not isinstance(parsed, dict) or "revision" not in parsed:
+        msg = (
+            f"Unexpected output from {shlex.join(cmd)}: "
+            f"expected {{'revision': N}}, got: {stdout!r}"
+        )
+        raise ConfigurationError(msg)
+
+    return int(parsed["revision"])
