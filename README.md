@@ -15,7 +15,10 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 ## Installation
 
 ```bash
-# With uv (recommended)
+# Install uv (via snap so it's available to sudo)
+sudo snap install astral-uv --classic
+
+# Install opcli
 uv tool install git+https://github.com/canonical/charm-ci.git
 
 # Or from a local clone
@@ -29,7 +32,7 @@ opcli --help
 ### Prerequisites
 
 - Python 3.12+
-- [uv](https://docs.astral.sh/uv/) (package manager)
+- [uv](https://docs.astral.sh/uv/) (`sudo snap install astral-uv --classic`)
 - [LXD](https://canonical.com/lxd) (for local spread testing)
 - [spread](https://github.com/canonical/spread) (installed via `opcli install spread`)
 - [concierge](https://github.com/canonical/concierge/) (for environment provisioning)
