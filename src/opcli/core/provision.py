@@ -19,11 +19,12 @@ images are served from GHCR.
 """
 
 import logging
+import os
 import shutil
 import socket
 from pathlib import Path
 
-from opcli.core.exceptions import ConfigurationError, SubprocessError
+from opcli.core.exceptions import ConfigurationError
 from opcli.core.progress import status
 from opcli.core.subprocess import run_command
 from opcli.core.yaml_io import dump_artifacts_build, dump_yaml, load_artifacts_build, load_yaml
@@ -57,6 +58,8 @@ def provision_prepare(
     before invoking concierge.  This configures a Docker Hub mirror (e.g. on
     self-hosted runners) without requiring manual edits to ``concierge.yaml``.
 
+    When not running as root, automatically invokes concierge via ``sudo``.
+
     Raises:
         ConfigurationError: If the concierge file does not exist or
             concierge is not installed.
@@ -74,16 +77,11 @@ def provision_prepare(
     if image_registry:
         _patch_concierge_image_registry(concierge_path, image_registry)
 
-    try:
-        run_command(
-            ["concierge", "prepare", "-c", str(concierge_path)],
-            cwd=str(root),
-        )
-    except SubprocessError as exc:
-        if "sudo" in exc.stderr or "root" in exc.stderr:
-            msg = "concierge requires root privileges. Run with: sudo opcli env provision"
-            raise ConfigurationError(msg) from exc
-        raise
+    cmd = ["concierge", "prepare", "-c", str(concierge_path)]
+    if os.getuid() != 0:
+        cmd = ["sudo", *cmd]
+
+    run_command(cmd, cwd=str(root))
     status("Provisioning complete")
 
 

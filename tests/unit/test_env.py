@@ -103,6 +103,7 @@ class TestProvisionPrepare:
         write_file(tmp_path / "concierge.yaml", "providers: {}\n")
 
         with (
+            patch("opcli.core.provision.os.getuid", return_value=0),
             patch("opcli.core.provision.shutil.which", return_value="/snap/bin/concierge"),
             patch("opcli.core.provision.run_command") as mock_run,
         ):
@@ -121,6 +122,7 @@ class TestProvisionPrepare:
         write_file(tmp_path / "concierge_juju4.yaml", "providers: {}\n")
 
         with (
+            patch("opcli.core.provision.os.getuid", return_value=0),
             patch("opcli.core.provision.shutil.which", return_value="/snap/bin/concierge"),
             patch("opcli.core.provision.run_command") as mock_run,
         ):
