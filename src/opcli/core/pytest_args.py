@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import overload
 
 from opcli.core.artifacts import artifacts_path
+from opcli.core.constants import ARTIFACTS_BUILD_YAML
 from opcli.core.env import current_arch, is_ci
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.secrets import load_secrets_env
@@ -44,8 +45,6 @@ from opcli.models.artifacts_build import (
 )
 
 logger = logging.getLogger(__name__)
-
-_ARTIFACTS_GENERATED_YAML = "artifacts.build.yaml"
 
 
 def pytest_run(
@@ -133,9 +132,9 @@ def assemble_pytest_args(  # noqa: C901
     Raises:
         ConfigurationError: If ``artifacts.build.yaml`` is missing.
     """
-    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    gen_path = root / ARTIFACTS_BUILD_YAML
     if not gen_path.exists():
-        msg = f"{_ARTIFACTS_GENERATED_YAML} not found. Run 'opcli artifacts build' first."
+        msg = f"{ARTIFACTS_BUILD_YAML} not found. Run 'opcli artifacts build' first."
         raise ConfigurationError(msg)
 
     generated = load_artifacts_build(gen_path)

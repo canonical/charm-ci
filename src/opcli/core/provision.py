@@ -24,6 +24,7 @@ import shutil
 import socket
 from pathlib import Path
 
+from opcli.core.constants import ARTIFACTS_BUILD_YAML
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.progress import status
 from opcli.core.subprocess import run_command
@@ -32,7 +33,6 @@ from opcli.core.yaml_io import dump_artifacts_build, dump_yaml, load_artifacts_b
 logger = logging.getLogger(__name__)
 
 _CONCIERGE_YAML = "concierge.yaml"
-_ARTIFACTS_GENERATED_YAML = "artifacts.build.yaml"
 _DEFAULT_REGISTRY = "localhost:32000"
 _REGISTRY_PORT = 32000
 
@@ -146,9 +146,9 @@ def provision_load(
             or if ``"deploy"`` is used with a non-local registry.
         SubprocessError: If a push command fails.
     """
-    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    gen_path = root / ARTIFACTS_BUILD_YAML
     if not gen_path.exists():
-        logger.info("No %s found — nothing to load.", _ARTIFACTS_GENERATED_YAML)
+        logger.info("No %s found — nothing to load.", ARTIFACTS_BUILD_YAML)
         return []
 
     generated = load_artifacts_build(gen_path)
@@ -271,11 +271,11 @@ def provision_registry(
     """
     # Skip if there are no rocks to push — the registry is only needed to serve
     # locally-built rock images.
-    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    gen_path = root / ARTIFACTS_BUILD_YAML
     if gen_path.exists():
         generated = load_artifacts_build(gen_path)
         if not generated.rocks:
-            logger.info("No rocks in %s, skipping registry setup.", _ARTIFACTS_GENERATED_YAML)
+            logger.info("No rocks in %s, skipping registry setup.", ARTIFACTS_BUILD_YAML)
             return "skipped"
 
     # Quick TCP probe — skip if something is already listening.
