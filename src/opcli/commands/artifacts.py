@@ -20,6 +20,7 @@ from opcli.core.artifacts import (
 )
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.provision import provision_load
+from opcli.core.publish import artifacts_publish
 
 app = typer.Typer(
     help="Discover and build charms, rocks, and snaps.",
@@ -188,3 +189,41 @@ def path(
     paths = artifacts_path(Path.cwd(), name=name, artifact_type=artifact_type, arch=arch)
     for p in paths:
         typer.echo(str(p))
+
+
+@app.command()
+def publish(
+    *,
+    channel: Annotated[
+        str,
+        typer.Option("--channel", help="CharmHub channel (e.g. latest/edge, 1.0/stable)."),
+    ],
+    charm: Annotated[
+        list[str] | None,
+        typer.Option("--charm", help="Publish only this charm. Repeatable."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Show what would be published without executing."),
+    ] = False,
+) -> None:
+    """Upload charms and resources to CharmHub.
+
+    Reads artifacts.yaml and artifacts.build.yaml to determine what to
+    publish.  For each charm, uploads OCI-image resources (rocks) first,
+    then uploads and releases the .charm file(s) with resource bindings.
+    """
+    if charm is None:
+        charm = []
+    results = artifacts_publish(
+        Path.cwd(), channel=channel, charm_names=charm or None, dry_run=dry_run
+    )
+    for r in results:
+        typer.echo(f"Published {r.charm_name} to {r.channel}:")
+        for entry in r.releases:
+            base_str = f"{entry.base} " if entry.base else ""
+            res_str = ""
+            if r.resources:
+                bindings = ", ".join(f"{k}:{v}" for k, v in r.resources.items())
+                res_str = f" — resources: {bindings}"
+            typer.echo(f"  rev {entry.revision} ({base_str}{entry.arch}){res_str}")

@@ -1,0 +1,536 @@
+# Copyright 2026 Canonical Ltd.
+# See LICENSE file for licensing details.
+
+"""Unit tests for opcli artifacts publish."""
+
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from opcli.core.exceptions import ConfigurationError, DiscoveryError
+from opcli.core.publish import artifacts_publish
+from opcli.core.subprocess import SubprocessResult
+
+# ---------------------------------------------------------------------------
+#  Helpers
+# ---------------------------------------------------------------------------
+
+_ARTIFACTS_YAML = """\
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+
+_BUILD_YAML_LOCAL = """\
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        file: k8s-rock/k8s-rock_amd64.rock
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: machine-charm/machine-charm_ubuntu-24.04-amd64.charm
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: k8s-charm/k8s-charm_ubuntu-24.04-amd64.charm
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+
+_BUILD_YAML_REGISTRY = """\
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/charm-ci/k8s-rock:abc1234-amd64
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: k8s-charm/k8s-charm_ubuntu-24.04-amd64.charm
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+
+
+def _setup_project(tmp_path: Path, artifacts_yaml: str, build_yaml: str) -> Path:
+    """Write manifest files to tmp_path and return it as root."""
+    (tmp_path / "artifacts.yaml").write_text(artifacts_yaml)
+    (tmp_path / "artifacts.build.yaml").write_text(build_yaml)
+    # Create directories for charm paths
+    (tmp_path / "k8s-rock").mkdir(exist_ok=True)
+    (tmp_path / "k8s-charm").mkdir(exist_ok=True)
+    (tmp_path / "machine-charm").mkdir(exist_ok=True)
+    # Create .rock file so path resolution works
+    (tmp_path / "k8s-rock" / "k8s-rock_amd64.rock").write_bytes(b"fake")
+    return tmp_path
+
+
+def _mock_result(stdout: str = "", stderr: str = "", returncode: int = 0) -> SubprocessResult:
+    return SubprocessResult(stdout=stdout, stderr=stderr, returncode=returncode)
+
+
+# ---------------------------------------------------------------------------
+#  Tests
+# ---------------------------------------------------------------------------
+
+
+class TestPublishCharmWithRockFile:
+    """Charm with a local .rock file → upload-resource → upload charm."""
+
+    def test_happy_path(self, tmp_path: Path) -> None:
+        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_LOCAL)
+
+        upload_resource_response = json.dumps({"revision": 5})
+        upload_charm_response = json.dumps({"revision": 42})
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=upload_resource_response)
+            return _mock_result(stdout=upload_charm_response)
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge")
+
+        # machine-charm: 1 upload (no resources)
+        # k8s-charm: 1 upload-resource + 1 upload
+        assert len(calls) == 3  # noqa: PLR2004
+
+        # Check upload-resource call
+        res_cmd = calls[1]
+        assert "upload-resource" in res_cmd
+        assert "k8s-charm" in res_cmd
+        assert "k8s-rock-image" in res_cmd
+        # Should use the file path (resolved)
+        image_arg = next(a for a in res_cmd if a.startswith("--image="))
+        assert "k8s-rock_amd64.rock" in image_arg
+
+        # Check upload call for k8s-charm has --resource flag
+        charm_cmd = calls[2]
+        assert "upload" in charm_cmd
+        assert "--resource=k8s-rock-image:5" in charm_cmd
+        assert "--release=latest/edge" in charm_cmd
+
+        # Verify results
+        assert len(results) == 2  # noqa: PLR2004
+        machine_result = results[0]
+        assert machine_result.charm_name == "machine-charm"
+        assert machine_result.releases[0].revision == 42  # noqa: PLR2004
+        assert machine_result.resources == {}
+
+        k8s_result = results[1]
+        assert k8s_result.charm_name == "k8s-charm"
+        assert k8s_result.releases[0].revision == 42  # noqa: PLR2004
+        assert k8s_result.resources == {"k8s-rock-image": 5}
+
+
+class TestPublishCharmWithRockImage:
+    """Charm with registry image ref → upload-resource with docker:// transport."""
+
+    def test_uses_docker_transport(self, tmp_path: Path) -> None:
+        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_REGISTRY)
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": 12}))
+            return _mock_result(stdout=json.dumps({"revision": 50}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="2.0/edge")
+
+        # Check upload-resource uses docker:// transport
+        res_cmd = next(c for c in calls if "upload-resource" in c)
+        image_arg = next(a for a in res_cmd if a.startswith("--image="))
+        assert image_arg == "--image=docker://ghcr.io/canonical/charm-ci/k8s-rock:abc1234-amd64"
+
+        assert results[0].charm_name == "k8s-charm"
+        assert results[0].resources == {"k8s-rock-image": 12}
+
+
+class TestPublishCharmNoResources:
+    """Machine charm with no resources → just upload, no resource flags."""
+
+    def test_no_resource_flags(self, tmp_path: Path) -> None:
+        # Only machine-charm in build manifest
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: machine-charm/machine-charm_ubuntu-24.04-amd64.charm
+"""
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+"""
+        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            return _mock_result(stdout=json.dumps({"revision": 10}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/stable")
+
+        assert len(calls) == 1
+        # No --resource flags
+        assert not any("--resource" in arg for arg in calls[0])
+        assert results[0].charm_name == "machine-charm"
+        assert results[0].resources == {}
+
+
+class TestPublishCharmExternalResource:
+    """Resource without rock: → reads upstream-source from charmcraft metadata."""
+
+    def test_reads_upstream_source(self, tmp_path: Path) -> None:
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: traefik-k8s
+    charmcraft-yaml: charmcraft.yaml
+    resources:
+      traefik-image:
+        type: oci-image
+"""
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: traefik-k8s
+    charmcraft-yaml: charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@20.04"
+        path: traefik-k8s_ubuntu-20.04-amd64.charm
+    resources:
+      traefik-image:
+        type: oci-image
+"""
+        root = tmp_path
+        (root / "artifacts.yaml").write_text(artifacts_yaml)
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        # Create metadata.yaml with upstream-source
+        (root / "metadata.yaml").write_text(
+            """\
+name: traefik-k8s
+resources:
+  traefik-image:
+    type: oci-image
+    upstream-source: docker.io/ubuntu/traefik:2-22.04
+"""
+        )
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": 7}))
+            return _mock_result(stdout=json.dumps({"revision": 20}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge")
+
+        # Check upload-resource uses docker:// with upstream-source
+        res_cmd = next(c for c in calls if "upload-resource" in c)
+        image_arg = next(a for a in res_cmd if a.startswith("--image="))
+        assert image_arg == "--image=docker://docker.io/ubuntu/traefik:2-22.04"
+
+        assert results[0].resources == {"traefik-image": 7}
+
+
+class TestPublishExternalResourceNoUpstreamSourceError:
+    """Missing upstream-source in metadata → ConfigurationError."""
+
+    def test_errors_when_no_upstream_source(self, tmp_path: Path) -> None:
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: traefik-k8s
+    charmcraft-yaml: charmcraft.yaml
+    resources:
+      traefik-image:
+        type: oci-image
+"""
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: traefik-k8s
+    charmcraft-yaml: charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@20.04"
+        path: traefik-k8s_ubuntu-20.04-amd64.charm
+    resources:
+      traefik-image:
+        type: oci-image
+"""
+        root = tmp_path
+        (root / "artifacts.yaml").write_text(artifacts_yaml)
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        # charmcraft.yaml without upstream-source
+        (root / "charmcraft.yaml").write_text("name: traefik-k8s\ntype: charm\n")
+
+        with (
+            pytest.raises(ConfigurationError, match="no 'upstream-source'"),
+            patch("opcli.core.publish.run_command"),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+class TestPublishMultiBase:
+    """Multiple .charm files → multiple upload calls, same resource revision."""
+
+    def test_multi_base_same_resource_rev(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        file: k8s-rock/k8s-rock_amd64.rock
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@22.04"
+        path: k8s-charm/k8s-charm_ubuntu-22.04-amd64.charm
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: k8s-charm/k8s-charm_ubuntu-24.04-amd64.charm
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+        artifacts_yaml = """\
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+
+        call_count = {"upload": 0}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": 5}))
+            call_count["upload"] += 1
+            return _mock_result(stdout=json.dumps({"revision": 40 + call_count["upload"]}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge", charm_names=["k8s-charm"])
+
+        assert len(results) == 1
+        assert len(results[0].releases) == 2  # noqa: PLR2004
+        assert results[0].releases[0].revision == 41  # noqa: PLR2004
+        assert results[0].releases[0].base == "ubuntu@22.04"
+        assert results[0].releases[1].revision == 42  # noqa: PLR2004
+        assert results[0].releases[1].base == "ubuntu@24.04"
+
+
+class TestPublishCharmFilter:
+    """--charm flag filters which charm gets published."""
+
+    def test_only_publishes_selected(self, tmp_path: Path) -> None:
+        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_LOCAL)
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": 5}))
+            return _mock_result(stdout=json.dumps({"revision": 42}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge", charm_names=["k8s-charm"])
+
+        # Only k8s-charm published (1 upload-resource + 1 upload)
+        assert len(results) == 1
+        assert results[0].charm_name == "k8s-charm"
+        assert len(calls) == 2  # noqa: PLR2004
+
+
+class TestPublishDryRun:
+    """--dry-run prints plan without executing commands."""
+
+    def test_no_commands_executed(self, tmp_path: Path) -> None:
+        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_LOCAL)
+
+        with patch("opcli.core.publish.run_command") as mock_run:
+            results = artifacts_publish(root, channel="latest/edge", dry_run=True)
+
+        mock_run.assert_not_called()
+        assert results == []
+
+
+class TestPublishUnfetchedError:
+    """Charm with only artifact+run-id (not fetched) → ConfigurationError."""
+
+    def test_errors_on_unfetched(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        artifact: build-charm-amd64
+        run-id: "12345"
+"""
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+"""
+        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+
+        with (
+            pytest.raises(ConfigurationError, match="un-fetched CI artifacts"),
+            patch("opcli.core.publish.run_command"),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+class TestPublishMissingRockError:
+    """Resource references rock not in build manifest → DiscoveryError."""
+
+    def test_errors_on_missing_rock(self, tmp_path: Path) -> None:
+        # artifacts.yaml references k8s-rock but build manifest has no rocks
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: k8s-charm/k8s-charm_ubuntu-24.04-amd64.charm
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+        artifacts_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+
+        with (
+            pytest.raises(DiscoveryError, match="not found"),
+            patch("opcli.core.publish.run_command"),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+class TestPublishPrefersImageOverFile:
+    """Rock with both image and file → prefers docker:// transport."""
+
+    def test_prefers_image(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        file: k8s-rock/k8s-rock_amd64.rock
+        image: ghcr.io/canonical/charm-ci/k8s-rock:abc-amd64
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: k8s-charm/k8s-charm_ubuntu-24.04-amd64.charm
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+        root = _setup_project(tmp_path, _ARTIFACTS_YAML, build_yaml)
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": 3}))
+            return _mock_result(stdout=json.dumps({"revision": 10}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge", charm_names=["k8s-charm"])
+
+        res_cmd = next(c for c in calls if "upload-resource" in c)
+        image_arg = next(a for a in res_cmd if a.startswith("--image="))
+        assert image_arg == "--image=docker://ghcr.io/canonical/charm-ci/k8s-rock:abc-amd64"
