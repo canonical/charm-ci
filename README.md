@@ -57,6 +57,24 @@ opcli artifacts push-images --missing-registry deploy  # push rocks to local reg
 opcli pytest run                                       # run all integration tests via tox
 ```
 
+### Publishing to CharmHub
+
+```bash
+# After a successful build (local or CI):
+opcli artifacts publish --channel latest/edge
+
+# Dry-run to preview what would be uploaded:
+opcli artifacts publish --channel latest/edge --dry-run
+
+# Publish only specific charms:
+opcli artifacts publish --channel latest/stable --charm my-charm
+```
+
+Requires `charmcraft` credentials: run `charmcraft login` interactively or set `CHARMCRAFT_AUTH` in CI.
+The command reads `artifacts.build.yaml` to resolve charm files and resource→rock mappings, then:
+1. Uploads OCI-image resources (rocks from registry or local file, external images from `upstream-source`)
+2. Uploads each `.charm` file and releases it to the channel with bound resource revisions
+
 ## Commands
 
 ### `opcli artifacts`
@@ -70,6 +88,7 @@ opcli pytest run                                       # run all integration tes
 | `fetch` | Download CI artifacts and rewrite to local paths. `--run-id` (required), `--repo`, `--wait`. |
 | `localize` | Rewrite CI artifact refs to local paths (after manual download). |
 | `push-images` | Load rock OCI images into a local registry. `-r` for registry (default: `localhost:32000`). `--missing-registry`: `skip` (default), `deploy` (auto-provision), or `fail`. |
+| `publish` | Upload charms and OCI resources to CharmHub. `--channel` (required), `--charm` (filter), `--dry-run`. |
 | `path` | Print absolute path(s) to built artifacts. Optional `NAME` arg, `--type`, `--arch`. |
 
 ### `opcli install`

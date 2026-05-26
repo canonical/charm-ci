@@ -9,7 +9,7 @@ Instructions for AI coding agents working on this repository.
 `opcli` — local-first CLI for Canonical operator developers to build charms/rocks/snaps, manage test environments, and run integration tests.
 
 - **Spec:** [`docs/ISD283.md`](docs/ISD283.md) — read before implementing new features.
-- **opcli owns:** file-based contracts, artifact discovery, subprocess execution, YAML transforms, artifact download (`gh run download`), CI job status queries (`gh api`).
+- **opcli owns:** file-based contracts, artifact discovery, subprocess execution, YAML transforms, artifact download (`gh run download`), CI job status queries (`gh api`), publishing to CharmHub (`charmcraft upload`/`upload-resource`).
 - **opcli does NOT own:** GitHub workflow orchestration, artifact upload, runner selection.
 
 ---
