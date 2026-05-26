@@ -25,6 +25,32 @@ from opcli.core.exceptions import SubprocessError
 
 _DEFAULT_TIMEOUT_SECONDS = 3600
 
+# Install hints for common tools invoked by opcli.  Keys are the binary
+# name; values are the user-friendly install instruction.
+_INSTALL_HINTS: dict[str, str] = {
+    "charmcraft": "sudo snap install charmcraft --classic",
+    "rockcraft": "sudo snap install rockcraft --classic",
+    "snapcraft": "sudo snap install snapcraft --classic",
+    "concierge": "sudo snap install concierge --classic",
+    "spread": "opcli install spread",
+    "tox": "opcli install tox",
+    "go": "sudo snap install go --classic",
+    "juju": "sudo snap install juju --classic",
+    "lxd": "sudo snap install lxd && sudo lxd init --auto",
+}
+
+
+def _not_found_message(cmd: list[str], exc: OSError) -> str:
+    """Build a user-friendly error message for missing executables."""
+    binary = cmd[0]
+    hint = _INSTALL_HINTS.get(binary)
+    msg = f"'{binary}' not found. "
+    if hint:
+        msg += f"Install with: {hint}"
+    else:
+        msg += "Ensure it is installed and on your PATH."
+    return msg
+
 
 @dataclass(frozen=True)
 class SubprocessResult:
@@ -101,10 +127,11 @@ def _run_interactive(
     try:
         proc = subprocess.run(cmd, cwd=cwd, check=False, env=env)
     except OSError as exc:
+        stderr = _not_found_message(cmd, exc) if isinstance(exc, FileNotFoundError) else str(exc)
         raise SubprocessError(
             cmd=cmd,
             returncode=127 if isinstance(exc, FileNotFoundError) else -1,
-            stderr=str(exc),
+            stderr=stderr,
         ) from exc
 
     result = SubprocessResult(stdout="", stderr="", returncode=proc.returncode)
@@ -148,10 +175,11 @@ def _run_streaming(  # noqa: PLR0913
             env=env,
         )
     except OSError as exc:
+        stderr = _not_found_message(cmd, exc) if isinstance(exc, FileNotFoundError) else str(exc)
         raise SubprocessError(
             cmd=cmd,
             returncode=127 if isinstance(exc, FileNotFoundError) else -1,
-            stderr=str(exc),
+            stderr=stderr,
         ) from exc
 
     stdout_lines: list[str] = []
@@ -278,10 +306,11 @@ def _run_captured(  # noqa: PLR0913
             stderr=f"Command timed out after {timeout}s\n{partial_err}".strip(),
         ) from exc
     except OSError as exc:
+        stderr = _not_found_message(cmd, exc) if isinstance(exc, FileNotFoundError) else str(exc)
         raise SubprocessError(
             cmd=cmd,
             returncode=127 if isinstance(exc, FileNotFoundError) else -1,
-            stderr=str(exc),
+            stderr=stderr,
         ) from exc
 
     result = SubprocessResult(

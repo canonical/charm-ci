@@ -19,6 +19,7 @@ images are served from GHCR.
 """
 
 import logging
+import os
 import shutil
 import socket
 from pathlib import Path
@@ -57,8 +58,11 @@ def provision_prepare(
     before invoking concierge.  This configures a Docker Hub mirror (e.g. on
     self-hosted runners) without requiring manual edits to ``concierge.yaml``.
 
+    When not running as root, automatically invokes concierge via ``sudo``.
+
     Raises:
-        ConfigurationError: If the concierge file does not exist.
+        ConfigurationError: If the concierge file does not exist or
+            concierge is not installed.
         SubprocessError: If concierge exits non-zero.
     """
     concierge_path = root / concierge_file
@@ -66,13 +70,18 @@ def provision_prepare(
         msg = f"{concierge_file} not found. Create a concierge.yaml in the repository root."
         raise ConfigurationError(msg)
 
+    if not shutil.which("concierge"):
+        msg = "concierge is not installed. Install with: sudo snap install concierge --classic"
+        raise ConfigurationError(msg)
+
     if image_registry:
         _patch_concierge_image_registry(concierge_path, image_registry)
 
-    run_command(
-        ["concierge", "prepare", "-c", str(concierge_path)],
-        cwd=str(root),
-    )
+    cmd = ["concierge", "prepare", "-c", str(concierge_path)]
+    if os.getuid() != 0:
+        cmd = ["sudo", *cmd]
+
+    run_command(cmd, cwd=str(root))
     status("Provisioning complete")
 
 

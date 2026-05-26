@@ -15,24 +15,21 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 ## Installation
 
 ```bash
-# With uv (recommended)
+sudo snap install astral-uv --classic
 uv tool install git+https://github.com/canonical/charm-ci.git
-
-# Or from a local clone
-git clone https://github.com/canonical/charm-ci.git
-cd charm-ci && uv tool install .
-
-# Verify
+export PATH="$HOME/.local/bin:$PATH"  # or: uv tool update-shell && exec $SHELL
 opcli --help
 ```
 
 ### Prerequisites
 
 - Python 3.12+
-- [uv](https://docs.astral.sh/uv/) (package manager)
-- [LXD](https://canonical.com/lxd) (for local spread testing)
-- [spread](https://github.com/canonical/spread) (installed via `opcli install spread`)
-- [concierge](https://github.com/canonical/concierge/) (for environment provisioning)
+- [uv](https://docs.astral.sh/uv/) (`sudo snap install astral-uv --classic`)
+- [charmcraft](https://charmcraft.io/) (`sudo snap install charmcraft --classic`)
+- [rockcraft](https://rockcraft.io/) (`sudo snap install rockcraft --classic`) — if building rocks
+- [LXD](https://canonical.com/lxd) (`sudo lxd init --auto && sudo usermod -aG lxd $USER`)
+- [spread](https://github.com/canonical/spread) (installed via `opcli install spread`) — for spread workflow
+- [concierge](https://github.com/canonical/concierge/) (`sudo snap install concierge --classic`) — for env provisioning
 
 ## Quick start
 
@@ -54,10 +51,10 @@ opcli spread run -- integration-test-local:ubuntu-24.04:tests/integration/run:te
 ```bash
 opcli artifacts init
 opcli artifacts build
-opcli install tox              # install tox + tox-uv (if not already present)
-opcli env provision            # provision with concierge
-opcli artifacts push-images --missing-registry deploy  # deploy registry + push rocks
-opcli pytest run -- -k test_charm   # run tests via tox
+opcli install tox                                      # install tox + tox-uv
+opcli env provision                                    # concierge (auto-elevates with sudo)
+opcli artifacts push-images --missing-registry deploy  # push rocks to local registry (k8s only)
+opcli pytest run                                       # run all integration tests via tox
 ```
 
 ## Commands

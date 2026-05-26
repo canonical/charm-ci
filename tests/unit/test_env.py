@@ -102,7 +102,11 @@ class TestProvisionPrepare:
     def test_runs_concierge(self, tmp_path: Path) -> None:
         write_file(tmp_path / "concierge.yaml", "providers: {}\n")
 
-        with patch("opcli.core.provision.run_command") as mock_run:
+        with (
+            patch("opcli.core.provision.os.getuid", return_value=0),
+            patch("opcli.core.provision.shutil.which", return_value="/snap/bin/concierge"),
+            patch("opcli.core.provision.run_command") as mock_run,
+        ):
             provision_prepare(tmp_path)
 
         mock_run.assert_called_once_with(
@@ -117,7 +121,11 @@ class TestProvisionPrepare:
     def test_custom_concierge_file(self, tmp_path: Path) -> None:
         write_file(tmp_path / "concierge_juju4.yaml", "providers: {}\n")
 
-        with patch("opcli.core.provision.run_command") as mock_run:
+        with (
+            patch("opcli.core.provision.os.getuid", return_value=0),
+            patch("opcli.core.provision.shutil.which", return_value="/snap/bin/concierge"),
+            patch("opcli.core.provision.run_command") as mock_run,
+        ):
             provision_prepare(tmp_path, concierge_file="concierge_juju4.yaml")
 
         mock_run.assert_called_once_with(

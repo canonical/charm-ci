@@ -153,7 +153,7 @@ class TestSubprocessWrapper:
                 run_command(["nonexistent-binary"], stream=False)
 
             assert exc_info.value.returncode == 127  # noqa: PLR2004
-            assert "No such file" in exc_info.value.stderr
+            assert "'nonexistent-binary' not found" in exc_info.value.stderr
 
     def test_captured_timeout(self) -> None:
         with patch("opcli.core.subprocess.subprocess.run") as mock_run:
@@ -264,7 +264,8 @@ class TestSubprocessWrapper:
                 run_command(["spread"], interactive=True)
 
             assert exc_info.value.returncode == 127  # noqa: PLR2004
-            assert "No such file" in exc_info.value.stderr
+            assert "'spread' not found" in exc_info.value.stderr
+            assert "opcli install spread" in exc_info.value.stderr
 
     def test_interactive_other_oserror(self) -> None:
         with patch("opcli.core.subprocess.subprocess.run") as mock_run:
