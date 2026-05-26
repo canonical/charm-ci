@@ -362,11 +362,11 @@ charms:
 
         assert len(results) == 1
         assert len(results[0].releases) == 2  # noqa: PLR2004
-        # First two uploads are for registration (rev 41, 42)
-        # Next two uploads are the final releases (rev 43, 44)
-        assert results[0].releases[0].revision == 43  # noqa: PLR2004
+        # First upload is for registration (rev 41)
+        # Next two uploads are the final releases (rev 42, 43)
+        assert results[0].releases[0].revision == 42  # noqa: PLR2004
         assert results[0].releases[0].base == "ubuntu@22.04"
-        assert results[0].releases[1].revision == 44  # noqa: PLR2004
+        assert results[0].releases[1].revision == 43  # noqa: PLR2004
         assert results[0].releases[1].base == "ubuntu@24.04"
 
 

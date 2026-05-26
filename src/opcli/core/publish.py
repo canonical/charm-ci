@@ -179,12 +179,11 @@ def _print_dry_run_charm(  # noqa: PLR0913
 ) -> None:
     """Print dry-run output for a single charm."""
     if resource_map:
-        # Stage 1: Upload charm without resources to register definitions
+        # Stage 1: Upload ONE charm to register resource definitions
         out.write("  Stage 1: Register resource definitions\n")
-        for build in charm.builds:
-            if not build.path:
-                continue
-            cmd_reg: list[str] = ["charmcraft", "upload", build.path, "--format=json"]
+        first_build = charm.builds[0]
+        if first_build.path:
+            cmd_reg: list[str] = ["charmcraft", "upload", first_build.path, "--format=json"]
             out.write(f"    $ {shlex.join(cmd_reg)}\n")
 
         # Stage 2: Upload resources
@@ -276,12 +275,11 @@ def _publish_charm(
 
     # If resources exist, we need a two-stage upload
     if resource_map:
-        # Stage 1: Upload charm files without resource bindings to register definitions
+        # Stage 1: Upload ONE charm file to register resource definitions
+        # All builds share the same metadata, so one upload is sufficient
         with step(f"Registering resource definitions for charm '{charm.name}'"):
-            for build in charm.builds:
-                # Validated above: all builds have paths
-                path = cast(str, build.path)
-                _upload_charm_without_release(charm.name, path, root)
+            first_build_path = cast(str, charm.builds[0].path)
+            _upload_charm_without_release(charm.name, first_build_path, root)
 
         # Stage 2: Upload resources (CharmHub now knows about them)
         resource_flags = _upload_resources(charm, rocks_by_name, plan_resources, root)
@@ -494,7 +492,6 @@ def _upload_charm_without_release(charm_name: str, charm_path: str, root: Path) 
     result = run_command(cmd, cwd=str(root), stream=False)
     revision = _parse_revision(result.stdout, cmd)
     logger.debug("Uploaded charm '%s' (no release) → revision %d", charm_name, revision)
-    return revision
     return revision
 
 
