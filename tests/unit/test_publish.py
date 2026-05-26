@@ -391,6 +391,24 @@ class TestPublishDryRun:
         mock_run.assert_not_called()
         assert results == []
 
+    def test_output_contains_commands(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        root = _setup_project(tmp_path, _BUILD_YAML_LOCAL)
+
+        with patch("opcli.core.publish.run_command"):
+            artifacts_publish(root, channel="latest/edge", dry_run=True)
+
+        captured = capsys.readouterr()
+        # Dry-run writes to stderr
+        assert "k8s-charm" in captured.err
+        assert "machine-charm" in captured.err
+        assert "latest/edge" in captured.err
+        assert "charmcraft upload-resource" in captured.err
+        assert "charmcraft upload" in captured.err
+        assert "--image=" in captured.err
+        assert "k8s-rock-image" in captured.err
+
 
 class TestPublishUnfetchedError:
     """Charm with only artifact+run-id (not fetched) → ConfigurationError."""

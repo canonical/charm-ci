@@ -141,14 +141,23 @@ def _print_dry_run(
     channel: str,
     root: Path,
 ) -> None:
-    """Print what would be published without executing."""
-    out = sys.stderr
+    """Print what would be published without executing.
 
+    Runs through the same validation and resolution logic as the real
+    publish path to ensure consistency and surface errors early.
+    """
+    out = sys.stderr
     out.write("Dry run — the following would be published:\n\n")
 
     for charm in charms:
         out.write(f"{charm.name} → {channel}:\n")
 
+        # Validate builds (same check as _publish_charm)
+        if not charm.builds:
+            out.write(f"  ⚠ ERROR: no builds in {_ARTIFACTS_GENERATED_YAML}\n\n")
+            continue
+
+        # Resolve resources (same logic as _upload_resources)
         resource_map = plan_resources.get(charm.name, {})
         if resource_map:
             out.write("  Resources:\n")
@@ -158,29 +167,25 @@ def _print_dry_run(
                 )
                 source_desc = f"rock: {rock_name}" if rock_name else "upstream-source"
                 out.write(f"    {resource_name} ({source_desc}) → {image_ref}\n")
-                cmd = [
-                    "charmcraft",
-                    "upload-resource",
-                    charm.name,
-                    resource_name,
-                    f"--image={image_ref}",
-                    "--format=json",
-                ]
+                cmd = _build_upload_resource_cmd(charm.name, resource_name, image_ref)
                 out.write(f"    $ {shlex.join(cmd)}\n")
         else:
             out.write("  Resources: (none)\n")
 
+        # Validate and show charm files (same logic as _publish_charm loop)
         out.write("  Charm files:\n")
         for build in charm.builds:
-            if not build.path and build.artifact and build.run_id:
-                out.write(f"    {build.artifact} — NOT FETCHED (run-id: {build.run_id})\n")
+            if not build.path:
+                if build.artifact and build.run_id:
+                    out.write(f"    ⚠ {build.artifact} — NOT FETCHED (run-id: {build.run_id})\n")
+                else:
+                    out.write("    ⚠ ERROR: build has no path\n")
                 continue
+            charm_file = root / build.path
+            exists_marker = "" if charm_file.exists() else " ⚠ MISSING"
             base_str = f"{build.base} " if build.base else ""
-            out.write(f"    {build.path} ({base_str}{build.arch})\n")
-            cmd = ["charmcraft", "upload", build.path or "<unknown>", f"--release={channel}"]
-            if resource_map:
-                cmd.append("--resource=<name>:<rev>")
-            cmd.append("--format=json")
+            out.write(f"    {build.path} ({base_str}{build.arch}){exists_marker}\n")
+            cmd = _build_upload_charm_cmd(build.path, channel, resource_map)
             out.write(f"    $ {shlex.join(cmd)}\n")
 
         out.write("\n")
@@ -375,14 +380,7 @@ def _read_upstream_source(yaml_path: Path, resource_name: str) -> str | None:
 
 def _do_upload_resource(charm_name: str, resource_name: str, image_ref: str, root: Path) -> int:
     """Call charmcraft upload-resource and return the revision number."""
-    cmd = [
-        "charmcraft",
-        "upload-resource",
-        charm_name,
-        resource_name,
-        f"--image={image_ref}",
-        "--format=json",
-    ]
+    cmd = _build_upload_resource_cmd(charm_name, resource_name, image_ref)
     result = run_command(cmd, cwd=str(root), stream=False)
     revision = _parse_revision(result.stdout, cmd)
     status(f"Uploaded resource '{resource_name}' → revision {revision}")
@@ -402,13 +400,7 @@ def _upload_charm_file(
         msg = f"Charm file '{charm_path}' not found at {full_path}."
         raise DiscoveryError(msg)
 
-    cmd = [
-        "charmcraft",
-        "upload",
-        charm_path,
-        f"--release={channel}",
-        "--format=json",
-    ]
+    cmd = ["charmcraft", "upload", charm_path, f"--release={channel}", "--format=json"]
     for res_name, rev in resource_flags:
         cmd.append(f"--resource={res_name}:{rev}")
 
@@ -425,6 +417,28 @@ def _upload_charm_file(
 # ---------------------------------------------------------------------------
 
 _TRANSPORT_PREFIX_RE = "^[a-z][a-z0-9+.-]*:"
+
+
+def _build_upload_resource_cmd(charm_name: str, resource_name: str, image_ref: str) -> list[str]:
+    """Build the charmcraft upload-resource command."""
+    return [
+        "charmcraft",
+        "upload-resource",
+        charm_name,
+        resource_name,
+        f"--image={image_ref}",
+        "--format=json",
+    ]
+
+
+def _build_upload_charm_cmd(
+    charm_path: str, channel: str, resource_names: dict[str, str | None]
+) -> list[str]:
+    """Build the charmcraft upload command (with placeholder resource revisions)."""
+    cmd = ["charmcraft", "upload", charm_path, f"--release={channel}", "--format=json"]
+    for res_name in resource_names:
+        cmd.append(f"--resource={res_name}:<rev>")
+    return cmd
 
 
 def _add_transport_prefix(ref: str) -> str:
