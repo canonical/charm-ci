@@ -23,7 +23,7 @@ import shutil
 import socket
 from pathlib import Path
 
-from opcli.core.exceptions import ConfigurationError
+from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.progress import status
 from opcli.core.subprocess import run_command
 from opcli.core.yaml_io import dump_artifacts_build, dump_yaml, load_artifacts_build, load_yaml
@@ -58,7 +58,8 @@ def provision_prepare(
     self-hosted runners) without requiring manual edits to ``concierge.yaml``.
 
     Raises:
-        ConfigurationError: If the concierge file does not exist.
+        ConfigurationError: If the concierge file does not exist or
+            concierge is not installed.
         SubprocessError: If concierge exits non-zero.
     """
     concierge_path = root / concierge_file
@@ -66,13 +67,23 @@ def provision_prepare(
         msg = f"{concierge_file} not found. Create a concierge.yaml in the repository root."
         raise ConfigurationError(msg)
 
+    if not shutil.which("concierge"):
+        msg = "concierge is not installed. Install with: sudo snap install concierge --classic"
+        raise ConfigurationError(msg)
+
     if image_registry:
         _patch_concierge_image_registry(concierge_path, image_registry)
 
-    run_command(
-        ["concierge", "prepare", "-c", str(concierge_path)],
-        cwd=str(root),
-    )
+    try:
+        run_command(
+            ["concierge", "prepare", "-c", str(concierge_path)],
+            cwd=str(root),
+        )
+    except SubprocessError as exc:
+        if "sudo" in exc.stderr or "root" in exc.stderr:
+            msg = "concierge requires root privileges. Run with: sudo opcli env provision"
+            raise ConfigurationError(msg) from exc
+        raise
     status("Provisioning complete")
 
 

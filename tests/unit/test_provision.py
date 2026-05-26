@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from opcli.core.exceptions import ConfigurationError
+from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.provision import _patch_concierge_image_registry, provision_prepare
 from opcli.core.yaml_io import load_yaml
 
@@ -120,8 +120,11 @@ class TestPatchConciergeImageRegistry:
 class TestProvisionPrepareImageRegistry:
     """Tests for provision_prepare with --image-registry."""
 
+    @patch("opcli.core.provision.shutil.which", return_value="/snap/bin/concierge")
     @patch("opcli.core.provision.run_command")
-    def test_empty_image_registry_is_noop(self, mock_run: object, tmp_path: Path) -> None:
+    def test_empty_image_registry_is_noop(
+        self, mock_run: object, mock_which: object, tmp_path: Path
+    ) -> None:
         """Empty image_registry does not patch concierge.yaml."""
         concierge = tmp_path / "concierge.yaml"
         original_content = "providers:\n  lxd:\n    enable: true\n"
@@ -132,9 +135,10 @@ class TestProvisionPrepareImageRegistry:
         # File unchanged
         assert concierge.read_text() == original_content
 
+    @patch("opcli.core.provision.shutil.which", return_value="/snap/bin/concierge")
     @patch("opcli.core.provision.run_command")
     def test_image_registry_patches_before_concierge(
-        self, mock_run: object, tmp_path: Path
+        self, mock_run: object, mock_which: object, tmp_path: Path
     ) -> None:
         """Non-empty image_registry patches the file before running concierge."""
         concierge = tmp_path / "concierge.yaml"
@@ -154,3 +158,32 @@ class TestProvisionPrepareImageRegistry:
             provision_prepare(
                 tmp_path, concierge_file="missing.yaml", image_registry="https://mirror.test"
             )
+
+    @patch("opcli.core.provision.shutil.which", return_value=None)
+    @patch("opcli.core.provision.run_command")
+    def test_concierge_not_installed_raises(
+        self, mock_run: object, mock_which: object, tmp_path: Path
+    ) -> None:
+        """ConfigurationError when concierge binary is not on PATH."""
+        concierge = tmp_path / "concierge.yaml"
+        concierge.write_text("providers:\n  lxd:\n    enable: true\n")
+
+        with pytest.raises(ConfigurationError, match="concierge is not installed"):
+            provision_prepare(tmp_path)
+
+    @patch("opcli.core.provision.shutil.which", return_value="/snap/bin/concierge")
+    @patch("opcli.core.provision.run_command")
+    def test_concierge_sudo_error_rewrapped(
+        self, mock_run: object, mock_which: object, tmp_path: Path
+    ) -> None:
+        """ConfigurationError with sudo hint when concierge reports privilege error."""
+        concierge = tmp_path / "concierge.yaml"
+        concierge.write_text("providers:\n  lxd:\n    enable: true\n")
+        mock_run.side_effect = SubprocessError(
+            cmd=["concierge", "prepare"],
+            returncode=1,
+            stderr="this command should be run with `sudo`, or as `root`",
+        )
+
+        with pytest.raises(ConfigurationError, match="sudo opcli env provision"):
+            provision_prepare(tmp_path)
