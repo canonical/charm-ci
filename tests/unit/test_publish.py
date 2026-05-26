@@ -113,11 +113,18 @@ class TestPublishCharmWithRockFile:
             results = artifacts_publish(root, channel="latest/edge")
 
         # machine-charm: 1 upload (no resources)
-        # k8s-charm: 1 upload-resource + 1 upload
-        assert len(calls) == 3  # noqa: PLR2004
+        # k8s-charm: 1 upload (register), 1 upload-resource, 1 upload (with resource bindings)
+        assert len(calls) == 4  # noqa: PLR2004
+
+        # Check first k8s-charm upload (register resources - no release)
+        reg_cmd = calls[1]
+        assert "upload" in reg_cmd
+        assert "k8s-charm" in str(reg_cmd)
+        assert "--release=" not in " ".join(reg_cmd)
+        assert "--resource=" not in " ".join(reg_cmd)
 
         # Check upload-resource call
-        res_cmd = calls[1]
+        res_cmd = calls[2]
         assert "upload-resource" in res_cmd
         assert "k8s-charm" in res_cmd
         assert "k8s-rock-image" in res_cmd
@@ -126,7 +133,7 @@ class TestPublishCharmWithRockFile:
         assert "k8s-rock_amd64.rock" in image_arg
 
         # Check upload call for k8s-charm has --resource flag
-        charm_cmd = calls[2]
+        charm_cmd = calls[3]
         assert "upload" in charm_cmd
         assert "--resource=k8s-rock-image:5" in charm_cmd
         assert "--release=latest/edge" in charm_cmd
@@ -300,10 +307,15 @@ charms:
         (root / "artifacts.build.yaml").write_text(build_yaml)
         # charmcraft.yaml without upstream-source
         (root / "charmcraft.yaml").write_text("name: traefik-k8s\ntype: charm\n")
+        # Create the charm file so validation passes
+        (root / "traefik-k8s_ubuntu-20.04-amd64.charm").write_bytes(b"fake")
 
         with (
             pytest.raises(ConfigurationError, match="no 'upstream-source'"),
-            patch("opcli.core.publish.run_command"),
+            patch(
+                "opcli.core.publish.run_command",
+                return_value=_mock_result(stdout=json.dumps({"revision": 1})),
+            ),
         ):
             artifacts_publish(root, channel="latest/edge")
 
@@ -350,9 +362,11 @@ charms:
 
         assert len(results) == 1
         assert len(results[0].releases) == 2  # noqa: PLR2004
-        assert results[0].releases[0].revision == 41  # noqa: PLR2004
+        # First two uploads are for registration (rev 41, 42)
+        # Next two uploads are the final releases (rev 43, 44)
+        assert results[0].releases[0].revision == 43  # noqa: PLR2004
         assert results[0].releases[0].base == "ubuntu@22.04"
-        assert results[0].releases[1].revision == 42  # noqa: PLR2004
+        assert results[0].releases[1].revision == 44  # noqa: PLR2004
         assert results[0].releases[1].base == "ubuntu@24.04"
 
 
@@ -373,10 +387,10 @@ class TestPublishCharmFilter:
         with patch("opcli.core.publish.run_command", side_effect=fake_run):
             results = artifacts_publish(root, channel="latest/edge", charm_names=["k8s-charm"])
 
-        # Only k8s-charm published (1 upload-resource + 1 upload)
+        # Only k8s-charm published (1 register + 1 upload-resource + 1 upload with bindings)
         assert len(results) == 1
         assert results[0].charm_name == "k8s-charm"
-        assert len(calls) == 2  # noqa: PLR2004
+        assert len(calls) == 3  # noqa: PLR2004
 
 
 class TestPublishDryRun:
@@ -458,7 +472,10 @@ charms:
 
         with (
             pytest.raises(DiscoveryError, match="not found"),
-            patch("opcli.core.publish.run_command"),
+            patch(
+                "opcli.core.publish.run_command",
+                return_value=_mock_result(stdout=json.dumps({"revision": 1})),
+            ),
         ):
             artifacts_publish(root, channel="latest/edge")
 
@@ -542,7 +559,10 @@ charms:
 
         with (
             pytest.raises(DiscoveryError, match="has no builds"),
-            patch("opcli.core.publish.run_command"),
+            patch(
+                "opcli.core.publish.run_command",
+                return_value=_mock_result(stdout=json.dumps({"revision": 1})),
+            ),
         ):
             artifacts_publish(root, channel="latest/edge")
 
@@ -728,7 +748,10 @@ charms:
 
         with (
             pytest.raises(ConfigurationError, match="Failed to parse"),
-            patch("opcli.core.publish.run_command"),
+            patch(
+                "opcli.core.publish.run_command",
+                return_value=_mock_result(stdout=json.dumps({"revision": 1})),
+            ),
         ):
             artifacts_publish(root, channel="latest/edge")
 
@@ -822,6 +845,9 @@ charms:
 
         with (
             pytest.raises(ConfigurationError, match="must be a string"),
-            patch("opcli.core.publish.run_command"),
+            patch(
+                "opcli.core.publish.run_command",
+                return_value=_mock_result(stdout=json.dumps({"revision": 1})),
+            ),
         ):
             artifacts_publish(root, channel="latest/edge")
