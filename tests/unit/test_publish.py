@@ -17,21 +17,6 @@ from opcli.core.subprocess import SubprocessResult
 #  Helpers
 # ---------------------------------------------------------------------------
 
-_ARTIFACTS_YAML = """\
-version: 1
-rocks:
-  - name: k8s-rock
-    rockcraft-yaml: k8s-rock/rockcraft.yaml
-charms:
-  - name: machine-charm
-    charmcraft-yaml: machine-charm/charmcraft.yaml
-  - name: k8s-charm
-    charmcraft-yaml: k8s-charm/charmcraft.yaml
-    resources:
-      k8s-rock-image:
-        type: oci-image
-        rock: k8s-rock
-"""
 
 _BUILD_YAML_LOCAL = """\
 version: 1
@@ -82,9 +67,8 @@ charms:
 """
 
 
-def _setup_project(tmp_path: Path, artifacts_yaml: str, build_yaml: str) -> Path:
+def _setup_project(tmp_path: Path, build_yaml: str) -> Path:
     """Write manifest files to tmp_path and return it as root."""
-    (tmp_path / "artifacts.yaml").write_text(artifacts_yaml)
     (tmp_path / "artifacts.build.yaml").write_text(build_yaml)
     # Create directories for charm paths
     (tmp_path / "k8s-rock").mkdir(exist_ok=True)
@@ -112,7 +96,7 @@ class TestPublishCharmWithRockFile:
     """Charm with a local .rock file → upload-resource → upload charm."""
 
     def test_happy_path(self, tmp_path: Path) -> None:
-        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_LOCAL)
+        root = _setup_project(tmp_path, _BUILD_YAML_LOCAL)
 
         upload_resource_response = json.dumps({"revision": 5})
         upload_charm_response = json.dumps({"revision": 42})
@@ -164,7 +148,7 @@ class TestPublishCharmWithRockImage:
     """Charm with registry image ref → upload-resource with docker:// transport."""
 
     def test_uses_docker_transport(self, tmp_path: Path) -> None:
-        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_REGISTRY)
+        root = _setup_project(tmp_path, _BUILD_YAML_REGISTRY)
 
         calls: list[list[str]] = []
 
@@ -202,14 +186,7 @@ charms:
         base: "ubuntu@24.04"
         path: machine-charm/machine-charm_ubuntu-24.04-amd64.charm
 """
-        artifacts_yaml = """\
-version: 1
-rocks: []
-charms:
-  - name: machine-charm
-    charmcraft-yaml: machine-charm/charmcraft.yaml
-"""
-        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+        root = _setup_project(tmp_path, build_yaml)
 
         calls: list[list[str]] = []
 
@@ -358,20 +335,7 @@ charms:
         type: oci-image
         rock: k8s-rock
 """
-        artifacts_yaml = """\
-version: 1
-rocks:
-  - name: k8s-rock
-    rockcraft-yaml: k8s-rock/rockcraft.yaml
-charms:
-  - name: k8s-charm
-    charmcraft-yaml: k8s-charm/charmcraft.yaml
-    resources:
-      k8s-rock-image:
-        type: oci-image
-        rock: k8s-rock
-"""
-        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+        root = _setup_project(tmp_path, build_yaml)
 
         call_count = {"upload": 0}
 
@@ -396,7 +360,7 @@ class TestPublishCharmFilter:
     """--charm flag filters which charm gets published."""
 
     def test_only_publishes_selected(self, tmp_path: Path) -> None:
-        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_LOCAL)
+        root = _setup_project(tmp_path, _BUILD_YAML_LOCAL)
 
         calls: list[list[str]] = []
 
@@ -419,7 +383,7 @@ class TestPublishDryRun:
     """--dry-run prints plan without executing commands."""
 
     def test_no_commands_executed(self, tmp_path: Path) -> None:
-        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_LOCAL)
+        root = _setup_project(tmp_path, _BUILD_YAML_LOCAL)
 
         with patch("opcli.core.publish.run_command") as mock_run:
             results = artifacts_publish(root, channel="latest/edge", dry_run=True)
@@ -443,14 +407,7 @@ charms:
         artifact: build-charm-amd64
         run-id: "12345"
 """
-        artifacts_yaml = """\
-version: 1
-rocks: []
-charms:
-  - name: k8s-charm
-    charmcraft-yaml: k8s-charm/charmcraft.yaml
-"""
-        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+        root = _setup_project(tmp_path, build_yaml)
 
         with (
             pytest.raises(ConfigurationError, match="un-fetched CI artifacts"),
@@ -479,18 +436,7 @@ charms:
         type: oci-image
         rock: k8s-rock
 """
-        artifacts_yaml = """\
-version: 1
-rocks: []
-charms:
-  - name: k8s-charm
-    charmcraft-yaml: k8s-charm/charmcraft.yaml
-    resources:
-      k8s-rock-image:
-        type: oci-image
-        rock: k8s-rock
-"""
-        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+        root = _setup_project(tmp_path, build_yaml)
 
         with (
             pytest.raises(DiscoveryError, match="not found"),
@@ -505,15 +451,9 @@ charms:
 
 
 class TestMissingManifestFiles:
-    """Error when artifacts.yaml or artifacts.build.yaml is missing."""
-
-    def test_missing_artifacts_yaml(self, tmp_path: Path) -> None:
-        (tmp_path / "artifacts.build.yaml").write_text("version: 1\nrocks: []\ncharms: []\n")
-        with pytest.raises(ConfigurationError, match=r"artifacts\.yaml not found"):
-            artifacts_publish(tmp_path, channel="latest/edge")
+    """Error when artifacts.build.yaml is missing."""
 
     def test_missing_build_yaml(self, tmp_path: Path) -> None:
-        (tmp_path / "artifacts.yaml").write_text("version: 1\nrocks: []\ncharms: []\n")
         with pytest.raises(ConfigurationError, match=r"artifacts\.build\.yaml not found"):
             artifacts_publish(tmp_path, channel="latest/edge")
 
@@ -522,7 +462,7 @@ class TestUnknownCharmFilter:
     """Error when --charm specifies a name not in the build manifest."""
 
     def test_unknown_charm_name(self, tmp_path: Path) -> None:
-        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_LOCAL)
+        root = _setup_project(tmp_path, _BUILD_YAML_LOCAL)
         with pytest.raises(ConfigurationError, match="Charm 'nonexistent' not found"):
             artifacts_publish(root, channel="latest/edge", charm_names=["nonexistent"])
 
@@ -531,7 +471,7 @@ class TestMalformedCharmcraftOutput:
     """Handle malformed JSON from charmcraft gracefully."""
 
     def test_invalid_json(self, tmp_path: Path) -> None:
-        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_REGISTRY)
+        root = _setup_project(tmp_path, _BUILD_YAML_REGISTRY)
 
         def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
             if "upload-resource" in cmd:
@@ -545,7 +485,7 @@ class TestMalformedCharmcraftOutput:
             artifacts_publish(root, channel="latest/edge")
 
     def test_missing_revision_key(self, tmp_path: Path) -> None:
-        root = _setup_project(tmp_path, _ARTIFACTS_YAML, _BUILD_YAML_REGISTRY)
+        root = _setup_project(tmp_path, _BUILD_YAML_REGISTRY)
 
         def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
             if "upload-resource" in cmd:
@@ -580,7 +520,7 @@ charms:
         type: oci-image
         rock: k8s-rock
 """
-        root = _setup_project(tmp_path, _ARTIFACTS_YAML, build_yaml)
+        root = _setup_project(tmp_path, build_yaml)
 
         with (
             pytest.raises(DiscoveryError, match="has no builds"),
@@ -702,14 +642,7 @@ charms:
     charmcraft-yaml: machine-charm/charmcraft.yaml
     builds: []
 """
-        artifacts_yaml = """\
-version: 1
-rocks: []
-charms:
-  - name: machine-charm
-    charmcraft-yaml: machine-charm/charmcraft.yaml
-"""
-        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+        root = _setup_project(tmp_path, build_yaml)
 
         with (
             pytest.raises(ConfigurationError, match="has no builds"),
@@ -732,14 +665,7 @@ charms:
       - arch: amd64
         path: machine-charm/nonexistent.charm
 """
-        artifacts_yaml = """\
-version: 1
-rocks: []
-charms:
-  - name: machine-charm
-    charmcraft-yaml: machine-charm/charmcraft.yaml
-"""
-        root = _setup_project(tmp_path, artifacts_yaml, build_yaml)
+        root = _setup_project(tmp_path, build_yaml)
 
         with (
             pytest.raises(DiscoveryError, match="not found"),
@@ -814,7 +740,7 @@ charms:
         type: oci-image
         rock: k8s-rock
 """
-        root = _setup_project(tmp_path, _ARTIFACTS_YAML, build_yaml)
+        root = _setup_project(tmp_path, build_yaml)
 
         calls: list[list[str]] = []
 

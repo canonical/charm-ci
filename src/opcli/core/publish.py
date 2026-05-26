@@ -21,12 +21,11 @@ from ruamel.yaml.error import YAMLError
 from opcli.core.exceptions import ConfigurationError, DiscoveryError
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
-from opcli.core.yaml_io import load_artifacts_build, load_artifacts_plan, load_yaml
+from opcli.core.yaml_io import load_artifacts_build, load_yaml
 from opcli.models.artifacts_build import ArtifactsGenerated, GeneratedCharm, GeneratedRock
 
 logger = logging.getLogger(__name__)
 
-_ARTIFACTS_YAML = "artifacts.yaml"
 _ARTIFACTS_GENERATED_YAML = "artifacts.build.yaml"
 
 
@@ -77,12 +76,8 @@ def artifacts_publish(
             un-fetched CI artifacts.
         DiscoveryError: If a resource references a rock not in the build manifest.
     """
-    plan_path = root / _ARTIFACTS_YAML
     gen_path = root / _ARTIFACTS_GENERATED_YAML
 
-    if not plan_path.exists():
-        msg = f"{_ARTIFACTS_YAML} not found in {root}. Run 'opcli artifacts init' first."
-        raise ConfigurationError(msg)
     if not gen_path.exists():
         msg = (
             f"{_ARTIFACTS_GENERATED_YAML} not found in {root}. "
@@ -90,18 +85,18 @@ def artifacts_publish(
         )
         raise ConfigurationError(msg)
 
-    plan = load_artifacts_plan(plan_path)
     generated = load_artifacts_build(gen_path)
 
     charms = _select_charms(generated, charm_names)
     rocks_by_name = {r.name: r for r in generated.rocks}
 
-    # Build a map of resource declarations from artifacts.yaml (has rock: links)
+    # Build resource→rock mapping from the build manifest
     plan_resources: dict[str, dict[str, str | None]] = {}
-    for charm_plan in plan.charms:
-        plan_resources[charm_plan.name] = {
-            res_name: res.rock for res_name, res in charm_plan.resources.items()
-        }
+    for charm in charms:
+        if charm.resources:
+            plan_resources[charm.name] = {
+                res_name: res.rock for res_name, res in charm.resources.items()
+            }
 
     if dry_run:
         _print_dry_run(charms, rocks_by_name, plan_resources, channel, root)
