@@ -55,7 +55,7 @@ opcli spread run -- integration-test-local:ubuntu-24.04:tests/integration/run:te
 opcli artifacts init
 opcli artifacts build
 opcli install tox              # install tox + tox-uv (if not already present)
-opcli env provision            # provision with concierge
+sudo opcli env provision       # provision with concierge
 opcli artifacts push-images --missing-registry deploy  # deploy registry + push rocks
 opcli pytest run -- -k test_charm   # run tests via tox
 ```
