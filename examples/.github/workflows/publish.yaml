@@ -1,0 +1,33 @@
+# Example: manually publish charms to CharmHub.
+#
+# This workflow can be triggered manually via the GitHub Actions UI
+# or API to publish to a specific CharmHub channel.
+#
+# Prerequisites:
+#   - CHARMHUB_TOKEN secret configured in the repository
+#   - Integration tests must have passed for the commit being published
+
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "CharmHub channel (e.g. latest/edge, 1.0/stable)"
+        required: true
+        type: string
+      dry-run:
+        description: "Validate without uploading"
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    uses: canonical/charm-ci/.github/workflows/publish-artifacts.yml@main
+    with:
+      channel: ${{ inputs.channel }}
+      dry-run: ${{ inputs.dry-run }}
+    permissions:
+      contents: read
+      actions: read
+    secrets: inherit
