@@ -144,7 +144,8 @@ def _print_dry_run(
     """Print what would be published without executing.
 
     Runs through the same validation and resolution logic as the real
-    publish path to ensure consistency and surface errors early.
+    publish path.  Raises the same exceptions on invalid state — if
+    dry-run succeeds, the real run should too (modulo network errors).
     """
     out = sys.stderr
     out.write("Dry run — the following would be published:\n\n")
@@ -152,10 +153,10 @@ def _print_dry_run(
     for charm in charms:
         out.write(f"{charm.name} → {channel}:\n")
 
-        # Validate builds (same check as _publish_charm)
+        # Same validation as _publish_charm
         if not charm.builds:
-            out.write(f"  ⚠ ERROR: no builds in {_ARTIFACTS_GENERATED_YAML}\n\n")
-            continue
+            msg = f"Charm '{charm.name}' has no builds in {_ARTIFACTS_GENERATED_YAML}."
+            raise ConfigurationError(msg)
 
         # Resolve resources (same logic as _upload_resources)
         resource_map = plan_resources.get(charm.name, {})
@@ -172,19 +173,27 @@ def _print_dry_run(
         else:
             out.write("  Resources: (none)\n")
 
-        # Validate and show charm files (same logic as _publish_charm loop)
+        # Validate charm files (same checks as _publish_charm loop)
         out.write("  Charm files:\n")
         for build in charm.builds:
             if not build.path:
                 if build.artifact and build.run_id:
-                    out.write(f"    ⚠ {build.artifact} — NOT FETCHED (run-id: {build.run_id})\n")
-                else:
-                    out.write("    ⚠ ERROR: build has no path\n")
-                continue
+                    msg = (
+                        f"Charm '{charm.name}' has un-fetched CI artifacts "
+                        f"(artifact: {build.artifact}, run-id: {build.run_id}). "
+                        f"Run 'opcli artifacts fetch --run-id {build.run_id}' first."
+                    )
+                    raise ConfigurationError(msg)
+                msg = f"Charm '{charm.name}' build has no path."
+                raise ConfigurationError(msg)
+
             charm_file = root / build.path
-            exists_marker = "" if charm_file.exists() else " ⚠ MISSING"
+            if not charm_file.exists():
+                msg = f"Charm file '{build.path}' not found at {charm_file}."
+                raise DiscoveryError(msg)
+
             base_str = f"{build.base} " if build.base else ""
-            out.write(f"    {build.path} ({base_str}{build.arch}){exists_marker}\n")
+            out.write(f"    {build.path} ({base_str}{build.arch})\n")
             cmd = _build_upload_charm_cmd(build.path, channel, resource_map)
             out.write(f"    $ {shlex.join(cmd)}\n")
 
@@ -375,7 +384,15 @@ def _read_upstream_source(yaml_path: Path, resource_name: str) -> str | None:
         raise ConfigurationError(msg)
 
     upstream = resource.get("upstream-source")
-    return str(upstream) if upstream else None
+    if not upstream:
+        return None
+    if not isinstance(upstream, str):
+        msg = (
+            f"'upstream-source' for resource '{resource_name}' in {yaml_path} "
+            f"must be a string, got {type(upstream).__name__}."
+        )
+        raise ConfigurationError(msg)
+    return upstream
 
 
 def _do_upload_resource(charm_name: str, resource_name: str, image_ref: str, root: Path) -> int:
@@ -470,4 +487,12 @@ def _parse_revision(stdout: str, cmd: list[str]) -> int:
         )
         raise ConfigurationError(msg)
 
-    return int(parsed["revision"])
+    revision = parsed["revision"]
+    if not isinstance(revision, int):
+        msg = (
+            f"Expected integer 'revision' from {shlex.join(cmd)}, "
+            f"got {type(revision).__name__}: {revision!r}"
+        )
+        raise ConfigurationError(msg)
+
+    return revision

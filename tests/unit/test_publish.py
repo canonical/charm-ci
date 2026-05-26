@@ -774,3 +774,54 @@ charms:
         res_cmd = next(c for c in calls if "upload-resource" in c)
         image_arg = next(a for a in res_cmd if a.startswith("--image="))
         assert image_arg == "--image=docker://ghcr.io/canonical/charm-ci/k8s-rock:abc-amd64"
+
+
+class TestNonIntegerRevision:
+    """charmcraft returns non-integer revision → ConfigurationError."""
+
+    def test_string_revision(self, tmp_path: Path) -> None:
+        root = _setup_project(tmp_path, _BUILD_YAML_REGISTRY)
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": "not-a-number"}))
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with (
+            pytest.raises(ConfigurationError, match="Expected integer"),
+            patch("opcli.core.publish.run_command", side_effect=fake_run),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+class TestNonStringUpstreamSource:
+    """upstream-source that is not a string → ConfigurationError."""
+
+    def test_list_upstream_source(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks: []
+charms:
+  - name: my-charm
+    charmcraft-yaml: charmcraft.yaml
+    builds:
+      - arch: amd64
+        path: my-charm.charm
+    resources:
+      img:
+        type: oci-image
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        (root / "charmcraft.yaml").write_text(
+            "name: my-charm\ntype: charm\nresources:\n"
+            "  img:\n    type: oci-image\n"
+            "    upstream-source:\n      - item1\n      - item2\n"
+        )
+        (root / "my-charm.charm").write_bytes(b"fake")
+
+        with (
+            pytest.raises(ConfigurationError, match="must be a string"),
+            patch("opcli.core.publish.run_command"),
+        ):
+            artifacts_publish(root, channel="latest/edge")
