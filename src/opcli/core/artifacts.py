@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML
 from opcli.core.discovery import discover_artifacts
 from opcli.core.env import current_arch
 from opcli.core.exceptions import (
@@ -53,9 +54,6 @@ from opcli.models.artifacts_build import (
 )
 
 logger = logging.getLogger(__name__)
-
-_ARTIFACTS_YAML = "artifacts.yaml"
-_ARTIFACTS_GENERATED_YAML = "artifacts.build.yaml"
 
 
 _PACK_COMMANDS: dict[str, list[str]] = {
@@ -122,9 +120,9 @@ def artifacts_init(root: Path, *, force: bool = False) -> Path:
     Raises:
         ConfigurationError: If the file already exists and *force* is False.
     """
-    dest = root / _ARTIFACTS_YAML
+    dest = root / ARTIFACTS_YAML
     if dest.exists() and not force:
-        msg = f"{_ARTIFACTS_YAML} already exists. Use --force to overwrite."
+        msg = f"{ARTIFACTS_YAML} already exists. Use --force to overwrite."
         raise ConfigurationError(msg)
 
     plan = discover_artifacts(root)
@@ -162,9 +160,9 @@ def artifacts_path(
         DiscoveryError: If no artifacts match, or if multiple artifacts match
             without a *name* filter.
     """
-    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    gen_path = root / ARTIFACTS_BUILD_YAML
     if not gen_path.exists():
-        msg = f"{_ARTIFACTS_GENERATED_YAML} not found. Run 'opcli artifacts build' first."
+        msg = f"{ARTIFACTS_BUILD_YAML} not found. Run 'opcli artifacts build' first."
         raise ConfigurationError(msg)
 
     generated = load_artifacts_build(gen_path)
@@ -182,9 +180,9 @@ def artifacts_path(
 
     if not paths:
         if name:
-            msg = f"No built artifact named '{name}' found in {_ARTIFACTS_GENERATED_YAML}."
+            msg = f"No built artifact named '{name}' found in {ARTIFACTS_BUILD_YAML}."
         else:
-            msg = f"No built artifacts with local paths found in {_ARTIFACTS_GENERATED_YAML}."
+            msg = f"No built artifacts with local paths found in {ARTIFACTS_BUILD_YAML}."
         raise DiscoveryError(msg)
 
     if not name and len(paths) > 1 and artifact_type == "charm":
@@ -273,9 +271,9 @@ def artifacts_build(
         ConfigurationError: If ``artifacts.yaml`` does not exist.
         OpcliError: If a build fails or no output file is found.
     """
-    plan_path = root / _ARTIFACTS_YAML
+    plan_path = root / ARTIFACTS_YAML
     if not plan_path.exists():
-        msg = f"{_ARTIFACTS_YAML} not found. Run 'opcli artifacts init' first."
+        msg = f"{ARTIFACTS_YAML} not found. Run 'opcli artifacts init' first."
         raise ConfigurationError(msg)
 
     plan = load_artifacts_plan(plan_path)
@@ -327,7 +325,7 @@ def artifacts_build(
         snaps=gen_snaps,
     )
 
-    dest = root / _ARTIFACTS_GENERATED_YAML
+    dest = root / ARTIFACTS_BUILD_YAML
 
     # When a filter is active and an existing build file exists, merge new
     # entries into the previous results so unrelated artifacts are preserved.
@@ -357,9 +355,9 @@ def artifacts_matrix(root: Path) -> dict[str, list[dict[str, object]]]:
     Raises:
         ConfigurationError: If ``artifacts.yaml`` does not exist.
     """
-    plan_path = root / _ARTIFACTS_YAML
+    plan_path = root / ARTIFACTS_YAML
     if not plan_path.exists():
-        msg = f"{_ARTIFACTS_YAML} not found. Run 'opcli artifacts init' first."
+        msg = f"{ARTIFACTS_YAML} not found. Run 'opcli artifacts init' first."
         raise ConfigurationError(msg)
 
     plan = load_artifacts_plan(plan_path)
@@ -459,7 +457,7 @@ def artifacts_collect(root: Path, partial_paths: list[Path]) -> Path:
         charms=merged_charms,
         snaps=merged_snaps,
     )
-    dest = root / _ARTIFACTS_GENERATED_YAML
+    dest = root / ARTIFACTS_BUILD_YAML
     dump_artifacts_build(generated, dest)
     logger.info("Wrote merged %s", dest)
     return dest
@@ -482,9 +480,9 @@ def artifacts_localize(root: Path) -> int:
         ConfigurationError: If ``artifacts.build.yaml`` is not found or
             if any artifact with a CI reference has no matching local file.
     """
-    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    gen_path = root / ARTIFACTS_BUILD_YAML
     if not gen_path.exists():
-        msg = f"{_ARTIFACTS_GENERATED_YAML} not found."
+        msg = f"{ARTIFACTS_BUILD_YAML} not found."
         raise ConfigurationError(msg)
 
     generated = load_artifacts_build(gen_path)
@@ -571,7 +569,7 @@ def artifacts_fetch(  # noqa: C901, PLR0912
         "--dir",
         str(root),
     ]
-    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    gen_path = root / ARTIFACTS_BUILD_YAML
     if wait:
         _gh_download_with_wait(generated_cmd, str(root), run_id, repo, dest=gen_path)
     else:
@@ -579,7 +577,7 @@ def artifacts_fetch(  # noqa: C901, PLR0912
 
     if not gen_path.exists():
         msg = (
-            f"{_ARTIFACTS_GENERATED_YAML} not found after download. "
+            f"{ARTIFACTS_BUILD_YAML} not found after download. "
             "Ensure the CI run completed its build phase."
         )
         raise ConfigurationError(msg)

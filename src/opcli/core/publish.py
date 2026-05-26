@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ruamel.yaml.error import YAMLError
 
+from opcli.core.constants import ARTIFACTS_BUILD_YAML
 from opcli.core.exceptions import ConfigurationError, DiscoveryError
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
@@ -25,8 +26,6 @@ from opcli.core.yaml_io import load_artifacts_build, load_yaml
 from opcli.models.artifacts_build import ArtifactsGenerated, GeneratedCharm, GeneratedRock
 
 logger = logging.getLogger(__name__)
-
-_ARTIFACTS_GENERATED_YAML = "artifacts.build.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -76,11 +75,11 @@ def artifacts_publish(
             un-fetched CI artifacts.
         DiscoveryError: If a resource references a rock not in the build manifest.
     """
-    gen_path = root / _ARTIFACTS_GENERATED_YAML
+    gen_path = root / ARTIFACTS_BUILD_YAML
 
     if not gen_path.exists():
         msg = (
-            f"{_ARTIFACTS_GENERATED_YAML} not found in {root}. "
+            f"{ARTIFACTS_BUILD_YAML} not found in {root}. "
             "Run 'opcli artifacts build' or 'opcli artifacts fetch' first."
         )
         raise ConfigurationError(msg)
@@ -126,7 +125,7 @@ def _select_charms(
     for name in charm_names:
         if name not in available:
             msg = (
-                f"Charm '{name}' not found in {_ARTIFACTS_GENERATED_YAML}. "
+                f"Charm '{name}' not found in {ARTIFACTS_BUILD_YAML}. "
                 f"Available: {', '.join(sorted(available))}"
             )
             raise ConfigurationError(msg)
@@ -155,7 +154,7 @@ def _print_dry_run(
 
         # Same validation as _publish_charm
         if not charm.builds:
-            msg = f"Charm '{charm.name}' has no builds in {_ARTIFACTS_GENERATED_YAML}."
+            msg = f"Charm '{charm.name}' has no builds in {ARTIFACTS_BUILD_YAML}."
             raise ConfigurationError(msg)
 
         # Resolve resources (same logic as _upload_resources)
@@ -209,7 +208,7 @@ def _publish_charm(
 ) -> PublishResult:
     """Publish a single charm: upload resources, then upload+release charm files."""
     if not charm.builds:
-        msg = f"Charm '{charm.name}' has no builds in {_ARTIFACTS_GENERATED_YAML}."
+        msg = f"Charm '{charm.name}' has no builds in {ARTIFACTS_BUILD_YAML}."
         raise ConfigurationError(msg)
 
     resource_flags = _upload_resources(charm, rocks_by_name, plan_resources, root)
@@ -291,13 +290,13 @@ def _resolve_rock_image_ref(
     if rock is None:
         msg = (
             f"Resource references rock '{rock_name}' but it was not found in "
-            f"{_ARTIFACTS_GENERATED_YAML}. Available rocks: "
+            f"{ARTIFACTS_BUILD_YAML}. Available rocks: "
             f"{', '.join(sorted(rocks_by_name.keys())) or '(none)'}"
         )
         raise DiscoveryError(msg)
 
     if not rock.builds:
-        msg = f"Rock '{rock_name}' has no builds in {_ARTIFACTS_GENERATED_YAML}."
+        msg = f"Rock '{rock_name}' has no builds in {ARTIFACTS_BUILD_YAML}."
         raise DiscoveryError(msg)
 
     # Prefer image: (registry ref) over file: (local archive).
