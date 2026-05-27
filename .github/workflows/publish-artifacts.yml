@@ -1,0 +1,154 @@
+name: Publish Artifacts
+
+# Reusable workflow that publishes charms (and their resources) to CharmHub.
+#
+# Strategy: find the last *successful* integration-test run for the same
+# commit tree hash — guaranteeing the published code was tested — then
+# download its build artifacts and publish.
+#
+# Call from your operator repository:
+#
+#   jobs:
+#     publish:
+#       uses: canonical/charm-ci/.github/workflows/publish-artifacts.yml@main
+#       with:
+#         channel: latest/edge
+#       permissions:
+#         contents: read
+#         actions: read
+#       secrets: inherit
+#
+# Requires CHARMHUB_TOKEN secret in the calling repository (passed as CHARMCRAFT_AUTH).
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: "CharmHub channel to publish to (e.g. latest/edge, 2.0/stable)"
+        type: string
+        required: true
+      integration-workflow-name:
+        description: "Filename of the integration-test workflow to search runs for"
+        type: string
+        default: "integration-test.yml"
+      working-directory:
+        description: "Directory containing artifacts.yaml (relative to workspace root)"
+        type: string
+        default: "."
+      dry-run:
+        description: "Validate publish without actually uploading to CharmHub"
+        type: boolean
+        default: false
+
+jobs:
+  # ── Job 1: find the integration-test run to publish from ───────────────────
+  resolve-run:
+    name: Resolve run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run-id: ${{ steps.resolve.outputs.run-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get workflow version
+        id: workflow-version
+        uses: canonical/get-workflow-version-action@v1
+        with:
+          repository-name: canonical/charm-ci
+          file-name: publish-artifacts.yml
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout charm-ci scripts
+        uses: actions/checkout@v4
+        with:
+          repository: canonical/charm-ci
+          ref: ${{ steps.workflow-version.outputs.sha }}
+          path: .charm-ci
+
+      - name: Resolve integration-test run
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_WORKFLOW_FILE: ${{ inputs.integration-workflow-name }}
+        run: .charm-ci/.github/scripts/resolve-run.sh
+
+  # ── Job 2: fetch artifacts and publish ─────────────────────────────────────
+  publish:
+    name: Publish
+    needs: resolve-run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get workflow version
+        id: workflow-version
+        uses: canonical/get-workflow-version-action@v1
+        with:
+          repository-name: canonical/charm-ci
+          file-name: publish-artifacts.yml
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout charm-ci scripts
+        uses: actions/checkout@v4
+        with:
+          repository: canonical/charm-ci
+          ref: ${{ steps.workflow-version.outputs.sha }}
+          path: .charm-ci
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install opcli
+        run: |
+          if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
+            uv tool install "${GITHUB_WORKSPACE}"
+          else
+            uv tool install "${GITHUB_WORKSPACE}/.charm-ci"
+          fi
+
+      - name: Install charmcraft
+        run: sudo snap install charmcraft --classic
+
+      - name: Fetch build artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          opcli artifacts fetch \
+            --run-id "${{ needs.resolve-run.outputs.run-id }}" \
+            --wait
+
+      - name: Publish to CharmHub
+        env:
+          CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CHARMCRAFT_AUTH}" ]; then
+            echo "::error::CHARMHUB_TOKEN secret is not set. Required for publishing."
+            exit 1
+          fi
+
+          DRY_RUN_FLAG=""
+          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+
+          # shellcheck disable=SC2086
+          opcli artifacts publish \
+            --channel "${INPUT_CHANNEL}" \
+            ${DRY_RUN_FLAG}

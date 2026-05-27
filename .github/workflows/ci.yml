@@ -46,9 +46,15 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest tests/unit/ --cov=opcli --cov-fail-under=85 -q
 
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck .github/scripts/*.sh
+
   required-status-checks:
     name: Required Status Checks
-    needs: [license-check, lint, type-check, test]
+    needs: [license-check, lint, type-check, test, shellcheck]
     runs-on: ubuntu-latest
     if: always() && !cancelled()
     steps:
@@ -57,3 +63,4 @@ jobs:
           [ "${{ needs.lint.result }}" = "success" ] || (echo "lint failed" && false)
           [ "${{ needs.type-check.result }}" = "success" ] || (echo "type-check failed" && false)
           [ "${{ needs.test.result }}" = "success" ] || (echo "test failed" && false)
+          [ "${{ needs.shellcheck.result }}" = "success" ] || (echo "shellcheck failed" && false)
