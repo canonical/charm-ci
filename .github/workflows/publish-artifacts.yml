@@ -16,8 +16,10 @@ name: Publish Artifacts
 #       permissions:
 #         contents: read
 #         actions: read
-#       secrets: inherit
+#       secrets:
+#         CHARMHUB_TOKEN: ${{ secrets.CHARMHUB_TOKEN }}
 #
+# Same-org callers may use `secrets: inherit` instead of explicit passing.
 # Requires CHARMHUB_TOKEN secret in the calling repository (passed as CHARMCRAFT_AUTH).
 
 on:
@@ -39,6 +41,10 @@ on:
         description: "Validate publish without actually uploading to CharmHub"
         type: boolean
         default: false
+    secrets:
+      CHARMHUB_TOKEN:
+        description: "CharmHub auth token (from charmcraft login --export). Required for cross-org callers; same-org callers may use secrets: inherit."
+        required: true
 
 jobs:
   # ── Job 1: find the integration-test run to publish from ───────────────────
