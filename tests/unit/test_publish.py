@@ -112,8 +112,8 @@ class TestPublishCharmWithRockFile:
         with patch("opcli.core.publish.run_command", side_effect=fake_run):
             results = artifacts_publish(root, channel="latest/edge")
 
-        # machine-charm: 1 upload (no resources)
-        # k8s-charm: 1 upload (register), 1 upload-resource, 1 upload (with resource bindings)
+        # machine-charm: 1 upload+release (no resources)
+        # k8s-charm: 1 upload (no release), 1 upload-resource, 1 release
         assert len(calls) == 4  # noqa: PLR2004
 
         # Check first k8s-charm upload (register resources - no release)
@@ -132,11 +132,12 @@ class TestPublishCharmWithRockFile:
         image_arg = next(a for a in res_cmd if a.startswith("--image="))
         assert "k8s-rock_amd64.rock" in image_arg
 
-        # Check upload call for k8s-charm has --resource flag
+        # Check release call for k8s-charm has --resource flag
         charm_cmd = calls[3]
-        assert "upload" in charm_cmd
+        assert "release" in charm_cmd
         assert "--resource=k8s-rock-image:5" in charm_cmd
-        assert "--release=latest/edge" in charm_cmd
+        assert "--channel=latest/edge" in charm_cmd
+        assert "--revision=42" in charm_cmd
 
         # Verify results
         assert len(results) == 2  # noqa: PLR2004
@@ -362,11 +363,10 @@ charms:
 
         assert len(results) == 1
         assert len(results[0].releases) == 2  # noqa: PLR2004
-        # First upload is for registration (rev 41)
-        # Next two uploads are the final releases (rev 42, 43)
-        assert results[0].releases[0].revision == 42  # noqa: PLR2004
+        # Both builds uploaded (rev 41, 42), then released
+        assert results[0].releases[0].revision == 41  # noqa: PLR2004
         assert results[0].releases[0].base == "ubuntu@22.04"
-        assert results[0].releases[1].revision == 43  # noqa: PLR2004
+        assert results[0].releases[1].revision == 42  # noqa: PLR2004
         assert results[0].releases[1].base == "ubuntu@24.04"
 
 
@@ -387,7 +387,7 @@ class TestPublishCharmFilter:
         with patch("opcli.core.publish.run_command", side_effect=fake_run):
             results = artifacts_publish(root, channel="latest/edge", charm_names=["k8s-charm"])
 
-        # Only k8s-charm published (1 register + 1 upload-resource + 1 upload with bindings)
+        # Only k8s-charm published (1 upload + 1 upload-resource + 1 release)
         assert len(results) == 1
         assert results[0].charm_name == "k8s-charm"
         assert len(calls) == 3  # noqa: PLR2004
@@ -420,6 +420,7 @@ class TestPublishDryRun:
         assert "latest/edge" in captured.err
         assert "charmcraft upload-resource" in captured.err
         assert "charmcraft upload" in captured.err
+        assert "charmcraft release" in captured.err
         assert "--image=" in captured.err
         assert "k8s-rock-image" in captured.err
 

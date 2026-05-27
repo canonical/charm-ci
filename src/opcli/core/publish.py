@@ -179,12 +179,15 @@ def _print_dry_run_charm(  # noqa: PLR0913
 ) -> None:
     """Print dry-run output for a single charm."""
     if resource_map:
-        # Stage 1: Upload ONE charm to register resource definitions
-        out.write("  Stage 1: Register resource definitions\n")
-        first_build = charm.builds[0]
-        if first_build.path:
-            cmd_reg: list[str] = ["charmcraft", "upload", first_build.path, "--format=json"]
-            out.write(f"    $ {shlex.join(cmd_reg)}\n")
+        # Stage 1: Upload all charm builds (no release)
+        out.write("  Stage 1: Upload charm builds (registers resources)\n")
+        for build in charm.builds:
+            _validate_build_path(charm.name, build, root)
+            path = cast(str, build.path)
+            base_str = f"{build.base} " if build.base else ""
+            out.write(f"    {path} ({base_str}{build.arch})\n")
+            cmd_upload: list[str] = ["charmcraft", "upload", path, "--format=json"]
+            out.write(f"    $ {shlex.join(cmd_upload)}\n")
 
         # Stage 2: Upload resources
         out.write("  Stage 2: Upload resources\n")
@@ -195,24 +198,24 @@ def _print_dry_run_charm(  # noqa: PLR0913
             cmd = _build_upload_resource_cmd(charm.name, resource_name, image_ref)
             out.write(f"    $ {shlex.join(cmd)}\n")
 
-        # Stage 3: Upload charm with resource bindings and release
-        out.write("  Stage 3: Upload charm with resource bindings and release\n")
+        # Stage 3: Release each revision to channel
+        out.write("  Stage 3: Release to channel with resource bindings\n")
+        for build in charm.builds:
+            path = cast(str, build.path)
+            base_str = f"{build.base} " if build.base else ""
+            out.write(f"    {path} ({base_str}{build.arch})\n")
+            cmd_release = _build_release_cmd(charm.name, channel, resource_map)
+            out.write(f"    $ {shlex.join(cmd_release)}\n")
     else:
         out.write("  Resources: (none)\n")
-
-    # Validate charm files (same checks as _publish_charm loop)
-    if not resource_map:
         out.write("  Charm files:\n")
-
-    for build in charm.builds:
-        _validate_build_path(charm.name, build, root)
-        # _validate_build_path ensures build.path is not None
-        path = cast(str, build.path)
-
-        base_str = f"{build.base} " if build.base else ""
-        out.write(f"    {path} ({base_str}{build.arch})\n")
-        cmd = _build_upload_charm_cmd(path, channel, resource_map)
-        out.write(f"    $ {shlex.join(cmd)}\n")
+        for build in charm.builds:
+            _validate_build_path(charm.name, build, root)
+            path = cast(str, build.path)
+            base_str = f"{build.base} " if build.base else ""
+            out.write(f"    {path} ({base_str}{build.arch})\n")
+            cmd = _build_upload_charm_cmd(path, channel, resource_map)
+            out.write(f"    $ {shlex.join(cmd)}\n")
 
 
 def _validate_build_path(charm_name: str, build: CharmOutput, root: Path) -> None:
@@ -241,72 +244,83 @@ def _publish_charm(
     channel: str,
     root: Path,
 ) -> PublishResult:
-    """Publish a single charm: upload charm to register resources, upload resources, re-upload with bindings.
+    """Publish a single charm: upload, upload resources, then release.
 
-    CharmHub requires charms to be uploaded before resources can be uploaded — the
-    charm's metadata defines which resources exist. The workflow is:
-    1. Upload charm without resource bindings (registers resource definitions)
-    2. Upload all resources (CharmHub now recognizes resource names)
-    3. Upload charm again with --resource flags (binds resources + releases to channel)
+    CharmHub requires a charm revision to be uploaded before resources can be
+    uploaded — the charm's metadata defines which resources exist.  The workflow:
+    1. Upload all charm builds (no release) → get revision numbers
+    2. Upload resources (CharmHub now recognizes resource names from step 1)
+    3. Release each revision to channel with resource bindings
 
-    If the charm has no resources, only step 3 is performed.
+    If the charm has no resources, steps are collapsed: upload with --release
+    directly (single command per build, matching charming-actions behaviour).
     """
     if not charm.builds:
         msg = f"Charm '{charm.name}' has no builds in {ARTIFACTS_BUILD_YAML}."
         raise ConfigurationError(msg)
 
-    # Validate all builds have paths
-    for build in charm.builds:
-        if not build.path:
-            if build.artifact and build.run_id:
-                msg = (
-                    f"Charm '{charm.name}' has un-fetched CI artifacts "
-                    f"(artifact: {build.artifact}, run-id: {build.run_id}). "
-                    f"Run 'opcli artifacts fetch --run-id {build.run_id}' first."
-                )
-                raise ConfigurationError(msg)
-            msg = f"Charm '{charm.name}' build has no path."
-            raise ConfigurationError(msg)
+    _validate_build_paths(charm)
 
     resource_map = plan_resources.get(charm.name, {})
 
-    releases: list[ReleaseEntry] = []
-    resources_map: dict[str, int]
-
-    # If resources exist, we need a two-stage upload
     if resource_map:
-        # Stage 1: Upload ONE charm file to register resource definitions
-        # All builds share the same metadata, so one upload is sufficient
-        with step(f"Registering resource definitions for charm '{charm.name}'"):
-            first_build_path = cast(str, charm.builds[0].path)
-            _upload_charm_without_release(charm.name, first_build_path, root)
+        return _publish_charm_with_resources(
+            charm, rocks_by_name, plan_resources, resource_map, channel, root
+        )
+    return _publish_charm_without_resources(charm, channel, root)
 
-        # Stage 2: Upload resources (CharmHub now knows about them)
-        resource_flags = _upload_resources(charm, rocks_by_name, plan_resources, root)
 
-        # Stage 3: Upload charm again with resource bindings and release to channel
-        for build in charm.builds:
-            # Validated above: all builds have paths
-            path = cast(str, build.path)
-            entry = _upload_charm_file(charm.name, path, channel, resource_flags, root)
-            releases.append(ReleaseEntry(revision=entry, base=build.base, arch=build.arch))
+def _publish_charm_with_resources(  # noqa: PLR0913
+    charm: GeneratedCharm,
+    rocks_by_name: dict[str, GeneratedRock],
+    plan_resources: dict[str, dict[str, str | None]],
+    resource_map: dict[str, str | None],
+    channel: str,
+    root: Path,
+) -> PublishResult:
+    """Publish a charm that has resources: upload → resources → release."""
+    # Stage 1: Upload all charm builds (no release) to register resource definitions
+    build_revisions: list[tuple[int, CharmOutput]] = []
+    for build in charm.builds:
+        path = cast(str, build.path)
+        with step(f"Uploading '{path}' (registering resources)"):
+            revision = _upload_charm_no_release(charm.name, path, root)
+        build_revisions.append((revision, build))
 
-        resources_map = dict(resource_flags)
-    else:
-        # No resources — upload and release directly
-        for build in charm.builds:
-            # Validated above: all builds have paths
-            path = cast(str, build.path)
-            entry = _upload_charm_file(charm.name, path, channel, [], root)
-            releases.append(ReleaseEntry(revision=entry, base=build.base, arch=build.arch))
+    # Stage 2: Upload resources (CharmHub now knows about them)
+    resource_flags = _upload_resources(charm, rocks_by_name, plan_resources, root)
 
-        resources_map = {}
+    # Stage 3: Release each charm revision to channel with resource bindings
+    releases: list[ReleaseEntry] = []
+    for revision, build in build_revisions:
+        _release_charm(charm.name, revision, channel, resource_flags, root)
+        releases.append(ReleaseEntry(revision=revision, base=build.base, arch=build.arch))
 
     return PublishResult(
         charm_name=charm.name,
         channel=channel,
         releases=releases,
-        resources=resources_map,
+        resources=dict(resource_flags),
+    )
+
+
+def _publish_charm_without_resources(
+    charm: GeneratedCharm,
+    channel: str,
+    root: Path,
+) -> PublishResult:
+    """Publish a charm with no resources: upload + release in one step."""
+    releases: list[ReleaseEntry] = []
+    for build in charm.builds:
+        path = cast(str, build.path)
+        entry = _upload_and_release_charm(charm.name, path, channel, [], root)
+        releases.append(ReleaseEntry(revision=entry, base=build.base, arch=build.arch))
+
+    return PublishResult(
+        charm_name=charm.name,
+        channel=channel,
+        releases=releases,
+        resources={},
     )
 
 
@@ -475,12 +489,27 @@ def _do_upload_resource(charm_name: str, resource_name: str, image_ref: str, roo
     return revision
 
 
-def _upload_charm_without_release(charm_name: str, charm_path: str, root: Path) -> int:
+def _validate_build_paths(charm: GeneratedCharm) -> None:
+    """Validate all builds have paths, raising ConfigurationError if not."""
+    for build in charm.builds:
+        if not build.path:
+            if build.artifact and build.run_id:
+                msg = (
+                    f"Charm '{charm.name}' has un-fetched CI artifacts "
+                    f"(artifact: {build.artifact}, run-id: {build.run_id}). "
+                    f"Run 'opcli artifacts fetch --run-id {build.run_id}' first."
+                )
+                raise ConfigurationError(msg)
+            msg = f"Charm '{charm.name}' build has no path."
+            raise ConfigurationError(msg)
+
+
+def _upload_charm_no_release(charm_name: str, charm_path: str, root: Path) -> int:
     """Upload a .charm file without releasing it. Returns revision.
 
-    This is used to register the charm and its resource definitions before
-    uploading resources.  CharmHub won't accept resource uploads until the
-    charm binary has been uploaded at least once.
+    Used to register the charm revision (and its resource definitions) before
+    uploading resources.  CharmHub requires a charm revision to exist before
+    ``upload-resource`` will accept resource uploads.
     """
     full_path = root / charm_path
     if not full_path.exists():
@@ -488,21 +517,42 @@ def _upload_charm_without_release(charm_name: str, charm_path: str, root: Path) 
         raise DiscoveryError(msg)
 
     cmd = ["charmcraft", "upload", charm_path, "--format=json"]
-
     result = run_command(cmd, cwd=str(root), stream=False)
     revision = _parse_revision(result.stdout, cmd)
-    logger.debug("Uploaded charm '%s' (no release) → revision %d", charm_name, revision)
+    status(f"Uploaded charm '{charm_name}' → revision {revision}")
     return revision
 
 
-def _upload_charm_file(
+def _release_charm(
+    charm_name: str,
+    revision: int,
+    channel: str,
+    resource_flags: list[tuple[str, int]],
+    root: Path,
+) -> None:
+    """Release an already-uploaded charm revision to a channel with resource bindings."""
+    cmd = [
+        "charmcraft",
+        "release",
+        charm_name,
+        f"--revision={revision}",
+        f"--channel={channel}",
+    ]
+    for res_name, rev in resource_flags:
+        cmd.append(f"--resource={res_name}:{rev}")
+
+    with step(f"Releasing '{charm_name}' revision {revision} to {channel}"):
+        run_command(cmd, cwd=str(root), stream=False)
+
+
+def _upload_and_release_charm(
     charm_name: str,
     charm_path: str,
     channel: str,
     resource_flags: list[tuple[str, int]],
     root: Path,
 ) -> int:
-    """Upload a .charm file and release it to the channel. Returns revision."""
+    """Upload a .charm file and release it to the channel in one step. Returns revision."""
     full_path = root / charm_path
     if not full_path.exists():
         msg = f"Charm file '{charm_path}' not found at {full_path}."
@@ -544,6 +594,16 @@ def _build_upload_charm_cmd(
 ) -> list[str]:
     """Build the charmcraft upload command (with placeholder resource revisions)."""
     cmd = ["charmcraft", "upload", charm_path, f"--release={channel}", "--format=json"]
+    for res_name in resource_names:
+        cmd.append(f"--resource={res_name}:<rev>")
+    return cmd
+
+
+def _build_release_cmd(
+    charm_name: str, channel: str, resource_names: dict[str, str | None]
+) -> list[str]:
+    """Build the charmcraft release command (with placeholder revision/resource revisions)."""
+    cmd = ["charmcraft", "release", charm_name, "--revision=<rev>", f"--channel={channel}"]
     for res_name in resource_names:
         cmd.append(f"--resource={res_name}:<rev>")
     return cmd
