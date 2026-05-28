@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from opcli.core.discovery import discover_artifacts
-from opcli.core.exceptions import DiscoveryError
+from opcli.core.exceptions import DiscoveryError, ValidationError
 from opcli.core.yaml_io import (
     dump_artifacts_build,
     dump_artifacts_plan,
@@ -233,7 +233,7 @@ class TestYamlIO:
     def test_load_invalid_yaml_raises(self, tmp_path: Path) -> None:
         path = tmp_path / "bad.yaml"
         path.write_text("- just a list\n")
-        with pytest.raises(ValueError, match="YAML mapping"):
+        with pytest.raises(ValidationError, match="YAML mapping"):
             load_artifacts_plan(path)
 
     def test_dump_creates_parent_dirs(self, tmp_path: Path) -> None:
