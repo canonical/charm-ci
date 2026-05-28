@@ -88,7 +88,7 @@ jobs:
     needs: resolve-run
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       actions: read
     defaults:
       run:
@@ -137,6 +137,7 @@ jobs:
             --wait
 
       - name: Publish to CharmHub
+        id: publish
         env:
           CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
           INPUT_CHANNEL: ${{ inputs.channel }}
@@ -157,4 +158,30 @@ jobs:
           # shellcheck disable=SC2086
           opcli artifacts publish \
             --channel "${INPUT_CHANNEL}" \
-            ${DRY_RUN_FLAG}
+            --json \
+            ${DRY_RUN_FLAG} > publish-results.json
+
+      - name: Create GitHub Release
+        if: inputs.dry-run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+
+          TAG="publish/$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+
+          BODY="## Published to ${INPUT_CHANNEL}"$'\n\n'
+          while IFS= read -r line; do
+            charm_name=$(echo "$line" | jq -r '.charm_name')
+            releases=$(echo "$line" | jq -r '.releases[] | "rev \(.revision) (\(.base // "unknown") \(.arch))"')
+            resources=$(echo "$line" | jq -r '
+              if (.resources | length) > 0
+              then " — resources: " + ([.resources | to_entries[] | "\(.key):\(.value)"] | join(", "))
+              else "" end')
+            BODY+="**${charm_name}** — ${releases}${resources}"$'\n'
+          done < <(jq -c '.[]' publish-results.json)
+
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "$TAG" --notes "$BODY"
