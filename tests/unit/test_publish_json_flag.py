@@ -58,3 +58,11 @@ class TestPublishJsonFlag:
         result = runner.invoke(app, ["publish", "--channel", "latest/edge", "--json"])
         assert result.exit_code == 0
         assert json.loads(result.output) == []
+
+    @patch("opcli.commands.artifacts.artifacts_publish", side_effect=_fake_publish)
+    def test_json_flag_with_dry_run(self, mock_publish: object) -> None:
+        result = runner.invoke(app, ["publish", "--channel", "latest/edge", "--json", "--dry-run"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data) == 1
+        assert data[0]["charm_name"] == "my-charm"

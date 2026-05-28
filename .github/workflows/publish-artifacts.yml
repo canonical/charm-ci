@@ -166,4 +166,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_CHANNEL: ${{ inputs.channel }}
-        run: .charm-ci/.github/scripts/create-publish-release.sh
+        run: ${GITHUB_WORKSPACE}/.charm-ci/.github/scripts/create-publish-release.sh

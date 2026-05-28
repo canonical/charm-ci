@@ -15,8 +15,26 @@ if [ ! -f publish-results.json ]; then
   exit 1
 fi
 
+# Validate JSON integrity (guards against stdout contamination)
+if ! jq empty publish-results.json 2>/dev/null; then
+  echo "::error::publish-results.json is not valid JSON"
+  exit 1
+fi
+
 CHANNEL_SLUG="${INPUT_CHANNEL//\//-}"
 TAG="publish/$(date -u +%Y%m%d)-${CHANNEL_SLUG}-$(git rev-parse --short HEAD)"
+
+# Skip if tag already exists (workflow retry)
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+  echo "Tag $TAG already exists — skipping release creation (likely a retry)."
+  exit 0
+fi
+
+# Skip if no charms were published
+if [ "$(jq 'length' publish-results.json)" -eq 0 ]; then
+  echo "No charms published — skipping release creation."
+  exit 0
+fi
 
 BODY="## Published to ${INPUT_CHANNEL}"$'\n\n'
 while IFS= read -r line; do
