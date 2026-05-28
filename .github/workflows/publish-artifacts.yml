@@ -166,24 +166,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_CHANNEL: ${{ inputs.channel }}
-        run: |
-          set -euo pipefail
-
-          CHANNEL_SLUG="${INPUT_CHANNEL//\//-}"
-          TAG="publish/$(date -u +%Y%m%d)-${CHANNEL_SLUG}-$(git rev-parse --short HEAD)"
-
-          BODY="## Published to ${INPUT_CHANNEL}"$'\n\n'
-          while IFS= read -r line; do
-            charm_name=$(echo "$line" | jq -r '.charm_name')
-            resources=$(echo "$line" | jq -r '
-              if (.resources | length) > 0
-              then " — resources: " + ([.resources | to_entries[] | "\(.key):\(.value)"] | join(", "))
-              else "" end')
-            while IFS= read -r rel; do
-              BODY+="**${charm_name}** — ${rel}${resources}"$'\n'
-            done < <(echo "$line" | jq -r '.releases[] | "rev \(.revision) (\(.base // "unknown") \(.arch))"')
-          done < <(jq -c '.[]' publish-results.json)
-
-          git tag "$TAG"
-          git push origin "$TAG"
-          gh release create "$TAG" --title "$TAG" --notes "$BODY"
+        run: .charm-ci/.github/scripts/create-publish-release.sh
