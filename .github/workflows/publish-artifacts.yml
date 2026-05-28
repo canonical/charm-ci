@@ -14,7 +14,7 @@ name: Publish Artifacts
 #       with:
 #         channel: latest/edge
 #       permissions:
-#         contents: read
+#         contents: write
 #         actions: read
 #       secrets:
 #         CHARMHUB_TOKEN: ${{ secrets.CHARMHUB_TOKEN }}
@@ -169,17 +169,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          TAG="publish/$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+          CHANNEL_SLUG="${INPUT_CHANNEL//\//-}"
+          TAG="publish/$(date -u +%Y%m%d)-${CHANNEL_SLUG}-$(git rev-parse --short HEAD)"
 
           BODY="## Published to ${INPUT_CHANNEL}"$'\n\n'
           while IFS= read -r line; do
             charm_name=$(echo "$line" | jq -r '.charm_name')
-            releases=$(echo "$line" | jq -r '.releases[] | "rev \(.revision) (\(.base // "unknown") \(.arch))"')
             resources=$(echo "$line" | jq -r '
               if (.resources | length) > 0
               then " — resources: " + ([.resources | to_entries[] | "\(.key):\(.value)"] | join(", "))
               else "" end')
-            BODY+="**${charm_name}** — ${releases}${resources}"$'\n'
+            while IFS= read -r rel; do
+              BODY+="**${charm_name}** — ${rel}${resources}"$'\n'
+            done < <(echo "$line" | jq -r '.releases[] | "rev \(.revision) (\(.base // "unknown") \(.arch))"')
           done < <(jq -c '.[]' publish-results.json)
 
           git tag "$TAG"
