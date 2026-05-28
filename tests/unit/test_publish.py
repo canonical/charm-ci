@@ -10,7 +10,12 @@ from unittest.mock import patch
 import pytest
 
 from opcli.core.exceptions import ConfigurationError, DiscoveryError
-from opcli.core.publish import artifacts_publish
+from opcli.core.publish import (
+    PublishResult,
+    ReleaseEntry,
+    artifacts_publish,
+    publish_results_to_dicts,
+)
 from opcli.core.subprocess import SubprocessResult
 
 # ---------------------------------------------------------------------------
@@ -852,3 +857,71 @@ charms:
             ),
         ):
             artifacts_publish(root, channel="latest/edge")
+
+
+# ---------------------------------------------------------------------------
+#  Tests for publish_results_to_dicts
+# ---------------------------------------------------------------------------
+
+
+class TestPublishResultsToDicts:
+    """Tests for the JSON serialization helper."""
+
+    def test_empty_results(self) -> None:
+        assert publish_results_to_dicts([]) == []
+
+    def test_single_charm_no_resources(self) -> None:
+        results = [
+            PublishResult(
+                charm_name="my-charm",
+                channel="latest/edge",
+                releases=[ReleaseEntry(revision=7, base="ubuntu@22.04", arch="amd64")],
+            )
+        ]
+        expected = [
+            {
+                "charm_name": "my-charm",
+                "channel": "latest/edge",
+                "releases": [{"revision": 7, "base": "ubuntu@22.04", "arch": "amd64"}],
+                "resources": {},
+            }
+        ]
+        assert publish_results_to_dicts(results) == expected
+
+    def test_multi_charm_with_resources(self) -> None:
+        results = [
+            PublishResult(
+                charm_name="indico",
+                channel="latest/edge",
+                releases=[
+                    ReleaseEntry(revision=12, base="ubuntu@22.04", arch="amd64"),
+                    ReleaseEntry(revision=13, base="ubuntu@24.04", arch="amd64"),
+                ],
+                resources={"redis-image": 5, "postgres-image": 3},
+            ),
+            PublishResult(
+                charm_name="indico-redis",
+                channel="latest/edge",
+                releases=[ReleaseEntry(revision=5, base=None, arch="amd64")],
+            ),
+        ]
+        dicts = publish_results_to_dicts(results)
+        assert len(dicts) == len(results)
+        assert dicts[0]["charm_name"] == "indico"
+        assert dicts[0]["resources"] == {"redis-image": 5, "postgres-image": 3}
+        assert dicts[1]["releases"][0]["base"] is None
+
+    def test_json_roundtrip(self) -> None:
+        """Verify the output is JSON-serializable."""
+        results = [
+            PublishResult(
+                charm_name="test",
+                channel="2.0/stable",
+                releases=[ReleaseEntry(revision=1, base="ubuntu@22.04", arch="arm64")],
+                resources={"img": 10},
+            )
+        ]
+        serialized = json.dumps(publish_results_to_dicts(results))
+        parsed = json.loads(serialized)
+        assert parsed[0]["charm_name"] == "test"
+        assert parsed[0]["resources"]["img"] == parsed[0]["resources"]["img"]

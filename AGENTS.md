@@ -73,6 +73,17 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 
 ---
 
+## CLI output model
+
+opcli follows a two-tier output convention:
+
+- **Data commands** (`artifacts matrix`, `spread jobs`, `spread expand`, `artifacts path`) — always emit structured output (JSON/YAML) to stdout. These exist solely to produce machine-readable data.
+- **Action commands** (`artifacts publish`, `artifacts build`, `spread run`) — print human-readable status to stdout by default. Use `--json` to opt into structured JSON output for CI consumption.
+
+This mirrors the `gh` CLI pattern: action commands are human-first; `--json` switches to machine-parseable output.
+
+---
+
 ## Spread privilege model
 
 Spread **always** runs prepare/execute/restore scripts as root, regardless of the `username` field in the backend config. From spread docs: "In all cases the end result is the same: a system that executes scripts as root."

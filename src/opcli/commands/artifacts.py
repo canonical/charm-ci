@@ -20,7 +20,7 @@ from opcli.core.artifacts import (
 )
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.provision import provision_load
-from opcli.core.publish import artifacts_publish
+from opcli.core.publish import artifacts_publish, publish_results_to_dicts
 
 app = typer.Typer(
     help="Discover and build charms, rocks, and snaps.",
@@ -206,6 +206,10 @@ def publish(
         bool,
         typer.Option("--dry-run", help="Show what would be published without executing."),
     ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output structured JSON results to stdout."),
+    ] = False,
 ) -> None:
     """Upload charms and resources to CharmHub.
 
@@ -218,12 +222,15 @@ def publish(
     results = artifacts_publish(
         Path.cwd(), channel=channel, charm_names=charm or None, dry_run=dry_run
     )
-    for r in results:
-        typer.echo(f"Published {r.charm_name} to {r.channel}:")
-        for entry in r.releases:
-            base_str = f"{entry.base} " if entry.base else ""
-            res_str = ""
-            if r.resources:
-                bindings = ", ".join(f"{k}:{v}" for k, v in r.resources.items())
-                res_str = f" — resources: {bindings}"
-            typer.echo(f"  rev {entry.revision} ({base_str}{entry.arch}){res_str}")
+    if json_output:
+        typer.echo(json.dumps(publish_results_to_dicts(results)))
+    else:
+        for r in results:
+            typer.echo(f"Published {r.charm_name} to {r.channel}:")
+            for entry in r.releases:
+                base_str = f"{entry.base} " if entry.base else ""
+                res_str = ""
+                if r.resources:
+                    bindings = ", ".join(f"{k}:{v}" for k, v in r.resources.items())
+                    res_str = f" — resources: {bindings}"
+                typer.echo(f"  rev {entry.revision} ({base_str}{entry.arch}){res_str}")

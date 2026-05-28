@@ -58,6 +58,21 @@ class PublishResult:
     resources: dict[str, int] = field(default_factory=dict)
 
 
+def publish_results_to_dicts(results: list[PublishResult]) -> list[dict[str, object]]:
+    """Serialize publish results to a JSON-compatible list of dicts."""
+    return [
+        {
+            "charm_name": r.charm_name,
+            "channel": r.channel,
+            "releases": [
+                {"revision": e.revision, "base": e.base, "arch": e.arch} for e in r.releases
+            ],
+            "resources": r.resources,
+        }
+        for r in results
+    ]
+
+
 def artifacts_publish(
     root: Path,
     *,

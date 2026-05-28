@@ -14,7 +14,7 @@ name: Publish Artifacts
 #       with:
 #         channel: latest/edge
 #       permissions:
-#         contents: read
+#         contents: write
 #         actions: read
 #       secrets:
 #         CHARMHUB_TOKEN: ${{ secrets.CHARMHUB_TOKEN }}
@@ -88,7 +88,7 @@ jobs:
     needs: resolve-run
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       actions: read
     defaults:
       run:
@@ -137,6 +137,7 @@ jobs:
             --wait
 
       - name: Publish to CharmHub
+        id: publish
         env:
           CHARMCRAFT_AUTH: ${{ secrets.CHARMHUB_TOKEN }}
           INPUT_CHANNEL: ${{ inputs.channel }}
@@ -157,4 +158,12 @@ jobs:
           # shellcheck disable=SC2086
           opcli artifacts publish \
             --channel "${INPUT_CHANNEL}" \
-            ${DRY_RUN_FLAG}
+            --json \
+            ${DRY_RUN_FLAG} > publish-results.json
+
+      - name: Create GitHub Release
+        if: inputs.dry-run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+        run: ${GITHUB_WORKSPACE}/.charm-ci/.github/scripts/create-publish-release.sh
