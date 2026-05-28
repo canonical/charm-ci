@@ -21,8 +21,7 @@ if ! jq empty publish-results.json 2>/dev/null; then
   exit 1
 fi
 
-CHANNEL_SLUG="${INPUT_CHANNEL//\//-}"
-TAG="publish/$(date -u +%Y%m%dT%H%M%S)-${CHANNEL_SLUG}-$(git rev-parse --short HEAD)"
+TAG="publish/$(date -u +%Y%m%dT%H%M%S)-$(git rev-parse --short HEAD)"
 
 # Skip if no charms were published
 if [ "$(jq 'length' publish-results.json)" -eq 0 ]; then
