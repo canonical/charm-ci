@@ -22,13 +22,7 @@ if ! jq empty publish-results.json 2>/dev/null; then
 fi
 
 CHANNEL_SLUG="${INPUT_CHANNEL//\//-}"
-TAG="publish/$(date -u +%Y%m%d)-${CHANNEL_SLUG}-$(git rev-parse --short HEAD)"
-
-# Skip if tag already exists (workflow retry)
-if git rev-parse "$TAG" >/dev/null 2>&1; then
-  echo "Tag $TAG already exists — skipping release creation (likely a retry)."
-  exit 0
-fi
+TAG="publish/$(date -u +%Y%m%dT%H%M%S)-${CHANNEL_SLUG}-$(git rev-parse --short HEAD)"
 
 # Skip if no charms were published
 if [ "$(jq 'length' publish-results.json)" -eq 0 ]; then
