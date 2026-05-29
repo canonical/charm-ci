@@ -112,7 +112,7 @@ jobs:
         env:
           CI: ""
           OPCLI_GIT_REF: ${{ github.sha }}
-        run: opcli spread run -- -vv integration-test-local:ubuntu-24.04:tests/integration/run:test_k8s_charm
+        run: opcli spread run -- -vv integration-test-local:ubuntu-24.04:build/tests/integration/run:test_k8s_charm
 
   # ── Gate job (always reports) ────────────────────────────────────────────────
   # Required by branch protection. Passes when integration jobs succeed or are

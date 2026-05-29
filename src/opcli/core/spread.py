@@ -20,6 +20,7 @@ uses ``reroot`` to locate the actual project tree one level up.
 import json
 import logging
 import posixpath
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -40,7 +41,9 @@ logger = logging.getLogger(__name__)
 
 _SPREAD_YAML = "spread.yaml"
 _TASK_YAML_REL = "tests/integration/run/task.yaml"
+_BUILD_DIR = "build"
 _VIRTUAL_BACKEND = "integration-test"
+_INTEGRATION_SUITES_KEY = "integration-suites"
 
 
 # ---------------------------------------------------------------------------
@@ -58,37 +61,43 @@ _TASK_YAML_CONTENT = (
     "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && ${PYTEST_CMD}\"\n"
 )
 
+_TASK_YAML_CONTENT_SUITE = (
+    "summary: integration tests\n"
+    "\n"
+    "execute: |\n"
+    '    cd "${SPREAD_PATH}"\n'
+    '    PYTEST_CMD=$(opcli pytest expand --suite "$OPCLI_SUITE"'
+    ' -e "${TOX_ENV:-integration}"'
+    ' -- --model testing --keep-models -k "$MODULE") || exit 1\n'
+    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}/${OPCLI_CWD}' && ${PYTEST_CMD}\"\n"
+)
 
-def spread_init(root: Path, *, force: bool = False) -> tuple[Path, Path]:
-    """Generate ``spread.yaml`` and ``tests/integration/run/task.yaml``.
+
+def spread_init(root: Path, *, force: bool = False) -> tuple[Path, Path | None]:
+    """Generate ``spread.yaml`` with ``integration-suites``.
+
+    No ``task.yaml`` is generated — it is materialized at expand/run time
+    into the ``build/`` directory.
 
     Returns:
-        Tuple of (spread.yaml path, task.yaml path).
+        Tuple of (spread.yaml path, None).
 
     Raises:
         ConfigurationError: If files exist and *force* is ``False``.
     """
     spread_path = root / _SPREAD_YAML
-    task_path = root / _TASK_YAML_REL
 
-    if not force:
-        for p in (spread_path, task_path):
-            if p.exists():
-                msg = f"{p.name} already exists. Use --force to overwrite."
-                raise ConfigurationError(msg)
+    if not force and spread_path.exists():
+        msg = f"{spread_path.name} already exists. Use --force to overwrite."
+        raise ConfigurationError(msg)
 
     project_name = root.resolve().name
-    modules = _discover_test_modules(root)
 
-    spread_content = _generate_spread_yaml(project_name, modules)
+    spread_content = _generate_spread_yaml(project_name)
     spread_path.write_text(spread_content)
     logger.info("Wrote %s", spread_path)
 
-    task_path.parent.mkdir(parents=True, exist_ok=True)
-    task_path.write_text(_TASK_YAML_CONTENT)
-    logger.info("Wrote %s", task_path)
-
-    return spread_path, task_path
+    return spread_path, None
 
 
 def spread_expand(
@@ -101,11 +110,39 @@ def spread_expand(
     The output is for display / debugging; it does **not** include the
     ``reroot`` field that ``spread_run`` injects.
 
+    Also prints generated task.yaml paths and content to stderr so the
+    user can see (and reproduce) the full spread setup.
+
     Raises:
         ConfigurationError: If ``spread.yaml`` is missing or malformed.
     """
     expanded = _expand(root, ci=ci)
+    _emit_task_yaml_info(expanded)
     return dumps_yaml(literalize(expanded))
+
+
+def _emit_task_yaml_info(expanded: dict[str, object]) -> None:
+    """Print a brief note about runtime-generated task.yaml files to stderr."""
+    suites = expanded.get("suites")
+    if not isinstance(suites, dict):
+        return
+
+    paths: list[str] = []
+    for suite_path, suite_cfg in suites.items():
+        if not isinstance(suite_cfg, dict):
+            continue
+        env = suite_cfg.get("environment")
+        if not isinstance(env, dict):
+            continue
+        if "OPCLI_SUITE" in env:
+            paths.append(f"{suite_path}run/task.yaml")
+
+    if not paths:
+        return
+
+    sys.stderr.write(
+        f"Note: {len(paths)} task.yaml file(s) generated at runtime: {', '.join(paths)}\n"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -145,12 +182,13 @@ def spread_run(
         if loaded:
             secrets_env = loaded
 
-    with _expanded_spread_yaml_dir(root, expanded, prefix=".spread-run-") as tmp_dir:
+    with _build_dir_context(root, expanded) as build_dir:
+        _materialize_task_files(root, build_dir)
         cmd = ["spread"]
         if extra_args:
             cmd.extend(extra_args)
         status(f"Running spread ({'CI' if is_ci else 'local'} mode)")
-        run_command(cmd, cwd=str(tmp_dir), interactive=True, env=secrets_env)
+        run_command(cmd, cwd=str(build_dir), interactive=True, env=secrets_env)
 
 
 def spread_jobs(root: Path) -> list[dict[str, str]]:
@@ -179,11 +217,13 @@ def spread_jobs(root: Path) -> list[dict[str, str]]:
     runner_map, arch_map, ci_backend_names = _virtual_runner_map(raw)
 
     # _expand_backend raises ConfigurationError when no virtual backends are found.
-    expanded = _expand_backend(raw, ci=True)
+    expanded = _expand_integration_suites(raw, root)
+    expanded = _expand_backend(expanded, ci=True)
     expanded["reroot"] = _compose_reroot(expanded.get("reroot"))
 
     entries: list[dict[str, str]] = []
     with _expanded_spread_yaml_dir(root, expanded, prefix=".spread-jobs-") as tmp_dir:
+        _materialize_task_files(root, tmp_dir)
         selectors = [f"{name}:" for name in ci_backend_names]
         result = run_command(
             ["spread", "-list", *selectors],
@@ -213,6 +253,43 @@ def spread_jobs(root: Path) -> list[dict[str, str]]:
             )
 
     return entries
+
+
+def _materialize_task_files(root: Path, build_dir: Path) -> None:
+    """Generate ``task.yaml`` files for integration-suites inside the build dir.
+
+    Suite paths in the expanded YAML are prefixed with the build directory name
+    (e.g. ``build/tests/integration/``).  Spread resolves these relative to the
+    project root (via ``reroot: ..``), so writing to ``<root>/<suite-path>/run/``
+    places files at ``<root>/build/<logical-suite>/run/task.yaml``.
+
+    The build directory is NOT excluded from spread's file sync, so these files
+    are available on the remote machine.  They persist for inspection and are
+    overwritten on next run.
+    """
+    spread_yaml = build_dir / _SPREAD_YAML
+    if not spread_yaml.exists():
+        return
+
+    data = load_yaml(spread_yaml)
+    suites = data.get("suites")
+    if not isinstance(suites, dict):
+        return
+
+    for suite_path, suite_cfg in suites.items():
+        if not isinstance(suite_cfg, dict):
+            continue
+        env = suite_cfg.get("environment")
+        if not isinstance(env, dict):
+            continue
+        # Only generate task.yaml for opcli-managed suites
+        if "OPCLI_SUITE" not in env:
+            continue
+
+        task_dir = root / suite_path / "run"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        task_file = task_dir / "task.yaml"
+        task_file.write_text(_TASK_YAML_CONTENT_SUITE)
 
 
 # Valid values for the pytest-invocation-mode key.
@@ -275,9 +352,8 @@ def _discover_test_modules(root: Path) -> list[str]:
 
 def _generate_spread_yaml(
     project_name: str,
-    modules: list[str],
 ) -> str:
-    """Build the default ``spread.yaml`` content."""
+    """Build the default ``spread.yaml`` content with ``integration-suites``."""
     # Root environment: project-wide vars (CONCIERGE, standard vars)
     root_env: dict[str, str] = {
         "CONCIERGE": '$(HOST: echo "${CONCIERGE:-concierge.yaml}")',
@@ -285,14 +361,6 @@ def _generate_spread_yaml(
         # before running spread to install opcli from a specific branch.
         "OPCLI_GIT_REF": '$(HOST: echo "${OPCLI_GIT_REF:-main}")',
     }
-
-    # Suite environment: MODULE variants (scoped to this suite)
-    suite_env: dict[str, str] = {}
-    if modules:
-        for mod in modules:
-            suite_env[f"MODULE/{mod}"] = mod
-    else:
-        suite_env["MODULE/tests"] = "tests"
 
     data: dict[str, object] = {
         "project": project_name,
@@ -307,11 +375,11 @@ def _generate_spread_yaml(
         },
         "environment": root_env,
         "exclude": [".git", ".tox", ".venv", ".*_cache"],
-        "suites": {
+        _INTEGRATION_SUITES_KEY: {
             "tests/integration/": {
                 "summary": "integration tests",
+                "cwd": "./",
                 "backends": [_VIRTUAL_BACKEND],
-                "environment": suite_env,
             },
         },
     }
@@ -320,9 +388,21 @@ def _generate_spread_yaml(
 
 
 def _expand(root: Path, *, ci: bool | None = None) -> dict[str, Any]:
-    """Load ``spread.yaml``, expand its virtual backend, return the dict."""
+    """Load ``spread.yaml``, expand integration-suites then virtual backend."""
     data = _load_spread_yaml(root)
-    return _expand_backend(data, ci=ci)
+
+    if "reroot" in data:
+        msg = (
+            "'reroot' in spread.yaml is incompatible with opcli. "
+            "opcli manages reroot internally during expansion."
+        )
+        raise ConfigurationError(msg)
+
+    # Expand integration-suites first so the generated suites: entries
+    # are present when _expand_backend renames backend references.
+    data = _expand_integration_suites(data, root)
+    data = _expand_backend(data, ci=ci)
+    return data
 
 
 def _load_spread_yaml(root: Path) -> dict[str, Any]:
@@ -436,6 +516,219 @@ def _expand_backend(
 
     data["backends"] = backends
     return data
+
+
+# ---------------------------------------------------------------------------
+#  integration-suites expansion
+# ---------------------------------------------------------------------------
+
+# opcli-only keys that are consumed during expansion and not passed to spread.
+_SUITE_OPCLI_KEYS = frozenset({"auto-discover", "discover-pattern", "cwd"})
+
+
+def _expand_integration_suites(
+    data: dict[str, object],
+    root: Path,
+) -> dict[str, Any]:
+    """Expand ``integration-suites`` into native ``suites:`` entries.
+
+    For each entry in ``integration-suites``:
+    - Discovers test modules (or uses explicit variants)
+    - Injects ``OPCLI_SUITE`` and ``OPCLI_CWD`` into environment
+    - Generates MODULE variants
+    - Merges into the ``suites:`` block
+
+    The ``integration-suites`` key is stripped from the output.
+
+    Returns the mutated data dict.
+    """
+    raw_integration_suites = data.pop(_INTEGRATION_SUITES_KEY, None)
+    if raw_integration_suites is None:
+        return data
+
+    if not isinstance(raw_integration_suites, dict):
+        msg = f"'{_INTEGRATION_SUITES_KEY}' must be a mapping"
+        raise ConfigurationError(msg)
+
+    suites: dict[str, object] = data.get("suites", {}) or {}  # type: ignore[assignment]
+    if not isinstance(suites, dict):
+        suites = {}
+
+    for suite_path, suite_cfg_raw in raw_integration_suites.items():
+        if not isinstance(suite_path, str):
+            continue
+        normalized_path, suite_cfg = _build_suite_entry(suite_path, suite_cfg_raw, root)
+        # Prefix with build dir so spread finds task.yaml inside build/
+        build_suite_path = f"{_BUILD_DIR}/{normalized_path}"
+        suites[build_suite_path] = suite_cfg
+
+    data["suites"] = suites
+    return data
+
+
+def _validate_safe_path(path: str, label: str) -> None:
+    """Reject paths that escape the project root via traversal or absolutes."""
+    if path.startswith("/"):
+        msg = f"Absolute path not allowed in {label}: '{path}'"
+        raise ConfigurationError(msg)
+    # Normalize and check for traversal
+    normalized = posixpath.normpath(path)
+    if normalized.startswith("..") or "/../" in f"/{normalized}/":
+        msg = f"Path traversal not allowed in {label}: '{path}'"
+        raise ConfigurationError(msg)
+    # Reject shell-dangerous characters in cwd (used in runuser -c)
+    dangerous = set("'\"$`\\;|&(){}")
+    found = dangerous.intersection(path)
+    if found:
+        msg = f"Unsafe characters {found} in {label}: '{path}'"
+        raise ConfigurationError(msg)
+
+
+def _build_suite_entry(
+    suite_path: str,
+    suite_cfg_raw: object,
+    root: Path,
+) -> tuple[str, dict[str, object]]:
+    """Build a single expanded suite entry from an integration-suites config."""
+    _validate_safe_path(suite_path, "integration-suites key")
+
+    suite_cfg: dict[str, object] = dict(suite_cfg_raw) if isinstance(suite_cfg_raw, dict) else {}
+
+    # Extract opcli-only keys
+    auto_discover = suite_cfg.pop("auto-discover", True)
+    discover_pattern = suite_cfg.pop("discover-pattern", "test_*.py")
+    cwd = suite_cfg.pop("cwd", "./")
+    if not isinstance(cwd, str):
+        cwd = "./"
+    if not isinstance(discover_pattern, str):
+        discover_pattern = "test_*.py"
+
+    _validate_safe_path(cwd, "cwd")
+
+    # Discover or use explicit variants
+    env: dict[str, str] = {}
+    existing_env = suite_cfg.get("environment")
+    if isinstance(existing_env, dict):
+        env.update(existing_env)
+
+    if auto_discover:
+        discover_dir = root / suite_path.rstrip("/")
+        modules = _discover_modules_in(discover_dir, discover_pattern)
+        for mod in modules:
+            env[f"MODULE/{mod}"] = mod
+        if not modules:
+            logger.warning(
+                "auto-discover found no test modules in '%s' (pattern: %s). "
+                "Add test files or set auto-discover: false with explicit MODULE/ variants.",
+                suite_path,
+                discover_pattern,
+            )
+    else:
+        # Validate that explicit suites have MODULE/ variants
+        has_module = any(k.startswith("MODULE/") for k in env if isinstance(k, str))
+        if not has_module:
+            msg = (
+                f"Suite '{suite_path}' has auto-discover: false but no MODULE/ "
+                f"entries in environment. Add MODULE/<name>: <value> entries or "
+                f"set auto-discover: true."
+            )
+            raise ConfigurationError(msg)
+
+    # Inject opcli suite context variables
+    env["OPCLI_SUITE"] = suite_path
+    env["OPCLI_CWD"] = cwd
+    suite_cfg["environment"] = env
+
+    # Ensure trailing slash on suite path (spread convention)
+    normalized_path = suite_path if suite_path.endswith("/") else suite_path + "/"
+    return normalized_path, suite_cfg
+
+
+def _discover_modules_in(directory: Path, pattern: str) -> list[str]:
+    """Find test modules matching *pattern* in *directory*."""
+    if not directory.is_dir():
+        return []
+    return sorted(p.stem for p in directory.glob(pattern) if p.is_file())
+
+
+def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str]:
+    """Read suite configuration for ``opcli pytest``.
+
+    Returns a dict with at least ``cwd`` (default ``"./"``).
+
+    Resolution order:
+    1. If *suite* given: look up in ``integration-suites``, then ``suites:``.
+    2. If *suite* is None: auto-detect if single ``integration-suites`` entry.
+    3. Fall back to default (cwd=``"./"``).
+
+    Raises:
+        ConfigurationError: If multiple suites exist and none is specified,
+            or if the specified suite is not found.
+    """
+    spread_path = root / _SPREAD_YAML
+    if not spread_path.exists():
+        return {"cwd": "./"}
+
+    try:
+        data = load_yaml(spread_path)
+    except (ValueError, YAMLError) as exc:
+        msg = f"Failed to parse {_SPREAD_YAML}: {exc}"
+        raise ConfigurationError(msg) from exc
+
+    integration_suites = data.get(_INTEGRATION_SUITES_KEY)
+    native_suites = data.get("suites")
+
+    if suite is not None:
+        # Explicit suite requested — look it up
+        return _lookup_suite(suite, integration_suites, native_suites)
+
+    # Auto-detect: only works with a single integration-suites entry
+    if isinstance(integration_suites, dict):
+        if len(integration_suites) == 1:
+            key = next(iter(integration_suites))
+            cfg = integration_suites[key]
+            cwd = cfg.get("cwd", "./") if isinstance(cfg, dict) else "./"
+            return {"cwd": cwd if isinstance(cwd, str) else "./"}
+        if len(integration_suites) > 1:
+            available = ", ".join(integration_suites.keys())
+            msg = f"Multiple integration-suites found. Use --suite to specify one of: {available}"
+            raise ConfigurationError(msg)
+
+    # No integration-suites or empty — default behavior
+    return {"cwd": "./"}
+
+
+def _lookup_suite(
+    suite: str,
+    integration_suites: object,
+    native_suites: object,
+) -> dict[str, str]:
+    """Find *suite* in integration-suites or native suites."""
+    # Normalize: try with and without trailing slash
+    candidates = [suite, suite.rstrip("/") + "/", suite.rstrip("/")]
+
+    # Check integration-suites first
+    if isinstance(integration_suites, dict):
+        for candidate in candidates:
+            if candidate in integration_suites:
+                cfg = integration_suites[candidate]
+                cwd = cfg.get("cwd", "./") if isinstance(cfg, dict) else "./"
+                return {"cwd": cwd if isinstance(cwd, str) else "./"}
+
+    # Fall back to native suites (best-effort: cwd defaults to ./)
+    if isinstance(native_suites, dict):
+        for candidate in candidates:
+            if candidate in native_suites:
+                return {"cwd": "./"}
+
+    available: list[str] = []
+    if isinstance(integration_suites, dict):
+        available.extend(integration_suites.keys())
+    if isinstance(native_suites, dict):
+        available.extend(native_suites.keys())
+
+    msg = f"Suite '{suite}' not found. Available: {', '.join(available) or '(none)'}"
+    raise ConfigurationError(msg)
 
 
 def _build_concrete_backend(
@@ -880,6 +1173,23 @@ def _expanded_spread_yaml_dir(
         tmp_dir_path = Path(tmp_dir)
         dump_yaml(literalize(expanded), tmp_dir_path / _SPREAD_YAML)
         yield tmp_dir_path
+
+
+@contextmanager
+def _build_dir_context(
+    root: Path,
+    expanded: object,
+) -> Iterator[Path]:
+    """Yield the ``build/`` directory containing expanded ``spread.yaml`` and task files.
+
+    Unlike ``_expanded_spread_yaml_dir`` (which uses random temp dirs), this
+    writes to a deterministic ``build/`` path for debuggability.  The directory
+    persists after the run so users can inspect generated files.
+    """
+    build_dir = root / _BUILD_DIR
+    build_dir.mkdir(parents=True, exist_ok=True)
+    dump_yaml(literalize(expanded), build_dir / _SPREAD_YAML)
+    yield build_dir
 
 
 def _virtual_runner_map(  # noqa: C901

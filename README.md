@@ -38,12 +38,15 @@ opcli --help
 ```bash
 opcli artifacts init     # discover charms/rocks/snaps → artifacts.yaml
 opcli artifacts build    # build all → artifacts.build.yaml
-opcli spread init        # generate spread.yaml + tests/integration/run/task.yaml
+opcli spread init        # generate spread.yaml with integration-suites
 opcli spread expand      # preview expanded spread config
 opcli spread run         # run integration tests (LXD backend)
 
 # Target a specific test:
 opcli spread run -- integration-test-local:ubuntu-24.04:tests/integration/run:test_charm
+
+# Run a specific suite without spread (monorepo):
+opcli pytest run --suite k8s-charm/tests/integration/
 ```
 
 ### Local testing without spread
@@ -110,7 +113,7 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 | Command | Description |
 |---|---|
-| `init` | Generate `spread.yaml` + `tests/integration/run/task.yaml`. `--force` to overwrite. |
+| `init` | Generate `spread.yaml` with `integration-suites`. `--force` to overwrite. |
 | `expand` | Print fully expanded `spread.yaml` to stdout. |
 | `run` | Expand virtual backend and run spread. Args after `--` forwarded verbatim. |
 | `jobs` | Print CI test matrix JSON (one entry per spread task/variant). |
@@ -119,8 +122,8 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 | Command | Description |
 |---|---|
-| `run` | Assemble and execute the tox integration test command. `-e` for env, `-m` for invocation mode, `--` forwards args. |
-| `expand` | Print full `tox -e integration -- <flags>` command. `-e` for env, `-m` for invocation mode, `--` forwards args. |
+| `run` | Assemble and execute the tox integration test command. `-e` for env, `-m` for invocation mode, `--suite` for suite, `--` forwards args. |
+| `expand` | Print full `tox -e integration -- <flags>` command. `-e` for env, `-m` for invocation mode, `--suite` for suite, `--` forwards args. |
 
 Both commands accept `--invocation-mode` (`-m`) to override the pytest invocation mode without needing a `spread.yaml`:
 
@@ -130,6 +133,15 @@ opcli pytest expand -m pfe -- -k test_x  # force pfe mode, filter tests
 ```
 
 Precedence: `--invocation-mode` flag → `pytest-invocation-mode` in `spread.yaml` → default `pfe`.
+
+The `--suite` flag selects a specific integration suite (useful in monorepos with multiple test directories):
+
+```bash
+opcli pytest run --suite k8s-charm/tests/integration/
+opcli pytest expand --suite machine-charm/tests/integration/
+```
+
+When a single `integration-suites` entry exists, `--suite` is auto-detected. With multiple suites, it's required.
 
 ### `opcli tutorial`
 
@@ -187,6 +199,59 @@ backends:
 - In CI (`CI=true`): expands to `integration-test-ci` with an adhoc backend targeting the current runner.
 
 The `runner`, `cpu`, `memory`, `disk`, and `pytest-invocation-mode` fields are opcli-only metadata — they are stripped before spread sees the YAML.
+
+## `integration-suites` in `spread.yaml`
+
+Instead of committing boilerplate `task.yaml` files, declare test suites declaratively:
+
+```yaml
+integration-suites:
+  tests/integration/:
+    cwd: ./
+    summary: top-level integration tests
+    backends:
+      - integration-test
+    environment:
+      CONCIERGE/test_k8s_charm: concierge-microk8s.yaml
+
+  # Monorepo pattern — sub-charm with its own tests
+  k8s-charm/tests/integration/:
+    cwd: k8s-charm/
+    summary: k8s-charm sub-charm tests
+    backends:
+      - integration-test
+
+  # Explicit variants (no auto-discovery)
+  machine-charm/tests/integration/:
+    cwd: machine-charm/
+    auto-discover: false
+    summary: machine-charm tests
+    backends:
+      - integration-test
+    environment:
+      MODULE/test_charm: test_charm
+```
+
+At expand time, `integration-suites` entries are converted into native spread `suites:` entries with:
+- **Auto-discovery** (default): scans the suite directory for `test_*.py` files and generates `MODULE/<name>` spread variants.
+- **`cwd`**: tells `opcli pytest` which directory to scope artifact resolution to. Always explicit, default `./`.
+- **`task.yaml` generation**: written into the `build/` directory at runtime (e.g. `build/tests/integration/run/task.yaml`). Files persist for inspection and are overwritten on next run. Add `build/` to your `.gitignore`.
+- **`discover-pattern`**: customize the glob for auto-discovery (e.g., `discover-pattern: "test_*.py"` is the default; use `"*_test.py"` if your project uses that convention).
+
+> **Migrating from native suites:** Replace your `suites:` block and committed `task.yaml` with an `integration-suites:` entry. Delete the `task.yaml` file — opcli generates it at runtime. Existing native `suites:` entries coexist and are passed through unchanged.
+
+> **Note:** `reroot` in `spread.yaml` is incompatible with opcli. opcli manages `reroot` internally during expansion (to resolve paths from the `build/` directory back to the project root).
+
+### Suite-specific keys
+
+| Key | Default | Description |
+|---|---|---|
+| `cwd` | `./` | Working directory for artifact resolution (opcli-only, stripped from spread output) |
+| `auto-discover` | `true` | Scan for `test_*.py` and generate `MODULE/` variants |
+| `discover-pattern` | `test_*.py` | Glob pattern for auto-discovery |
+| `backends` | (required) | Which virtual backends to run this suite on |
+| `summary` | — | Spread suite summary |
+| `environment` | — | Additional environment variables (merged with auto-discovered modules) |
 
 ### `pytest-invocation-mode`
 

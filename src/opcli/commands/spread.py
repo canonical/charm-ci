@@ -19,14 +19,11 @@ app = typer.Typer(
 @app.command()
 def init(
     *,
-    force: bool = typer.Option(
-        False, "--force", help="Overwrite existing spread.yaml and task.yaml."
-    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing spread.yaml."),
 ) -> None:
-    """Generate spread.yaml and tests/integration/run/task.yaml."""
-    spread_path, task_path = spread_init(Path.cwd(), force=force)
+    """Generate spread.yaml with integration-suites."""
+    spread_path, _ = spread_init(Path.cwd(), force=force)
     typer.echo(f"Wrote {spread_path}")
-    typer.echo(f"Wrote {task_path}")
 
 
 @app.command(
