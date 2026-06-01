@@ -156,8 +156,8 @@ integration-suites:
 
 | File | Key | Value |
 |---|---|---|
-| `test_foo.py` | `MODULE/test_foo` | `test_foo.py` |
-| `subdir/test_foo.py` | `MODULE/subdir_test_foo` | `subdir/test_foo.py` |
+| `test_foo.py` | `MODULE/test_foo.py` | `test_foo.py` |
+| `subdir/test_foo.py` | `MODULE/subdir_test_foo.py` | `subdir/test_foo.py` |
 
 Key constraints:
 - **`build/` is NOT in spread's `exclude` list** — it must be synced to the remote so spread can `cd` into the task directory.
