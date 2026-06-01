@@ -69,6 +69,7 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 | Data models | `Pydantic V2` |
 | Lint/format | `Ruff` (rules: `E F W I UP B SIM PL RUF`; ignores: `B008` globally, `E501` in `spread.py`) |
 | YAML (user files) | `ruamel.yaml` (preserves comments) |
+| Templating | `Jinja2` (pytest invocation templates) |
 | Testing | `pytest` + `pytest-mock` |
 
 ---
@@ -112,16 +113,33 @@ The virtual backend in `spread.yaml` accepts opcli-only keys that are stripped d
 | Key | Values | Default | Effect |
 |---|---|---|---|
 | `type` | `integration-test`, `tutorial` | (required) | Selects the backend template |
-| `pytest-invocation-mode` | `pfe`, `observability` | `pfe` | Controls how `opcli pytest run/expand` passes artifacts to the test framework |
 | `runner` | JSON array of labels | — | CI runner labels for GitHub Actions matrix |
 | `cpu`, `memory`, `disk` | integer | 4, 8, 20 | Local LXD VM resource allocation |
 
-### `pytest-invocation-mode` details
+### Per-suite pytest template keys
 
-- **`pfe`**: Passes `--charm-file=<path>` and `--<rock>-image=<ref>` as CLI flags to tox/pytest. Used by Platform Engineering repos. Supports multi-charm, multi-rock.
-- **`observability`**: Sets `CHARM_PATH` environment variable when running tox. Assumes single charm, no rocks. Errors if >1 charm found. Used by Observability repos that read `CHARM_PATH` in conftest.
+These keys live in `integration-suites` entries (not the backend) and control how `opcli pytest run/expand` passes artifacts to the test framework:
 
-When absent (or no `spread.yaml` exists), defaults to `pfe`.
+| Key | Type | Effect |
+|---|---|---|
+| `pytest-arguments-template` | Jinja2 string | Rendered output becomes pytest CLI args (whitespace-split tokens). Overrides default flag generation. |
+| `pytest-environment-template` | Jinja2 string | Rendered output becomes env vars (KEY=VALUE lines) passed to tox. |
+
+**Template context variables:**
+- `artifacts` — full `ArtifactsGenerated` model from `artifacts.build.yaml` (all charms, rocks, snaps with all builds across all architectures and bases)
+- `arch` — current machine architecture (e.g. `amd64`, `arm64`)
+
+**Default behavior (no template):** Generates `--charm-file=<path>` and `--<rock>-image=<ref>` CLI flags (pfe-style), filtered to the current machine's architecture.
+
+**Example:**
+```yaml
+integration-suites:
+  tests/integration/:
+    pytest-environment-template: |
+      {% for build in artifacts.charms[0].builds if build.arch == arch %}
+      CHARM_PATH={{ build.path }}
+      {% endfor %}
+```
 
 ---
 
