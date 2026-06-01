@@ -609,12 +609,13 @@ def _discover_modules_in(directory: Path, pattern: str) -> list[str]:
 def _module_key(module_path: str) -> str:
     """Derive a spread variant key from a module relative path.
 
-    Replaces path separators with underscores so the key is a flat identifier
-    that mirrors the filename (including ``.py``):
-    ``test_foo.py``        → ``test_foo.py``
-    ``subdir/test_foo.py`` → ``subdir_test_foo.py``
+    Strips the ``.py`` suffix and replaces path separators with underscores
+    to produce a valid shell environment variable name (no dots allowed):
+    ``test_foo.py``        → ``test_foo``
+    ``subdir/test_foo.py`` → ``subdir_test_foo``
     """
-    return module_path.replace("/", "_")
+    stem = module_path[:-3] if module_path.endswith(".py") else module_path
+    return stem.replace("/", "_")
 
 
 def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str | None]:
