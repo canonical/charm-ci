@@ -1643,9 +1643,10 @@ class TestIntegrationSuitesExpand:
         parsed = loads_yaml(result)
 
         suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
-        # Keys use stem (no .py — dots are invalid in spread env var names), values are file paths
-        assert suite_env.get("MODULE/test_deploy") == "test_deploy.py"
-        assert suite_env.get("MODULE/test_upgrade") == "test_upgrade.py"
+        # Keys use stem (no .py — dots are invalid in spread env var names)
+        # Values are relative to OPCLI_CWD (project root) so pytest resolves them correctly
+        assert suite_env.get("MODULE/test_deploy") == "tests/integration/test_deploy.py"
+        assert suite_env.get("MODULE/test_upgrade") == "tests/integration/test_upgrade.py"
         assert not any("conftest" in k for k in suite_env)
 
     def test_integration_suites_auto_discovers_nested_modules(self, tmp_path: Path) -> None:
@@ -1662,10 +1663,12 @@ class TestIntegrationSuitesExpand:
         parsed = loads_yaml(result)
 
         suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
-        # Top-level file: key is stem (no .py), value is filename
-        assert suite_env.get("MODULE/test_top") == "test_top.py"
-        # Nested file: key flattens path with _, value is relative path
-        assert suite_env.get("MODULE/subdir_test_nested") == "subdir/test_nested.py"
+        # Top-level file: key is stem (no .py), value is relative to OPCLI_CWD
+        assert suite_env.get("MODULE/test_top") == "tests/integration/test_top.py"
+        # Nested file: key flattens path with _, value includes suite prefix
+        assert (
+            suite_env.get("MODULE/subdir_test_nested") == "tests/integration/subdir/test_nested.py"
+        )
 
     def test_integration_suites_sanitizes_hyphens_and_dots_in_keys(self, tmp_path: Path) -> None:
         """Keys are sanitized: hyphens and dots become underscores."""
@@ -1679,7 +1682,10 @@ class TestIntegrationSuitesExpand:
         parsed = loads_yaml(result)
 
         suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
-        assert suite_env.get("MODULE/k8s_charm_test_deploy") == "k8s-charm/test_deploy.py"
+        assert (
+            suite_env.get("MODULE/k8s_charm_test_deploy")
+            == "tests/integration/k8s-charm/test_deploy.py"
+        )
 
     def test_integration_suites_raises_on_key_collision(self, tmp_path: Path) -> None:
         """Colliding MODULE keys (dirs a-b/ and a_b/ both sanitize to a_b) raise ConfigurationError."""

@@ -565,16 +565,22 @@ def _build_suite_entry(
     if auto_discover:
         discover_dir = root / suite_path.rstrip("/")
         modules = _discover_modules_in(discover_dir, discover_pattern)
+        # MODULE values must be relative to OPCLI_CWD so pytest can resolve them
+        # from the directory it is invoked in (SPREAD_PATH/OPCLI_CWD).
+        cwd_clean = cwd.rstrip("/") or "."
+        suite_rel_to_cwd = posixpath.relpath(suite_path.rstrip("/"), cwd_clean)
         for mod_path in modules:
             key = _module_key(mod_path)
             full_key = f"MODULE/{key}"
-            if full_key in env and env[full_key] != mod_path:
+            module_value = posixpath.join(suite_rel_to_cwd, mod_path)
+            if full_key in env and env[full_key] != module_value:
                 raise ConfigurationError(
                     f"MODULE key collision in suite '{suite_path}': "
-                    f"'{mod_path}' and '{env[full_key]}' both map to key '{full_key}'. "
+                    f"'{mod_path}' and '{posixpath.relpath(env[full_key], suite_rel_to_cwd)}' "
+                    f"both map to key '{full_key}'. "
                     "Rename one of the files or directories to avoid the conflict."
                 )
-            env[full_key] = mod_path
+            env[full_key] = module_value
         if not modules:
             logger.warning(
                 "auto-discover found no test modules in '%s' (pattern: %s). "
@@ -606,8 +612,9 @@ def _build_suite_entry(
 def _discover_modules_in(directory: Path, pattern: str) -> list[str]:
     """Find test modules matching *pattern* recursively under *directory*.
 
-    Returns relative paths with the ``.py`` extension so they can be passed
-    directly as positional arguments to pytest (e.g. ``subdir/test_foo.py``).
+    Returns relative paths with the ``.py`` extension (e.g. ``subdir/test_foo.py``),
+    relative to *directory*.  Callers are responsible for prepending the suite
+    path (relative to ``OPCLI_CWD``) before passing to pytest.
     """
     if not directory.is_dir():
         return []
