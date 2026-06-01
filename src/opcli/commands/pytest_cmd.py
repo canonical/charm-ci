@@ -11,7 +11,7 @@ import typer
 from opcli.core.artifacts import artifacts_path
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.pytest_args import assemble_tox_argv, pytest_run
-from opcli.core.spread import get_pytest_invocation_mode
+from opcli.core.spread import get_pytest_invocation_mode, get_suite_config
 
 _VALID_MODES = ("pfe", "observability")
 
@@ -48,13 +48,22 @@ def run(
         help="Override pytest invocation mode (pfe, observability). "
         "Defaults to the value in spread.yaml, or 'pfe' if absent.",
     ),
+    suite: str | None = typer.Option(
+        None,
+        "--suite",
+        help="Suite key from integration-suites (trailing slash optional). "
+        "Auto-detected when only one integration-suite exists.",
+    ),
 ) -> None:
     """Assemble and execute the tox integration test command.
 
     Extra args after -- are forwarded to tox/pytest.
     """
+    root = Path.cwd()
+    suite_cfg = get_suite_config(root, suite=suite)
+    cwd = root / suite_cfg["cwd"]
     mode = _resolve_mode(invocation_mode)
-    pytest_run(Path.cwd(), tox_env=tox_env, extra_args=ctx.args or None, mode=mode)
+    pytest_run(root, tox_env=tox_env, extra_args=ctx.args or None, mode=mode, cwd=cwd)
 
 
 @app.command(
@@ -71,6 +80,12 @@ def expand(
         help="Override pytest invocation mode (pfe, observability). "
         "Defaults to the value in spread.yaml, or 'pfe' if absent.",
     ),
+    suite: str | None = typer.Option(
+        None,
+        "--suite",
+        help="Suite key from integration-suites (trailing slash optional). "
+        "Auto-detected when only one integration-suite exists.",
+    ),
 ) -> None:
     """Print the full tox command assembled from artifacts.build.yaml.
 
@@ -78,8 +93,12 @@ def expand(
     In observability mode, outputs the CHARM_PATH env var prefix.
     """
     root = Path.cwd()
+    suite_cfg = get_suite_config(root, suite=suite)
+    cwd = root / suite_cfg["cwd"]
     mode = _resolve_mode(invocation_mode)
-    argv = assemble_tox_argv(root, tox_env=tox_env, extra_args=ctx.args or None, mode=mode)
+    argv = assemble_tox_argv(
+        root, tox_env=tox_env, extra_args=ctx.args or None, mode=mode, cwd=cwd
+    )
 
     if mode == "observability":
         paths = artifacts_path(root, artifact_type="charm")

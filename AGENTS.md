@@ -125,6 +125,23 @@ When absent (or no `spread.yaml` exists), defaults to `pfe`.
 
 ---
 
+## Integration-suites and build directory
+
+`integration-suites` is a top-level key in `spread.yaml` that declares test suites declaratively. At expand time, opcli:
+
+1. Converts each entry into a native spread `suites:` entry with `MODULE/` variants (auto-discovered or explicit).
+2. Prefixes suite paths with `build/` (e.g. `tests/integration/` → `build/tests/integration/`).
+3. Generates `task.yaml` files into `<project>/build/<suite>/run/task.yaml`.
+4. Writes the expanded `spread.yaml` to `<project>/build/spread.yaml` with `reroot: ..`.
+
+Key constraints:
+- **`build/` is NOT in spread's `exclude` list** — it must be synced to the remote so spread can `cd` into the task directory.
+- **`reroot` in `spread.yaml` is forbidden** — opcli manages it internally. A `ConfigurationError` is raised if present.
+- **`build/` is in `.gitignore`** — generated files are never committed.
+- **Files persist** — no cleanup after runs, allowing inspection. Overwritten on next expand/run.
+
+---
+
 ## Data model: Pydantic vs ruamel.yaml
 
 | File | Approach |

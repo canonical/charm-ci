@@ -11,7 +11,10 @@ import pytest
 from opcli.core.exceptions import ConfigurationError, SubprocessError, ValidationError
 from opcli.core.spread import (
     _arch_from_runner,
+    _materialize_task_files,
+    _validate_safe_path,
     _virtual_runner_map,
+    get_suite_config,
     spread_expand,
     spread_init,
     spread_jobs,
@@ -48,14 +51,11 @@ class TestSpreadInit:
         spread_path, task_path = spread_init(tmp_path)
 
         assert spread_path.exists()
-        assert task_path.exists()
-        assert task_path == tmp_path / "tests" / "integration" / "run" / "task.yaml"
+        assert task_path is None
 
         content = spread_path.read_text()
         assert "integration-test" in content
-
-        task_content = task_path.read_text()
-        assert 'opcli pytest expand -e "${TOX_ENV:-integration}"' in task_content
+        assert "integration-suites" in content
 
     def test_generates_required_fields(self, tmp_path: Path) -> None:
         spread_path, _ = spread_init(tmp_path)
@@ -64,7 +64,7 @@ class TestSpreadInit:
         assert parsed["path"] == "/home/ubuntu/proj"
         assert parsed["kill-timeout"] == "60m"
         assert parsed["warn-timeout"] == "1m"
-        assert "summary" in parsed["suites"]["tests/integration/"]
+        assert "summary" in parsed["integration-suites"]["tests/integration/"]
 
     def test_generates_exclude_list(self, tmp_path: Path) -> None:
         spread_path, _ = spread_init(tmp_path)
@@ -90,11 +90,12 @@ class TestSpreadInit:
         assert "GITHUB_TOKEN" not in env
         assert "GITHUB_RUN_ID" not in env
         assert "GITHUB_REPOSITORY" not in env
-        # MODULE variants belong in the suite, not the root environment
+        # MODULE variants belong in the expanded suite, not the root environment
         assert not any(k.startswith("MODULE") for k in env)
         assert "TOX_ENV" not in env
 
-    def test_module_vars_in_suite_environment(self, tmp_path: Path) -> None:
+    def test_module_vars_in_expanded_suite_environment(self, tmp_path: Path) -> None:
+        """Module discovery happens at expand time, not init time."""
         test_dir = tmp_path / "tests" / "integration"
         test_dir.mkdir(parents=True)
         (test_dir / "test_charm.py").write_text("")
@@ -102,29 +103,13 @@ class TestSpreadInit:
 
         spread_path, _ = spread_init(tmp_path)
 
+        # The raw spread.yaml has integration-suites (no MODULE vars yet)
         parsed = loads_yaml(spread_path.read_text())
-        suite_env = parsed["suites"]["tests/integration/"]["environment"]
-        assert suite_env["MODULE/test_charm"] == "test_charm"
-        assert suite_env["MODULE/test_actions"] == "test_actions"
-        assert "TOX_ENV" not in suite_env
-        # Also not in root environment
-        assert "MODULE/test_charm" not in parsed["environment"]
-        assert "TOX_ENV" not in parsed["environment"]
-
-    def test_discovers_test_modules(self, tmp_path: Path) -> None:
-        test_dir = tmp_path / "tests" / "integration"
-        test_dir.mkdir(parents=True)
-        (test_dir / "test_charm.py").write_text("")
-        (test_dir / "test_actions.py").write_text("")
-        (test_dir / "conftest.py").write_text("")  # not a test module
-
-        spread_path, _ = spread_init(tmp_path)
-
-        parsed = loads_yaml(spread_path.read_text())
-        suite_env = parsed["suites"]["tests/integration/"]["environment"]
-        assert "MODULE/test_charm" in suite_env
-        assert "MODULE/test_actions" in suite_env
-        assert not any("conftest" in k for k in suite_env)
+        suite = parsed["integration-suites"]["tests/integration/"]
+        # No environment block with MODULEs in the raw file
+        assert "environment" not in suite or not any(
+            k.startswith("MODULE") for k in (suite.get("environment") or {})
+        )
 
     def test_refuses_overwrite_without_force(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", "existing\n")
@@ -134,12 +119,9 @@ class TestSpreadInit:
 
     def test_overwrites_with_force(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", "old\n")
-        write_file(tmp_path / "tests" / "integration" / "run" / "task.yaml", "old\n")
 
-        spread_path, task_path = spread_init(tmp_path, force=True)
+        spread_path, _ = spread_init(tmp_path, force=True)
         assert "integration-test" in spread_path.read_text()
-        tox_env_flag = 'opcli pytest expand -e "${TOX_ENV:-integration}"'
-        assert tox_env_flag in task_path.read_text()
 
     def test_project_name_from_directory(self, tmp_path: Path) -> None:
         spread_path, _ = spread_init(tmp_path)
@@ -147,12 +129,12 @@ class TestSpreadInit:
         assert f"project: {tmp_path.resolve().name}" in content
 
     def test_generated_suite_has_backends_key(self, tmp_path: Path) -> None:
-        """spread_init generates suite with backends: [integration-test] for scoping."""
+        """spread_init generates integration-suite with backends: [integration-test]."""
         write_file(tmp_path / "tests" / "integration" / "test_charm.py", "")
         spread_path, _ = spread_init(tmp_path)
 
         parsed = loads_yaml(spread_path.read_text())
-        suite = parsed["suites"]["tests/integration/"]
+        suite = parsed["integration-suites"]["tests/integration/"]
         assert "backends" in suite
         assert "integration-test" in suite["backends"]
 
@@ -1052,7 +1034,7 @@ class TestGeneratedSuiteBackends:
         result = spread_expand(tmp_path, ci=False)
         parsed = loads_yaml(result)
 
-        suite = parsed["suites"]["tests/integration/"]
+        suite = parsed["suites"]["build/tests/integration/"]
         assert "integration-test" not in suite.get("backends", [])
         assert "integration-test-local" in suite["backends"]
 
@@ -1578,3 +1560,394 @@ suites:
 
         leftover = list(tmp_path.glob(".spread-jobs-*"))
         assert leftover == []
+
+
+# ---------------------------------------------------------------------------
+#  integration-suites expansion
+# ---------------------------------------------------------------------------
+
+_INTEGRATION_SUITES_SPREAD = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+environment:
+  CONCIERGE: concierge.yaml
+integration-suites:
+  tests/integration/:
+    cwd: ./
+    summary: integration tests
+    backends:
+      - integration-test
+"""
+
+_MULTI_SUITE_SPREAD = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+environment:
+  CONCIERGE: concierge.yaml
+integration-suites:
+  tests/integration/:
+    cwd: ./
+    summary: cross-charm tests
+    backends:
+      - integration-test
+  haproxy-operator/tests/integration/:
+    cwd: haproxy-operator/
+    summary: haproxy tests
+    backends:
+      - integration-test
+"""
+
+
+class TestIntegrationSuitesExpand:
+    """Tests for integration-suites expansion."""
+
+    def test_integration_suites_expanded_to_native_suites(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        assert "integration-suites" not in parsed
+        assert "suites" in parsed
+        assert "build/tests/integration/" in parsed["suites"]
+
+    def test_integration_suites_injects_opcli_vars(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
+        assert suite_env["OPCLI_SUITE"] == "tests/integration/"
+        assert suite_env["OPCLI_CWD"] == "./"
+
+    def test_integration_suites_auto_discovers_modules(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_deploy.py").write_text("")
+        (test_dir / "test_upgrade.py").write_text("")
+        (test_dir / "conftest.py").write_text("")
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
+        assert "MODULE/test_deploy" in suite_env
+        assert "MODULE/test_upgrade" in suite_env
+        assert not any("conftest" in k for k in suite_env)
+
+    def test_integration_suites_no_modules_warns(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
+        # No MODULE/ entries when auto-discover finds nothing
+        module_keys = [k for k in suite_env if k.startswith("MODULE/")]
+        assert module_keys == []
+
+    def test_integration_suites_backends_renamed(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        suite = parsed["suites"]["build/tests/integration/"]
+        assert "integration-test-local" in suite["backends"]
+        assert "integration-test" not in suite["backends"]
+
+    def test_multi_suite_expansion(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _MULTI_SUITE_SPREAD)
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        assert "build/tests/integration/" in parsed["suites"]
+        assert "build/haproxy-operator/tests/integration/" in parsed["suites"]
+
+        haproxy_env = parsed["suites"]["build/haproxy-operator/tests/integration/"]["environment"]
+        assert haproxy_env["OPCLI_CWD"] == "haproxy-operator/"
+        assert haproxy_env["OPCLI_SUITE"] == "haproxy-operator/tests/integration/"
+
+    def test_integration_suites_coexists_with_native_suites(self, tmp_path: Path) -> None:
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+suites:
+  manual-suite/:
+    summary: hand-crafted suite
+integration-suites:
+  tests/integration/:
+    cwd: ./
+    summary: auto suite
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        assert "manual-suite/" in parsed["suites"]
+        assert "build/tests/integration/" in parsed["suites"]
+
+    def test_auto_discover_false_preserves_explicit_variants(self, tmp_path: Path) -> None:
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/:
+    cwd: ./
+    auto-discover: false
+    summary: explicit suite
+    backends:
+      - integration-test
+    environment:
+      MODULE/test_deploy: test_deploy
+      MODULE/test_ha: test_ha
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        # Even if test files exist, they shouldn't be discovered
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_other.py").write_text("")
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
+        assert "MODULE/test_deploy" in suite_env
+        assert "MODULE/test_ha" in suite_env
+        assert "MODULE/test_other" not in suite_env
+
+
+class TestGetSuiteConfig:
+    """Tests for get_suite_config()."""
+
+    def test_no_spread_yaml_returns_default(self, tmp_path: Path) -> None:
+        cfg = get_suite_config(tmp_path)
+        assert cfg == {"cwd": "./"}
+
+    def test_single_integration_suite_auto_detected(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+        cfg = get_suite_config(tmp_path)
+        assert cfg == {"cwd": "./"}
+
+    def test_explicit_suite_lookup(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _MULTI_SUITE_SPREAD)
+        cfg = get_suite_config(tmp_path, suite="haproxy-operator/tests/integration/")
+        assert cfg == {"cwd": "haproxy-operator/"}
+
+    def test_multiple_suites_no_flag_raises(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _MULTI_SUITE_SPREAD)
+        with pytest.raises(ConfigurationError, match="Multiple integration-suites"):
+            get_suite_config(tmp_path)
+
+    def test_suite_not_found_raises(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+        with pytest.raises(ConfigurationError, match="not found"):
+            get_suite_config(tmp_path, suite="nonexistent/")
+
+    def test_falls_back_to_native_suites(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+        cfg = get_suite_config(tmp_path, suite="tests/integration/")
+        assert cfg == {"cwd": "./"}
+
+    def test_trailing_slash_normalization(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+        # Works with or without trailing slash
+        cfg = get_suite_config(tmp_path, suite="tests/integration")
+        assert cfg == {"cwd": "./"}
+
+
+class TestMaterializeTaskFiles:
+    """Tests for _materialize_task_files writing into build dir."""
+
+    def test_task_yaml_generated_in_build_dir(self, tmp_path: Path) -> None:
+        """task.yaml goes in <root>/build/<suite-path>/run/."""
+        root = tmp_path
+        build_dir = root / "build"
+        build_dir.mkdir()
+
+        spread_content = """\
+suites:
+  build/tests/integration/:
+    summary: test
+    environment:
+      OPCLI_SUITE: tests/integration/
+      OPCLI_CWD: ./
+"""
+        (build_dir / "spread.yaml").write_text(spread_content)
+
+        _materialize_task_files(root, build_dir)
+
+        task_file = root / "build" / "tests" / "integration" / "run" / "task.yaml"
+        assert task_file.exists()
+        assert "opcli pytest expand" in task_file.read_text()
+
+    def test_native_suites_not_touched(self, tmp_path: Path) -> None:
+        """Suites without OPCLI_SUITE are not materialized."""
+        root = tmp_path
+        build_dir = root / "build"
+        build_dir.mkdir()
+
+        spread_content = """\
+suites:
+  manual/:
+    summary: hand-crafted
+    environment:
+      FOO: bar
+"""
+        (build_dir / "spread.yaml").write_text(spread_content)
+
+        _materialize_task_files(root, build_dir)
+
+        assert not (root / "manual" / "run" / "task.yaml").exists()
+
+    def test_overwrites_on_rerun(self, tmp_path: Path) -> None:
+        """Task files are overwritten on subsequent runs (no stale content)."""
+        root = tmp_path
+        build_dir = root / "build"
+        build_dir.mkdir()
+
+        spread_content = """\
+suites:
+  build/tests/integration/:
+    summary: test
+    environment:
+      OPCLI_SUITE: tests/integration/
+      OPCLI_CWD: ./
+"""
+        (build_dir / "spread.yaml").write_text(spread_content)
+
+        # First run
+        _materialize_task_files(root, build_dir)
+        task_file = root / "build" / "tests" / "integration" / "run" / "task.yaml"
+        # Corrupt the file
+        task_file.write_text("# stale\n")
+
+        # Second run overwrites
+        _materialize_task_files(root, build_dir)
+        assert "opcli pytest expand" in task_file.read_text()
+
+
+class TestValidateSafePath:
+    """Tests for _validate_safe_path."""
+
+    def test_rejects_absolute_path(self) -> None:
+        with pytest.raises(ConfigurationError, match="Absolute path"):
+            _validate_safe_path("/etc/passwd", "suite path")
+
+    def test_rejects_path_traversal(self) -> None:
+        with pytest.raises(ConfigurationError, match="Path traversal"):
+            _validate_safe_path("../../../etc/passwd", "cwd")
+
+    def test_rejects_embedded_traversal(self) -> None:
+        with pytest.raises(ConfigurationError, match="Path traversal"):
+            _validate_safe_path("foo/../../bar", "suite path")
+
+    def test_rejects_shell_injection_characters(self) -> None:
+        with pytest.raises(ConfigurationError, match="Unsafe characters"):
+            _validate_safe_path("tests/$(whoami)/", "cwd")
+
+    def test_accepts_normal_paths(self) -> None:
+        # These should not raise
+        _validate_safe_path("tests/integration/", "suite path")
+        _validate_safe_path("./", "cwd")
+        _validate_safe_path("haproxy-operator/tests/integration/", "suite path")
+
+
+class TestExplicitSuiteValidation:
+    """Tests for explicit suite missing MODULE/ validation."""
+
+    def test_explicit_suite_no_modules_raises(self, tmp_path: Path) -> None:
+        """auto-discover: false with no MODULE/ variants raises."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/:
+    cwd: ./
+    auto-discover: false
+    summary: explicit suite
+    backends:
+      - integration-test
+    environment:
+      FOO: bar
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match="MODULE/"):
+            spread_expand(tmp_path, ci=False)
+
+    def test_reroot_with_integration_suites_raises(self, tmp_path: Path) -> None:
+        """Reroot in spread.yaml is rejected by opcli."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+reroot: ../other
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/:
+    cwd: ./
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        (tmp_path / "tests" / "integration" / "test_charm").mkdir(parents=True)
+        (tmp_path / "tests" / "integration" / "test_charm" / "task.yaml").touch()
+
+        with pytest.raises(ConfigurationError, match=r"reroot.*incompatible"):
+            spread_expand(tmp_path, ci=False)
+
+    def test_path_traversal_in_suite_path_raises(self, tmp_path: Path) -> None:
+        """Suite path with traversal is rejected."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  ../../../etc/:
+    cwd: ./
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match="Path traversal"):
+            spread_expand(tmp_path, ci=False)

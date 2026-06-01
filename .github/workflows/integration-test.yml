@@ -238,10 +238,6 @@ jobs:
           # Spread captures it via $(HOST: echo "${GITHUB_TOKEN:-}") and the
           # _CI_PREPARE script uses it to authenticate `gh run download`.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # DOCKERHUB_MIRROR is set on self-hosted runners to avoid rate limits.
-          # Spread forwards it to the test environment where opcli patches
-          # concierge.yaml with the mirror URL before provisioning.
-          DOCKERHUB_MIRROR: ${{ vars.DOCKERHUB_MIRROR || '' }}
         run: opcli spread run -- -vv ${{ matrix.selector }}
 
       - name: Juju status (on failure)
