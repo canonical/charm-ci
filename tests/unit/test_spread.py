@@ -1667,6 +1667,20 @@ class TestIntegrationSuitesExpand:
         # Nested file: key flattens path with _, value is relative path
         assert suite_env.get("MODULE/subdir_test_nested") == "subdir/test_nested.py"
 
+    def test_integration_suites_sanitizes_hyphens_and_dots_in_keys(self, tmp_path: Path) -> None:
+        """Keys are sanitized: hyphens and dots become underscores."""
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+        test_dir = tmp_path / "tests" / "integration"
+        hyphen_dir = test_dir / "k8s-charm"
+        hyphen_dir.mkdir(parents=True)
+        (hyphen_dir / "test_deploy.py").write_text("")
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
+        assert suite_env.get("MODULE/k8s_charm_test_deploy") == "k8s-charm/test_deploy.py"
+
     def test_integration_suites_no_modules_warns(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
 

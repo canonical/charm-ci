@@ -20,6 +20,7 @@ uses ``reroot`` to locate the actual project tree one level up.
 import json
 import logging
 import posixpath
+import re
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -609,13 +610,16 @@ def _discover_modules_in(directory: Path, pattern: str) -> list[str]:
 def _module_key(module_path: str) -> str:
     """Derive a spread variant key from a module relative path.
 
-    Strips the ``.py`` suffix and replaces path separators with underscores
-    to produce a valid shell environment variable name (no dots allowed):
-    ``test_foo.py``        → ``test_foo``
-    ``subdir/test_foo.py`` → ``subdir_test_foo``
+    Strips the ``.py`` suffix and replaces any character that is not
+    ``[a-zA-Z0-9]`` with ``_`` to produce a valid spread environment variable
+    name (the spread varname regex only allows ``[a-zA-Z0-9_]`` after the
+    variant separator):
+    ``test_foo.py``             → ``test_foo``
+    ``subdir/test_foo.py``      → ``subdir_test_foo``
+    ``k8s-charm/test-foo.py``   → ``k8s_charm_test_foo``
     """
     stem = module_path[:-3] if module_path.endswith(".py") else module_path
-    return stem.replace("/", "_")
+    return re.sub(r"[^a-zA-Z0-9]", "_", stem)
 
 
 def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str | None]:
