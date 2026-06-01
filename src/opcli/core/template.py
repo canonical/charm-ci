@@ -21,7 +21,9 @@ The rendered output is parsed into:
 import shlex
 from pathlib import Path
 
-from jinja2 import BaseLoader, Environment, TemplateSyntaxError, UndefinedError
+from jinja2 import StrictUndefined, TemplateSyntaxError, UndefinedError
+from jinja2.exceptions import SecurityError
+from jinja2.sandbox import SandboxedEnvironment
 
 from opcli.core.constants import ARTIFACTS_BUILD_YAML
 from opcli.core.env import current_arch
@@ -43,7 +45,7 @@ def render_arguments_template(
         ConfigurationError: If ``artifacts.build.yaml`` is missing or the
             template fails to render.
     """
-    rendered = _render_template(root, template_str)
+    rendered = _render_template(root, template_str, "pytest-arguments-template")
     return shlex.split(rendered)
 
 
@@ -60,7 +62,7 @@ def render_environment_template(
         ConfigurationError: If ``artifacts.build.yaml`` is missing, the
             template fails to render, or a line is malformed.
     """
-    rendered = _render_template(root, template_str)
+    rendered = _render_template(root, template_str, "pytest-environment-template")
     env: dict[str, str] = {}
     for lineno, line in enumerate(rendered.splitlines(), start=1):
         stripped = line.strip()
@@ -82,38 +84,44 @@ def render_environment_template(
 # ---------------------------------------------------------------------------
 
 
-def _render_template(root: Path, template_str: str) -> str:
+def _render_template(root: Path, template_str: str, template_name: str) -> str:
     """Render a Jinja2 template string against the artifacts context.
+
+    Uses ``SandboxedEnvironment`` to prevent template injection attacks and
+    ``StrictUndefined`` to catch typos in variable/attribute names.
 
     Returns the rendered string (may contain leading/trailing whitespace).
 
     Raises:
-        ConfigurationError: On missing artifacts file, syntax errors, or
-            undefined variable references.
+        ConfigurationError: On missing artifacts file, syntax errors,
+            undefined variable references, or sandbox violations.
     """
     artifacts = _load_artifacts(root)
     context = _build_context(artifacts)
 
-    env = Environment(  # noqa: S701
-        loader=BaseLoader(),
+    env = SandboxedEnvironment(
         keep_trailing_newline=True,
         trim_blocks=True,
         lstrip_blocks=True,
+        undefined=StrictUndefined,
     )
 
     try:
         template = env.from_string(template_str)
     except TemplateSyntaxError as exc:
-        msg = f"Jinja2 syntax error in template: {exc}"
+        msg = f"Jinja2 syntax error in {template_name}: {exc}"
         raise ConfigurationError(msg) from exc
 
     try:
         return template.render(context)
     except UndefinedError as exc:
-        msg = f"Undefined variable in template: {exc}"
+        msg = f"Undefined variable in {template_name}: {exc}"
+        raise ConfigurationError(msg) from exc
+    except SecurityError as exc:
+        msg = f"Unsafe operation in {template_name}: {exc}"
         raise ConfigurationError(msg) from exc
     except (TypeError, IndexError, AttributeError) as exc:
-        msg = f"Error evaluating template: {exc}"
+        msg = f"Error evaluating {template_name}: {exc}"
         raise ConfigurationError(msg) from exc
 
 

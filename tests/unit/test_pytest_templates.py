@@ -151,7 +151,7 @@ class TestRenderArgumentsTemplate:
     def test_syntax_error_raises(self, tmp_path: Path) -> None:
         write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
 
-        with pytest.raises(ConfigurationError, match="Jinja2 syntax error"):
+        with pytest.raises(ConfigurationError, match="Jinja2 syntax error in pytest-arguments"):
             render_arguments_template(tmp_path, "{% invalid %}")
 
     def test_undefined_variable_raises(self, tmp_path: Path) -> None:
@@ -159,16 +159,26 @@ class TestRenderArgumentsTemplate:
 
         with (
             patch("opcli.core.template.current_arch", return_value="amd64"),
-            pytest.raises(ConfigurationError, match="Undefined variable"),
+            pytest.raises(ConfigurationError, match="Undefined variable in pytest-arguments"),
         ):
             render_arguments_template(tmp_path, "{{ nonexistent.var }}")
+
+    def test_undefined_attribute_raises(self, tmp_path: Path) -> None:
+        """StrictUndefined catches typos like artifacts.charm (missing 's')."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            pytest.raises(ConfigurationError, match="Undefined variable"),
+        ):
+            render_arguments_template(tmp_path, "{{ artifacts.nonexistent_field }}")
 
     def test_type_error_raises_configuration_error(self, tmp_path: Path) -> None:
         write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
 
         with (
             patch("opcli.core.template.current_arch", return_value="amd64"),
-            pytest.raises(ConfigurationError, match="Error evaluating template"),
+            pytest.raises(ConfigurationError, match="Error evaluating pytest-arguments"),
         ):
             render_arguments_template(tmp_path, "{{ artifacts.charms + 1 }}")
 
@@ -180,6 +190,17 @@ class TestRenderArgumentsTemplate:
             pytest.raises(ConfigurationError, match=r"(Error evaluating|Undefined variable)"),
         ):
             render_arguments_template(tmp_path, "{{ artifacts.charms[99].builds[0].path }}")
+
+    def test_ssti_attack_blocked(self, tmp_path: Path) -> None:
+        """SandboxedEnvironment prevents template injection attacks."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        malicious = "{{ artifacts.__class__.__mro__ }}"
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            pytest.raises(ConfigurationError, match="Unsafe operation"),
+        ):
+            render_arguments_template(tmp_path, malicious)
 
 
 class TestRenderEnvironmentTemplate:

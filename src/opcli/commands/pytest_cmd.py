@@ -13,7 +13,11 @@ from opcli.core.spread import get_suite_config
 from opcli.core.template import render_environment_template
 
 app = typer.Typer(
-    help="Assemble pytest flags from build output and run integration tests.",
+    help=(
+        "Assemble pytest flags from build output and run integration tests.\n\n"
+        "By default generates --charm-file and rock image flags. Customize via\n"
+        "pytest-arguments-template or pytest-environment-template in spread.yaml."
+    ),
     no_args_is_help=True,
 )
 
@@ -65,7 +69,9 @@ def expand(
     """Print the full tox command assembled from artifacts.build.yaml.
 
     Extra args after -- are forwarded into the printed command.
-    When a pytest-environment-template is set, outputs env var prefixes.
+    By default generates --charm-file and rock image flags. When
+    pytest-environment-template is set, outputs env var prefixes.
+    Customize invocation via templates in spread.yaml integration-suites.
     """
     root = Path.cwd()
     suite_cfg = get_suite_config(root, suite=suite)
