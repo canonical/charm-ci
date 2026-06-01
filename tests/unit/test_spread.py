@@ -1643,9 +1643,29 @@ class TestIntegrationSuitesExpand:
         parsed = loads_yaml(result)
 
         suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
-        assert "MODULE/test_deploy" in suite_env
-        assert "MODULE/test_upgrade" in suite_env
+        # Keys use stem (no extension), values are paths passed to pytest
+        assert suite_env.get("MODULE/test_deploy") == "test_deploy.py"
+        assert suite_env.get("MODULE/test_upgrade") == "test_upgrade.py"
         assert not any("conftest" in k for k in suite_env)
+
+    def test_integration_suites_auto_discovers_nested_modules(self, tmp_path: Path) -> None:
+        """Discovery is recursive — test files in subdirectories are found."""
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_top.py").write_text("")
+        subdir = test_dir / "subdir"
+        subdir.mkdir()
+        (subdir / "test_nested.py").write_text("")
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
+        # Top-level file: key is stem, value is filename
+        assert suite_env.get("MODULE/test_top") == "test_top.py"
+        # Nested file: key flattens path with _, value is relative path
+        assert suite_env.get("MODULE/subdir_test_nested") == "subdir/test_nested.py"
 
     def test_integration_suites_no_modules_warns(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)

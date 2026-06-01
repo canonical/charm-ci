@@ -57,7 +57,7 @@ _TASK_YAML_CONTENT = (
     "execute: |\n"
     '    cd "${SPREAD_PATH}"\n'
     '    PYTEST_CMD=$(opcli pytest expand -e "${TOX_ENV:-integration}"'
-    ' -- --model testing --keep-models -k "$MODULE") || exit 1\n'
+    ' -- --model testing --keep-models "$MODULE") || exit 1\n'
     "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && ${PYTEST_CMD}\"\n"
 )
 
@@ -68,7 +68,7 @@ _TASK_YAML_CONTENT_SUITE = (
     '    cd "${SPREAD_PATH}"\n'
     '    PYTEST_CMD=$(opcli pytest expand --suite "$OPCLI_SUITE"'
     ' -e "${TOX_ENV:-integration}"'
-    ' -- --model testing --keep-models -k "$MODULE") || exit 1\n'
+    ' -- --model testing --keep-models "$MODULE") || exit 1\n'
     "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}/${OPCLI_CWD}' && ${PYTEST_CMD}\"\n"
 )
 
@@ -290,15 +290,6 @@ def _materialize_task_files(root: Path, build_dir: Path) -> None:
         task_dir.mkdir(parents=True, exist_ok=True)
         task_file = task_dir / "task.yaml"
         task_file.write_text(_TASK_YAML_CONTENT_SUITE)
-
-
-def _discover_test_modules(root: Path) -> list[str]:
-    """Find ``test_*.py`` files under ``tests/integration/``."""
-    integration_dir = root / "tests" / "integration"
-    if not integration_dir.is_dir():
-        return []
-    modules = sorted(p.stem for p in integration_dir.glob("test_*.py") if p.is_file())
-    return modules
 
 
 def _generate_spread_yaml(
@@ -573,8 +564,9 @@ def _build_suite_entry(
     if auto_discover:
         discover_dir = root / suite_path.rstrip("/")
         modules = _discover_modules_in(discover_dir, discover_pattern)
-        for mod in modules:
-            env[f"MODULE/{mod}"] = mod
+        for mod_path in modules:
+            key = _module_key(mod_path)
+            env[f"MODULE/{key}"] = mod_path
         if not modules:
             logger.warning(
                 "auto-discover found no test modules in '%s' (pattern: %s). "
@@ -604,10 +596,26 @@ def _build_suite_entry(
 
 
 def _discover_modules_in(directory: Path, pattern: str) -> list[str]:
-    """Find test modules matching *pattern* in *directory*."""
+    """Find test modules matching *pattern* recursively under *directory*.
+
+    Returns relative paths with the ``.py`` extension so they can be passed
+    directly as positional arguments to pytest (e.g. ``subdir/test_foo.py``).
+    """
     if not directory.is_dir():
         return []
-    return sorted(p.stem for p in directory.glob(pattern) if p.is_file())
+    return sorted(str(p.relative_to(directory)) for p in directory.rglob(pattern) if p.is_file())
+
+
+def _module_key(module_path: str) -> str:
+    """Derive a spread variant key from a module relative path.
+
+    Strips the ``.py`` suffix and replaces path separators with underscores so
+    the key is a valid, flat identifier:
+    ``test_foo.py``        → ``test_foo``
+    ``subdir/test_foo.py`` → ``subdir_test_foo``
+    """
+    stem = module_path[:-3] if module_path.endswith(".py") else module_path
+    return stem.replace("/", "_")
 
 
 def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str | None]:
