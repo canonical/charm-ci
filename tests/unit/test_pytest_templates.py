@@ -163,6 +163,24 @@ class TestRenderArgumentsTemplate:
         ):
             render_arguments_template(tmp_path, "{{ nonexistent.var }}")
 
+    def test_type_error_raises_configuration_error(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            pytest.raises(ConfigurationError, match="Error evaluating template"),
+        ):
+            render_arguments_template(tmp_path, "{{ artifacts.charms + 1 }}")
+
+    def test_index_error_raises_configuration_error(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            pytest.raises(ConfigurationError, match="(Error evaluating|Undefined variable)"),
+        ):
+            render_arguments_template(tmp_path, "{{ artifacts.charms[99].builds[0].path }}")
+
 
 class TestRenderEnvironmentTemplate:
     """Tests for render_environment_template()."""

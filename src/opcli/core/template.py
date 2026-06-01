@@ -112,6 +112,9 @@ def _render_template(root: Path, template_str: str) -> str:
     except UndefinedError as exc:
         msg = f"Undefined variable in template: {exc}"
         raise ConfigurationError(msg) from exc
+    except (TypeError, IndexError, AttributeError) as exc:
+        msg = f"Error evaluating template: {exc}"
+        raise ConfigurationError(msg) from exc
 
 
 def _load_artifacts(root: Path) -> ArtifactsGenerated:
