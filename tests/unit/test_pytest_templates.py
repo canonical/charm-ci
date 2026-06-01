@@ -177,7 +177,7 @@ class TestRenderArgumentsTemplate:
 
         with (
             patch("opcli.core.template.current_arch", return_value="amd64"),
-            pytest.raises(ConfigurationError, match="(Error evaluating|Undefined variable)"),
+            pytest.raises(ConfigurationError, match=r"(Error evaluating|Undefined variable)"),
         ):
             render_arguments_template(tmp_path, "{{ artifacts.charms[99].builds[0].path }}")
 
