@@ -30,13 +30,12 @@ import logging
 from pathlib import Path
 from typing import overload
 
-from opcli.core.artifacts import artifacts_path
 from opcli.core.constants import ARTIFACTS_BUILD_YAML
 from opcli.core.env import current_arch, is_ci
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.secrets import load_secrets_env
-from opcli.core.spread import get_pytest_invocation_mode
 from opcli.core.subprocess import run_command
+from opcli.core.template import render_arguments_template, render_environment_template
 from opcli.core.yaml_io import load_artifacts_build
 from opcli.models.artifacts_build import (
     CharmOutput,
@@ -53,7 +52,7 @@ def pytest_run(  # noqa: PLR0913
     tox_env: str = "integration",
     extra_args: list[str] | None = None,
     ci: bool | None = None,
-    mode: str | None = None,
+    suite_config: dict[str, str | None] | None = None,
     cwd: Path | None = None,
 ) -> None:
     """Assemble the tox command and execute it interactively.
@@ -62,13 +61,10 @@ def pytest_run(  # noqa: PLR0913
     passed as environment variables to the tox subprocess.  In CI mode the
     variables are expected to already be in the environment.
 
-    The ``pytest-invocation-mode`` key from ``spread.yaml`` controls how
-    artifact paths are communicated to the test framework:
-    - ``pfe`` (default): passes ``--charm-file`` and rock image flags.
-    - ``observability``: sets ``CHARM_PATH`` environment variable.
-
-    When *mode* is passed explicitly it takes precedence over the value
-    discovered from ``spread.yaml``.
+    Artifact paths are communicated to the test framework via:
+    - Default (no template): ``--charm-file`` and rock image flags (pfe style).
+    - ``pytest-arguments-template``: Jinja2 template rendered into CLI args.
+    - ``pytest-environment-template``: Jinja2 template rendered into env vars.
 
     When *cwd* is provided, tox is executed from that directory instead of
     *root*.  This supports multi-charm monorepos where each sub-charm has
@@ -78,9 +74,9 @@ def pytest_run(  # noqa: PLR0913
         ConfigurationError: If ``artifacts.build.yaml`` is missing.
         SubprocessError: If tox exits non-zero.
     """
-    resolved_mode = mode or get_pytest_invocation_mode(root)
+    cfg = suite_config or {}
     cmd = assemble_tox_argv(
-        root, tox_env=tox_env, extra_args=extra_args, mode=resolved_mode, cwd=cwd
+        root, tox_env=tox_env, extra_args=extra_args, suite_config=cfg, cwd=cwd
     )
 
     is_ci_env = ci if ci is not None else is_ci()
@@ -90,9 +86,11 @@ def pytest_run(  # noqa: PLR0913
         if loaded:
             env.update(loaded)
 
-    if resolved_mode == "observability":
-        paths = artifacts_path(root, artifact_type="charm")
-        env["CHARM_PATH"] = str(paths[0])
+    # Render environment template if present
+    env_template = cfg.get("pytest-environment-template")
+    if isinstance(env_template, str):
+        rendered_env = render_environment_template(root, env_template)
+        env.update(rendered_env)
 
     execution_dir = str(cwd) if cwd else str(root)
     run_command(cmd, cwd=execution_dir, interactive=True, env=env or None)
@@ -103,7 +101,7 @@ def assemble_tox_argv(
     *,
     tox_env: str = "integration",
     extra_args: list[str] | None = None,
-    mode: str | None = None,
+    suite_config: dict[str, str | None] | None = None,
     cwd: Path | None = None,
 ) -> list[str]:
     """Build the full tox argv for running integration tests.
@@ -115,14 +113,20 @@ def assemble_tox_argv(
     When *cwd* differs from *root*, artifact paths are made absolute so
     they resolve correctly from the execution directory.
 
+    If ``pytest-arguments-template`` is present in *suite_config*, the
+    template is rendered and its output tokens replace the default flags.
+    Otherwise the default pfe-style flags are generated.
+
     Raises:
         ConfigurationError: If required YAML files are missing.
     """
-    resolved_mode = mode or get_pytest_invocation_mode(root)
+    cfg = suite_config or {}
+    args_template = cfg.get("pytest-arguments-template")
 
-    if resolved_mode == "observability":
-        pytest_args = list(extra_args or [])
+    if isinstance(args_template, str):
+        pytest_args = render_arguments_template(root, args_template) + (extra_args or [])
     else:
+        # Default: pfe-style flag generation
         assembled = assemble_pytest_args(root, cwd=cwd)
         pytest_args = assembled + (extra_args or [])
 

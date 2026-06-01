@@ -122,17 +122,24 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 | Command | Description |
 |---|---|
-| `run` | Assemble and execute the tox integration test command. `-e` for env, `-m` for invocation mode, `--suite` for suite, `--` forwards args. |
-| `expand` | Print full `tox -e integration -- <flags>` command. `-e` for env, `-m` for invocation mode, `--suite` for suite, `--` forwards args. |
+| `run` | Assemble and execute the tox integration test command. `-e` for env, `--suite` for suite, `--` forwards args. |
+| `expand` | Print full `tox -e integration -- <flags>` command. `-e` for env, `--suite` for suite, `--` forwards args. |
 
-Both commands accept `--invocation-mode` (`-m`) to override the pytest invocation mode without needing a `spread.yaml`:
+By default, `opcli pytest` generates `--charm-file=` and `--rock-image=` flags from `artifacts.build.yaml` (pfe-style). To customize invocation, add Jinja2 templates to your `integration-suites` entry in `spread.yaml`:
 
-```bash
-opcli pytest run -m observability        # force observability mode
-opcli pytest expand -m pfe -- -k test_x  # force pfe mode, filter tests
+```yaml
+integration-suites:
+  tests/integration/:
+    pytest-arguments-template: |
+      {% for charm in artifacts.charms %}
+        {% for build in charm.builds if build.arch == arch %}
+          --charm-file={{ build.path }}
+        {% endfor %}
+      {% endfor %}
+    # Or use environment variables instead:
+    pytest-environment-template: |
+      CHARM_PATH={{ artifacts.charms[0].builds[0].path }}
 ```
-
-Precedence: `--invocation-mode` flag → `pytest-invocation-mode` in `spread.yaml` → default `pfe`.
 
 The `--suite` flag selects a specific integration suite (useful in monorepos with multiple test directories):
 
@@ -186,7 +193,6 @@ opcli recognises virtual backend types (`integration-test`, `tutorial`) and expa
 backends:
   integration-test:
     type: integration-test
-    pytest-invocation-mode: observability  # optional; default: pfe
     systems:
       - ubuntu-24.04:
           runner: [self-hosted, noble]   # CI runner labels
@@ -198,7 +204,7 @@ backends:
 - Locally (`CI` unset): expands to `integration-test-local` with an LXD backend.
 - In CI (`CI=true`): expands to `integration-test-ci` with an adhoc backend targeting the current runner.
 
-The `runner`, `cpu`, `memory`, `disk`, and `pytest-invocation-mode` fields are opcli-only metadata — they are stripped before spread sees the YAML.
+The `runner`, `cpu`, `memory`, and `disk` fields are opcli-only metadata — they are stripped before spread sees the YAML.
 
 ## `integration-suites` in `spread.yaml`
 
@@ -249,20 +255,33 @@ At expand time, `integration-suites` entries are converted into native spread `s
 | `cwd` | `./` | Working directory for artifact resolution (opcli-only, stripped from spread output) |
 | `auto-discover` | `true` | Scan for `test_*.py` and generate `MODULE/` variants |
 | `discover-pattern` | `test_*.py` | Glob pattern for auto-discovery |
+| `pytest-arguments-template` | — | Jinja2 template for pytest CLI args (opcli-only, stripped) |
+| `pytest-environment-template` | — | Jinja2 template for env vars (opcli-only, stripped) |
 | `backends` | (required) | Which virtual backends to run this suite on |
 | `summary` | — | Spread suite summary |
 | `environment` | — | Additional environment variables (merged with auto-discovered modules) |
 
-### `pytest-invocation-mode`
+### Pytest invocation templates
 
-Controls how `opcli pytest run` and `opcli pytest expand` pass built artifacts to the test framework:
+Controls how `opcli pytest run` and `opcli pytest expand` pass built artifacts to the test framework. These keys are per-suite in `integration-suites`:
 
-| Value | Behaviour |
+| Key | Effect |
 |---|---|
-| `pfe` (default) | Passes `--charm-file=<path>` and `--<rock>-image=<ref>` as CLI flags. Supports multi-charm, multi-rock repos. |
-| `observability` | Sets `CHARM_PATH` environment variable. Assumes single charm, no rocks. Errors if >1 charm found. |
+| `pytest-arguments-template` | Jinja2 template rendered into CLI args passed to tox/pytest |
+| `pytest-environment-template` | Jinja2 template rendered into `KEY=VALUE` env vars |
 
-When absent, defaults to `pfe`. This key is read at runtime by `opcli pytest run/expand`, so it works both inside spread and when running directly on the developer's machine. It can also be overridden via the `--invocation-mode` (`-m`) CLI flag, which takes precedence over the `spread.yaml` value.
+When no template is specified, the default behaviour generates `--charm-file=<path>` and `--<rock>-image=<ref>` flags (pfe-style), filtered to the current machine's architecture.
+
+**Template context:** `artifacts` (full `ArtifactsGenerated` model) and `arch` (current architecture string).
+
+```yaml
+integration-suites:
+  tests/integration/:
+    pytest-environment-template: |
+      {% for build in artifacts.charms[0].builds if build.arch == arch %}
+      CHARM_PATH={{ build.path }}
+      {% endfor %}
+```
 
 ## CI vs local
 

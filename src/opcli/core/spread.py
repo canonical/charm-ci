@@ -292,55 +292,6 @@ def _materialize_task_files(root: Path, build_dir: Path) -> None:
         task_file.write_text(_TASK_YAML_CONTENT_SUITE)
 
 
-# Valid values for the pytest-invocation-mode key.
-_VALID_INVOCATION_MODES = ("pfe", "observability")
-
-
-def get_pytest_invocation_mode(root: Path) -> str:
-    """Read ``pytest-invocation-mode`` from the virtual backend in spread.yaml.
-
-    Returns ``"pfe"`` (default) when the key is absent or when no
-    ``spread.yaml`` exists.
-
-    Raises:
-        ConfigurationError: If the file exists but is malformed, or if
-            the value is not a recognised mode.
-    """
-    spread_path = root / _SPREAD_YAML
-    if not spread_path.exists():
-        return "pfe"
-
-    try:
-        data = load_yaml(spread_path)
-    except (ValueError, YAMLError) as exc:
-        msg = f"Failed to parse {_SPREAD_YAML}: {exc}"
-        raise ConfigurationError(msg) from exc
-
-    backends = data.get("backends")
-    if not isinstance(backends, dict):
-        return "pfe"
-
-    for backend_entry in backends.values():
-        if not isinstance(backend_entry, dict):
-            continue
-        raw_type = backend_entry.get("type")
-        backend_type = raw_type if isinstance(raw_type, str) else None
-        if backend_type not in _BACKEND_CONFIGS:
-            continue
-        mode = backend_entry.get("pytest-invocation-mode")
-        if mode is None:
-            return "pfe"
-        if mode not in _VALID_INVOCATION_MODES:
-            msg = (
-                f"Invalid pytest-invocation-mode '{mode}' in spread.yaml. "
-                f"Valid values: {', '.join(_VALID_INVOCATION_MODES)}"
-            )
-            raise ConfigurationError(msg)
-        return str(mode)
-
-    return "pfe"
-
-
 def _discover_test_modules(root: Path) -> list[str]:
     """Find ``test_*.py`` files under ``tests/integration/``."""
     integration_dir = root / "tests" / "integration"
@@ -486,9 +437,7 @@ def _expand_backend(
 
         prepare_parts = _BACKEND_CONFIGS[backend_type]
         # Strip opcli-only fields; _build_concrete_backend sets type: adhoc
-        virtual = {
-            k: v for k, v in backend_entry.items() if k not in ("type", "pytest-invocation-mode")
-        }
+        virtual = {k: v for k, v in backend_entry.items() if k != "type"}
         del backends[backend_name]
 
         concrete_name = f"{backend_name}-ci" if use_ci else f"{backend_name}-local"
@@ -523,7 +472,15 @@ def _expand_backend(
 # ---------------------------------------------------------------------------
 
 # opcli-only keys that are consumed during expansion and not passed to spread.
-_SUITE_OPCLI_KEYS = frozenset({"auto-discover", "discover-pattern", "cwd"})
+_SUITE_OPCLI_KEYS = frozenset(
+    {
+        "auto-discover",
+        "discover-pattern",
+        "cwd",
+        "pytest-arguments-template",
+        "pytest-environment-template",
+    }
+)
 
 
 def _expand_integration_suites(
@@ -598,6 +555,8 @@ def _build_suite_entry(
     auto_discover = suite_cfg.pop("auto-discover", True)
     discover_pattern = suite_cfg.pop("discover-pattern", "test_*.py")
     cwd = suite_cfg.pop("cwd", "./")
+    suite_cfg.pop("pytest-arguments-template", None)
+    suite_cfg.pop("pytest-environment-template", None)
     if not isinstance(cwd, str):
         cwd = "./"
     if not isinstance(discover_pattern, str):
@@ -651,10 +610,11 @@ def _discover_modules_in(directory: Path, pattern: str) -> list[str]:
     return sorted(p.stem for p in directory.glob(pattern) if p.is_file())
 
 
-def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str]:
+def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str | None]:
     """Read suite configuration for ``opcli pytest``.
 
-    Returns a dict with at least ``cwd`` (default ``"./"``).
+    Returns a dict with at least ``cwd`` (default ``"./"``), and optionally
+    ``pytest-arguments-template`` and ``pytest-environment-template``.
 
     Resolution order:
     1. If *suite* given: look up in ``integration-suites``, then ``suites:``.
@@ -687,8 +647,7 @@ def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str]:
         if len(integration_suites) == 1:
             key = next(iter(integration_suites))
             cfg = integration_suites[key]
-            cwd = cfg.get("cwd", "./") if isinstance(cfg, dict) else "./"
-            return {"cwd": cwd if isinstance(cwd, str) else "./"}
+            return _extract_suite_config(cfg)
         if len(integration_suites) > 1:
             available = ", ".join(integration_suites.keys())
             msg = f"Multiple integration-suites found. Use --suite to specify one of: {available}"
@@ -698,11 +657,26 @@ def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str]:
     return {"cwd": "./"}
 
 
+def _extract_suite_config(cfg: object) -> dict[str, str | None]:
+    """Extract cwd and template keys from a suite config mapping."""
+    if not isinstance(cfg, dict):
+        return {"cwd": "./"}
+    cwd = cfg.get("cwd", "./")
+    result: dict[str, str | None] = {"cwd": cwd if isinstance(cwd, str) else "./"}
+    args_tmpl = cfg.get("pytest-arguments-template")
+    if isinstance(args_tmpl, str):
+        result["pytest-arguments-template"] = args_tmpl
+    env_tmpl = cfg.get("pytest-environment-template")
+    if isinstance(env_tmpl, str):
+        result["pytest-environment-template"] = env_tmpl
+    return result
+
+
 def _lookup_suite(
     suite: str,
     integration_suites: object,
     native_suites: object,
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     """Find *suite* in integration-suites or native suites."""
     # Normalize: try with and without trailing slash
     candidates = [suite, suite.rstrip("/") + "/", suite.rstrip("/")]
@@ -711,9 +685,7 @@ def _lookup_suite(
     if isinstance(integration_suites, dict):
         for candidate in candidates:
             if candidate in integration_suites:
-                cfg = integration_suites[candidate]
-                cwd = cfg.get("cwd", "./") if isinstance(cfg, dict) else "./"
-                return {"cwd": cwd if isinstance(cwd, str) else "./"}
+                return _extract_suite_config(integration_suites[candidate])
 
     # Fall back to native suites (best-effort: cwd defaults to ./)
     if isinstance(native_suites, dict):
