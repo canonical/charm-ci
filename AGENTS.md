@@ -152,6 +152,13 @@ integration-suites:
 3. Generates `task.yaml` files into `<project>/build/<suite>/run/task.yaml`.
 4. Writes the expanded `spread.yaml` to `<project>/build/spread.yaml` with `reroot: ..`.
 
+**Auto-discovery** (`auto-discover: true`, the default) walks the suite directory **recursively** (like pytest). MODULE keys flatten subdirectory paths with underscores; MODULE values are **relative to `OPCLI_CWD`** (the directory pytest is invoked from) so pytest can resolve them:
+
+| File | Key | Value (suite `tests/integration/`, `cwd: ./`) |
+|---|---|---|
+| `test_foo.py` | `MODULE/test_foo` | `tests/integration/test_foo.py` |
+| `subdir/test_foo.py` | `MODULE/subdir_test_foo` | `tests/integration/subdir/test_foo.py` |
+
 Key constraints:
 - **`build/` is NOT in spread's `exclude` list** — it must be synced to the remote so spread can `cd` into the task directory.
 - **`reroot` in `spread.yaml` is forbidden** — opcli manages it internally. A `ConfigurationError` is raised if present.

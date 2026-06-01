@@ -42,5 +42,5 @@ integration-suites:
     backends:
     - integration-test
     environment:
-      MODULE/test_charm: test_charm
+      MODULE/test_charm: tests/integration/test_charm.py
 
