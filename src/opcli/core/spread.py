@@ -567,7 +567,14 @@ def _build_suite_entry(
         modules = _discover_modules_in(discover_dir, discover_pattern)
         for mod_path in modules:
             key = _module_key(mod_path)
-            env[f"MODULE/{key}"] = mod_path
+            full_key = f"MODULE/{key}"
+            if full_key in env and env[full_key] != mod_path:
+                raise ConfigurationError(
+                    f"MODULE key collision in suite '{suite_path}': "
+                    f"'{mod_path}' and '{env[full_key]}' both map to key '{full_key}'. "
+                    "Rename one of the files or directories to avoid the conflict."
+                )
+            env[full_key] = mod_path
         if not modules:
             logger.warning(
                 "auto-discover found no test modules in '%s' (pattern: %s). "

@@ -1681,6 +1681,21 @@ class TestIntegrationSuitesExpand:
         suite_env = parsed["suites"]["build/tests/integration/"]["environment"]
         assert suite_env.get("MODULE/k8s_charm_test_deploy") == "k8s-charm/test_deploy.py"
 
+    def test_integration_suites_raises_on_key_collision(self, tmp_path: Path) -> None:
+        """Colliding MODULE keys (dirs a-b/ and a_b/ both sanitize to a_b) raise ConfigurationError."""
+        write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
+        test_dir = tmp_path / "tests" / "integration"
+        dir_hyphen = test_dir / "a-b"
+        dir_under = test_dir / "a_b"
+        dir_hyphen.mkdir(parents=True)
+        dir_under.mkdir(parents=True)
+        # Both paths produce the same MODULE key: a_b_test_x
+        (dir_hyphen / "test_x.py").write_text("")
+        (dir_under / "test_x.py").write_text("")
+
+        with pytest.raises(ConfigurationError, match="MODULE key collision"):
+            spread_expand(tmp_path, ci=False)
+
     def test_integration_suites_no_modules_warns(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
 
