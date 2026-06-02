@@ -4,6 +4,20 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 `opcli` replaces the monolithic [`operator-workflows`](https://github.com/canonical/operator-workflows) approach with a modular pipeline based on explicit build plans (`artifacts.yaml`), stable build output (`artifacts.build.yaml`), and [spread](https://github.com/canonical/spread)-based test execution.
 
+## Contents
+
+- [Documentation](#documentation)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Commands](#commands)
+- [`artifacts.yaml` schema](#artifactsyaml-schema)
+- [`spread.yaml` virtual backends](#spreadyaml-virtual-backends)
+- [`integration-suites` in `spread.yaml`](#integration-suites-in-spreadyaml)
+- [CI vs local](#ci-vs-local)
+- [GitHub Actions reusable workflows](#github-actions-reusable-workflows)
+- [Secrets for integration tests](#secrets-for-integration-tests)
+- [Development](#development)
+
 ## Documentation
 
 | Document | Purpose |
@@ -14,13 +28,6 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 ## Installation
 
-```bash
-sudo snap install astral-uv --classic
-uv tool install git+https://github.com/canonical/charm-ci.git
-export PATH="$HOME/.local/bin:$PATH"  # or: uv tool update-shell && exec $SHELL
-opcli --help
-```
-
 ### Prerequisites
 
 - Python 3.12+
@@ -28,8 +35,17 @@ opcli --help
 - [charmcraft](https://charmcraft.io/) (`sudo snap install charmcraft --classic`)
 - [rockcraft](https://rockcraft.io/) (`sudo snap install rockcraft --classic`) — if building rocks
 - [LXD](https://canonical.com/lxd) (`sudo lxd init --auto && sudo usermod -aG lxd $USER`)
-- [spread](https://github.com/canonical/spread) (installed via `opcli install spread`) — for spread workflow
+- [spread](https://github.com/canonical/spread) — installed via `opcli install spread` after opcli is set up
 - [concierge](https://github.com/canonical/concierge/) (`sudo snap install concierge --classic`) — for env provisioning
+
+### Install opcli
+
+```bash
+sudo snap install astral-uv --classic
+uv tool install git+https://github.com/canonical/charm-ci.git
+export PATH="$HOME/.local/bin:$PATH"  # or: uv tool update-shell && exec $SHELL
+opcli --help
+```
 
 ## Quick start
 
@@ -150,12 +166,6 @@ opcli pytest expand --suite machine-charm/tests/integration/
 
 When a single `integration-suites` entry exists, `--suite` is auto-detected. With multiple suites, it's required.
 
-### `opcli tutorial`
-
-| Command | Description |
-|---|---|
-| `expand <file>` | Extract shell commands from a tutorial (`.md`/`.rst`) and print as a shell script for `eval`. |
-
 ## `artifacts.yaml` schema
 
 ```yaml
@@ -187,7 +197,7 @@ Key fields:
 
 ## `spread.yaml` virtual backends
 
-opcli recognises virtual backend types (`integration-test`, `tutorial`) and expands them into concrete spread backends at runtime:
+opcli recognises the `integration-test` virtual backend type and expands it into a concrete spread backend at runtime:
 
 ```yaml
 backends:
