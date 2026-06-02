@@ -877,6 +877,8 @@ class TestArtifactsMatrix:
                     "type": "rock",
                     "arch": "amd64",
                     "runner": '["ubuntu-latest"]',
+                    "rockcraft-yaml": "rockcraft.yaml",
+                    "pack-dir": "",
                 },
                 {
                     "name": "my-charm",
@@ -892,6 +894,30 @@ class TestArtifactsMatrix:
                 },
             ]
         }
+
+    def test_rock_matrix_includes_pack_dir_when_set(self, tmp_path: Path) -> None:
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\n"
+            "rocks:\n- name: my-rock\n  rockcraft-yaml: rocks/rockcraft.yaml\n  pack-dir: .\n",
+        )
+
+        result = artifacts_matrix(tmp_path)
+
+        rock_entry = result["include"][0]
+        assert rock_entry["rockcraft-yaml"] == "rocks/rockcraft.yaml"
+        assert rock_entry["pack-dir"] == "."
+
+    def test_rock_matrix_pack_dir_empty_string_when_null(self, tmp_path: Path) -> None:
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\nrocks:\n- name: my-rock\n  rockcraft-yaml: rockcraft.yaml\n",
+        )
+
+        result = artifacts_matrix(tmp_path)
+
+        rock_entry = result["include"][0]
+        assert rock_entry["pack-dir"] == ""
 
     def test_only_charms_no_rocks_no_snaps(self, tmp_path: Path) -> None:
         write_file(
