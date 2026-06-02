@@ -2189,3 +2189,231 @@ integration-suites:
 
         with pytest.raises(ConfigurationError, match="Path traversal"):
             spread_expand(tmp_path, ci=False)
+
+
+# ---------------------------------------------------------------------------
+# opcli-minimal backend tests
+# ---------------------------------------------------------------------------
+
+_SPREAD_OPCLI_MINIMAL = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  my-docs:
+    type: opcli-minimal
+    systems:
+      - ubuntu-24.04
+suites:
+  tests/docs/:
+    summary: docs tests
+    backends:
+      - my-docs
+    environment:
+      TUTORIAL: /doc/tutorial.md
+"""
+
+
+class TestOpcliMinimalBackend:
+    """Tests for the ``opcli-minimal`` virtual backend type."""
+
+    def test_expand_local_removes_virtual_backend(self, tmp_path: Path) -> None:
+        """Virtual backend 'my-docs' is replaced with 'my-docs-local'."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        assert "my-docs" not in parsed["backends"]
+        assert "my-docs-local" in parsed["backends"]
+
+    def test_expand_ci_removes_virtual_backend(self, tmp_path: Path) -> None:
+        """Virtual backend 'my-docs' is replaced with 'my-docs-ci'."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=True)
+        parsed = loads_yaml(result)
+        assert "my-docs" not in parsed["backends"]
+        assert "my-docs-ci" in parsed["backends"]
+
+    def test_local_prepare_installs_opcli(self, tmp_path: Path) -> None:
+        """Local prepare includes uv install of opcli."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        prepare = parsed["backends"]["my-docs-local"].get("prepare", "")
+        assert "astral-uv" in prepare
+        assert "opcli" in prepare
+
+    def test_local_prepare_no_concierge(self, tmp_path: Path) -> None:
+        """Local prepare for opcli-minimal does NOT install concierge or provision."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        prepare = parsed["backends"]["my-docs-local"].get("prepare", "")
+        assert "concierge" not in prepare
+        assert "opcli env provision" not in prepare
+
+    def test_ci_prepare_is_empty(self, tmp_path: Path) -> None:
+        """CI prepare for opcli-minimal is empty (CI installs opcli itself)."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=True)
+        parsed = loads_yaml(result)
+        ci_backend = parsed["backends"]["my-docs-ci"]
+        assert ci_backend.get("prepare", "") == ""
+
+    def test_local_backend_type_is_adhoc(self, tmp_path: Path) -> None:
+        """Expanded local backend has type: adhoc."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        assert parsed["backends"]["my-docs-local"]["type"] == "adhoc"
+
+    def test_opcli_minimal_and_integration_test_coexist(self, tmp_path: Path) -> None:
+        """Both opcli-minimal and integration-test backends can coexist."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+  my-docs:
+    type: opcli-minimal
+    systems:
+      - ubuntu-24.04
+suites:
+  tests/integration/:
+    summary: integration tests
+    backends:
+      - integration-test
+    environment:
+      MODULE/test_charm: test_charm
+  tests/docs/:
+    summary: docs tests
+    backends:
+      - my-docs
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        assert "integration-test-local" in parsed["backends"]
+        assert "my-docs-local" in parsed["backends"]
+
+
+# ---------------------------------------------------------------------------
+# spread_jobs --exclude filter tests
+# ---------------------------------------------------------------------------
+
+
+class TestSpreadJobsExclude:
+    """Tests for the ``exclude`` parameter of ``spread_jobs``."""
+
+    _SPREAD_TWO_BACKENDS = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+  my-docs:
+    type: opcli-minimal
+    systems:
+      - ubuntu-24.04
+suites:
+  tests/integration/:
+    summary: integration tests
+    backends:
+      - integration-test
+    environment:
+      MODULE/test_charm: test_charm
+  tests/docs/:
+    summary: docs tests
+    backends:
+      - my-docs
+    environment:
+      TUTORIAL: /doc/tutorial.md
+"""
+
+    _SPREAD_LIST_BOTH = (
+        "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm\n"
+        "my-docs-ci:ubuntu-24.04:tests/docs/run:test_tutorial\n"
+    )
+
+    def _mock_list(self, stdout: str) -> SubprocessResult:
+        return SubprocessResult(stdout=stdout, stderr="", returncode=0)
+
+    def test_no_exclude_returns_all(self, tmp_path: Path) -> None:
+        """Without --exclude all jobs are returned."""
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
+        ):
+            entries = spread_jobs(tmp_path)
+
+        selectors = [e["selector"] for e in entries]
+        assert any("integration-test-ci" in s for s in selectors)
+        assert any("my-docs-ci" in s for s in selectors)
+
+    def test_exclude_pattern_removes_matching_jobs(self, tmp_path: Path) -> None:
+        """Jobs matching the exclude pattern are omitted."""
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
+        ):
+            entries = spread_jobs(tmp_path, exclude=["my-docs-ci:*"])
+
+        selectors = [e["selector"] for e in entries]
+        assert all("my-docs-ci" not in s for s in selectors)
+        assert any("integration-test-ci" in s for s in selectors)
+
+    def test_exclude_all_pattern(self, tmp_path: Path) -> None:
+        """A wildcard pattern that matches everything returns an empty list."""
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
+        ):
+            entries = spread_jobs(tmp_path, exclude=["*"])
+
+        assert entries == []
+
+    def test_exclude_multiple_patterns(self, tmp_path: Path) -> None:
+        """Multiple exclude patterns are all applied."""
+        spread_list = (
+            "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm\n"
+            "integration-test-ci:ubuntu-24.04:tests/integration/run:test_other\n"
+            "my-docs-ci:ubuntu-24.04:tests/docs/run:test_tutorial\n"
+        )
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(spread_list),
+        ):
+            entries = spread_jobs(
+                tmp_path,
+                exclude=[
+                    "my-docs-ci:*",
+                    "*:ubuntu-24.04:tests/integration/run:test_other",
+                ],
+            )
+
+        selectors = [e["selector"] for e in entries]
+        assert len(selectors) == 1
+        assert selectors[0] == "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm"
+
+    def test_exclude_non_matching_pattern_keeps_all(self, tmp_path: Path) -> None:
+        """A pattern that matches nothing leaves all jobs intact."""
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
+        ):
+            entries = spread_jobs(tmp_path, exclude=["nonexistent-backend:*"])
+
+        assert len(entries) == 2  # noqa: PLR2004

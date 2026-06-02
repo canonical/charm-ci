@@ -3,8 +3,11 @@
 
 """CLI commands for spread-based test execution."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -48,7 +51,19 @@ def expand() -> None:
 
 
 @app.command()
-def jobs() -> None:
+def jobs(
+    exclude: Annotated[
+        list[str],
+        typer.Option(
+            "--exclude",
+            help=(
+                "Exclude jobs whose spread selector matches this fnmatch pattern. "
+                "Patterns match the raw selector strings produced by 'spread -list' "
+                "(e.g. 'my-backend-ci:*'). May be repeated."
+            ),
+        ),
+    ] = [],  # noqa: B006
+) -> None:
     """Print CI test job selectors as a JSON array for GitHub Actions matrix."""
-    entries = spread_jobs(Path.cwd())
+    entries = spread_jobs(Path.cwd(), exclude=exclude)
     typer.echo(json.dumps({"include": entries}))
