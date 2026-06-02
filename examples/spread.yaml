@@ -43,22 +43,3 @@ integration-suites:
     - integration-test
     environment:
       MODULE/test_charm: tests/integration/test_charm.py
-  # Multi-track monorepo: juju3 and juju4 suites share the same test files
-  # but use different suite identifiers for parallelism.
-  # discover-path decouples the suite key (unique ID) from where tests live.
-  tests/integration/juju3/:
-    discover-path: tests/integration/
-    working-dir: ./
-    summary: juju3 integration tests
-    backends:
-    - integration-test
-    environment:
-      CONCIERGE: concierge-juju3.yaml
-  tests/integration/juju4/:
-    discover-path: tests/integration/
-    working-dir: ./
-    summary: juju4 integration tests
-    backends:
-    - integration-test
-    environment:
-      CONCIERGE: concierge-juju4.yaml
