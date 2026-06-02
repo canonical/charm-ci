@@ -518,6 +518,9 @@ def _expand_integration_suites(
 
 def _validate_safe_path(path: str, label: str) -> None:
     """Reject paths that escape the project root via traversal or absolutes."""
+    if not path or not path.strip():
+        msg = f"Empty path not allowed in {label}"
+        raise ConfigurationError(msg)
     if path.startswith("/"):
         msg = f"Absolute path not allowed in {label}: '{path}'"
         raise ConfigurationError(msg)

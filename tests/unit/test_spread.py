@@ -1950,6 +1950,8 @@ integration-suites:
         assert juju4_env.get("CONCIERGE") == "concierge-juju4.yaml"
         assert juju4_env.get("MODULE/test_deploy") == "tests/integration/test_deploy.py"
 
+
+class TestGetSuiteConfig:
     """Tests for get_suite_config()."""
 
     def test_no_spread_yaml_returns_default(self, tmp_path: Path) -> None:
@@ -2062,6 +2064,14 @@ suites:
 class TestValidateSafePath:
     """Tests for _validate_safe_path."""
 
+    def test_rejects_empty_path(self) -> None:
+        with pytest.raises(ConfigurationError, match="Empty path"):
+            _validate_safe_path("", "discover-path")
+
+    def test_rejects_whitespace_only_path(self) -> None:
+        with pytest.raises(ConfigurationError, match="Empty path"):
+            _validate_safe_path("   ", "discover-path")
+
     def test_rejects_absolute_path(self) -> None:
         with pytest.raises(ConfigurationError, match="Absolute path"):
             _validate_safe_path("/etc/passwd", "suite path")
@@ -2087,6 +2097,28 @@ class TestValidateSafePath:
 
 class TestExplicitSuiteValidation:
     """Tests for explicit suite missing MODULE/ validation."""
+
+    def test_discover_path_empty_string_raises(self, tmp_path: Path) -> None:
+        """discover-path: '' is rejected with a clear error."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/:
+    discover-path: ""
+    working-dir: ./
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match="Empty path"):
+            spread_expand(tmp_path, ci=False)
 
     def test_explicit_suite_no_modules_raises(self, tmp_path: Path) -> None:
         """auto-discover: false with no MODULE/ variants raises."""
