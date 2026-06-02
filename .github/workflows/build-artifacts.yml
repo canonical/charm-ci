@@ -8,7 +8,7 @@ name: Build Artifacts
 #
 #   jobs:
 #     build:
-#       uses: canonical/charm-ci/.github/workflows/build-artifacts.yml@main
+#       uses: canonical/charm-ci/.github/workflows/build-artifacts.yml@v0.0.1-alpha.1
 #       permissions:
 #         contents: read
 #         packages: write
