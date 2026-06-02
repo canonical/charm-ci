@@ -321,7 +321,7 @@ def _generate_spread_yaml(
         _INTEGRATION_SUITES_KEY: {
             "tests/integration/": {
                 "summary": "integration tests",
-                "cwd": "./",
+                "working-dir": "./",
                 "backends": [_VIRTUAL_BACKEND],
             },
         },
@@ -468,7 +468,8 @@ _SUITE_OPCLI_KEYS = frozenset(
     {
         "auto-discover",
         "discover-pattern",
-        "cwd",
+        "discover-path",
+        "working-dir",
         "pytest-arguments-template",
         "pytest-environment-template",
     }
@@ -517,6 +518,9 @@ def _expand_integration_suites(
 
 def _validate_safe_path(path: str, label: str) -> None:
     """Reject paths that escape the project root via traversal or absolutes."""
+    if not path or not path.strip():
+        msg = f"Empty path not allowed in {label}"
+        raise ConfigurationError(msg)
     if path.startswith("/"):
         msg = f"Absolute path not allowed in {label}: '{path}'"
         raise ConfigurationError(msg)
@@ -533,6 +537,29 @@ def _validate_safe_path(path: str, label: str) -> None:
         raise ConfigurationError(msg)
 
 
+def _resolve_effective_discover_path(
+    suite_path: str,
+    discover_path: str | None,
+    auto_discover: bool,
+) -> str:
+    """Validate ``discover-path`` and return the effective discovery root (no trailing slash).
+
+    Raises:
+        ConfigurationError: If ``discover-path`` is combined with ``auto-discover: false``,
+            or if the path is unsafe.
+    """
+    if discover_path is None:
+        return suite_path.rstrip("/")
+    _validate_safe_path(discover_path, "discover-path")
+    if not auto_discover:
+        msg = (
+            f"Suite '{suite_path}': 'discover-path' has no effect when "
+            "'auto-discover: false'. Remove 'discover-path' or enable auto-discover."
+        )
+        raise ConfigurationError(msg)
+    return discover_path.rstrip("/")
+
+
 def _build_suite_entry(
     suite_path: str,
     suite_cfg_raw: object,
@@ -545,16 +572,21 @@ def _build_suite_entry(
 
     # Extract opcli-only keys
     auto_discover = suite_cfg.pop("auto-discover", True)
+    if not isinstance(auto_discover, bool):
+        auto_discover = True
     discover_pattern = suite_cfg.pop("discover-pattern", "test_*.py")
-    cwd = suite_cfg.pop("cwd", "./")
+    discover_path_raw = suite_cfg.pop("discover-path", None)
+    working_dir = suite_cfg.pop("working-dir", "./")
     suite_cfg.pop("pytest-arguments-template", None)
     suite_cfg.pop("pytest-environment-template", None)
-    if not isinstance(cwd, str):
-        cwd = "./"
+    if not isinstance(working_dir, str):
+        working_dir = "./"
     if not isinstance(discover_pattern, str):
         discover_pattern = "test_*.py"
+    discover_path: str | None = discover_path_raw if isinstance(discover_path_raw, str) else None
 
-    _validate_safe_path(cwd, "cwd")
+    _validate_safe_path(working_dir, "working-dir")
+    effective_discover = _resolve_effective_discover_path(suite_path, discover_path, auto_discover)
 
     # Discover or use explicit variants
     env: dict[str, str] = {}
@@ -563,12 +595,12 @@ def _build_suite_entry(
         env.update(existing_env)
 
     if auto_discover:
-        discover_dir = root / suite_path.rstrip("/")
+        discover_dir = root / effective_discover
         modules = _discover_modules_in(discover_dir, discover_pattern)
         # MODULE values must be relative to OPCLI_CWD so pytest can resolve them
         # from the directory it is invoked in (SPREAD_PATH/OPCLI_CWD).
-        cwd_clean = cwd.rstrip("/") or "."
-        suite_rel_to_cwd = posixpath.relpath(suite_path.rstrip("/"), cwd_clean)
+        working_dir_clean = working_dir.rstrip("/") or "."
+        suite_rel_to_cwd = posixpath.relpath(effective_discover, working_dir_clean)
         for mod_path in modules:
             key = _module_key(mod_path)
             full_key = f"MODULE/{key}"
@@ -585,7 +617,7 @@ def _build_suite_entry(
             logger.warning(
                 "auto-discover found no test modules in '%s' (pattern: %s). "
                 "Add test files or set auto-discover: false with explicit MODULE/ variants.",
-                suite_path,
+                effective_discover,
                 discover_pattern,
             )
     else:
@@ -601,7 +633,7 @@ def _build_suite_entry(
 
     # Inject opcli suite context variables
     env["OPCLI_SUITE"] = suite_path
-    env["OPCLI_CWD"] = cwd
+    env["OPCLI_CWD"] = working_dir
     suite_cfg["environment"] = env
 
     # Ensure trailing slash on suite path (spread convention)
@@ -639,13 +671,13 @@ def _module_key(module_path: str) -> str:
 def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str | None]:
     """Read suite configuration for ``opcli pytest``.
 
-    Returns a dict with at least ``cwd`` (default ``"./"``), and optionally
+    Returns a dict with at least ``working-dir`` (default ``"./"``), and optionally
     ``pytest-arguments-template`` and ``pytest-environment-template``.
 
     Resolution order:
     1. If *suite* given: look up in ``integration-suites``, then ``suites:``.
     2. If *suite* is None: auto-detect if single ``integration-suites`` entry.
-    3. Fall back to default (cwd=``"./"``).
+    3. Fall back to default (working-dir=``"./"``).
 
     Raises:
         ConfigurationError: If multiple suites exist and none is specified,
@@ -653,7 +685,7 @@ def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str | No
     """
     spread_path = root / _SPREAD_YAML
     if not spread_path.exists():
-        return {"cwd": "./"}
+        return {"working-dir": "./"}
 
     try:
         data = load_yaml(spread_path)
@@ -680,15 +712,17 @@ def get_suite_config(root: Path, suite: str | None = None) -> dict[str, str | No
             raise ConfigurationError(msg)
 
     # No integration-suites or empty — default behavior
-    return {"cwd": "./"}
+    return {"working-dir": "./"}
 
 
 def _extract_suite_config(cfg: object) -> dict[str, str | None]:
-    """Extract cwd and template keys from a suite config mapping."""
+    """Extract working-dir and template keys from a suite config mapping."""
     if not isinstance(cfg, dict):
-        return {"cwd": "./"}
-    cwd = cfg.get("cwd", "./")
-    result: dict[str, str | None] = {"cwd": cwd if isinstance(cwd, str) else "./"}
+        return {"working-dir": "./"}
+    working_dir = cfg.get("working-dir", "./")
+    result: dict[str, str | None] = {
+        "working-dir": working_dir if isinstance(working_dir, str) else "./"
+    }
     args_tmpl = cfg.get("pytest-arguments-template")
     if isinstance(args_tmpl, str):
         result["pytest-arguments-template"] = args_tmpl
@@ -713,11 +747,11 @@ def _lookup_suite(
             if candidate in integration_suites:
                 return _extract_suite_config(integration_suites[candidate])
 
-    # Fall back to native suites (best-effort: cwd defaults to ./)
+    # Fall back to native suites (best-effort: working-dir defaults to ./)
     if isinstance(native_suites, dict):
         for candidate in candidates:
             if candidate in native_suites:
-                return {"cwd": "./"}
+                return {"working-dir": "./"}
 
     available: list[str] = []
     if isinstance(integration_suites, dict):

@@ -1578,7 +1578,7 @@ environment:
   CONCIERGE: concierge.yaml
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     summary: integration tests
     backends:
       - integration-test
@@ -1596,12 +1596,12 @@ environment:
   CONCIERGE: concierge.yaml
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     summary: cross-charm tests
     backends:
       - integration-test
   haproxy-operator/tests/integration/:
-    cwd: haproxy-operator/
+    working-dir: haproxy-operator/
     summary: haproxy tests
     backends:
       - integration-test
@@ -1750,7 +1750,7 @@ suites:
     summary: hand-crafted suite
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     summary: auto suite
     backends:
       - integration-test
@@ -1774,7 +1774,7 @@ backends:
       - ubuntu-24.04
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     auto-discover: false
     summary: explicit suite
     backends:
@@ -1797,23 +1797,176 @@ integration-suites:
         assert "MODULE/test_ha" in suite_env
         assert "MODULE/test_other" not in suite_env
 
+    def test_discover_path_overrides_suite_key_for_discovery(self, tmp_path: Path) -> None:
+        """discover-path uses a different directory than the suite key for test discovery."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/juju4/:
+    discover-path: tests/integration/
+    working-dir: ./
+    summary: juju4 tests
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_deploy.py").write_text("")
+        (test_dir / "test_upgrade.py").write_text("")
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        # Suite identity is the key, not discover-path
+        assert "build/tests/integration/juju4/" in parsed["suites"]
+        suite_env = parsed["suites"]["build/tests/integration/juju4/"]["environment"]
+        # Discovery used tests/integration/, so MODULE values are relative to working-dir
+        assert suite_env.get("MODULE/test_deploy") == "tests/integration/test_deploy.py"
+        assert suite_env.get("MODULE/test_upgrade") == "tests/integration/test_upgrade.py"
+        # discover-path directory does not need to exist as a suite
+        assert "build/tests/integration/" not in parsed["suites"]
+
+    def test_discover_path_does_not_require_suite_key_dir_to_exist(self, tmp_path: Path) -> None:
+        """Suite key path (e.g. tests/integration/juju4/) need not exist on disk."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/juju4/:
+    discover-path: tests/integration/
+    working-dir: ./
+    summary: virtual suite key
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_foo.py").write_text("")
+        # Note: tests/integration/juju4/ is NOT created
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        suite_env = parsed["suites"]["build/tests/integration/juju4/"]["environment"]
+        assert "MODULE/test_foo" in suite_env
+
+    def test_discover_path_with_auto_discover_false_raises(self, tmp_path: Path) -> None:
+        """discover-path combined with auto-discover: false is an error."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/juju4/:
+    discover-path: tests/integration/
+    auto-discover: false
+    working-dir: ./
+    backends:
+      - integration-test
+    environment:
+      MODULE/test_foo: tests/integration/test_foo.py
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match=r"discover-path.*auto-discover"):
+            spread_expand(tmp_path, ci=False)
+
+    def test_discover_path_path_traversal_raises(self, tmp_path: Path) -> None:
+        """discover-path with traversal is rejected."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/juju4/:
+    discover-path: ../../etc/
+    working-dir: ./
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match="Path traversal"):
+            spread_expand(tmp_path, ci=False)
+
+    def test_two_suites_same_discover_path_different_envs(self, tmp_path: Path) -> None:
+        """Two suite entries can share a discover-path with different environment overrides."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/:
+    working-dir: ./
+    summary: juju 3 tests
+    backends:
+      - integration-test
+  tests/integration/juju4/:
+    discover-path: tests/integration/
+    working-dir: ./
+    summary: juju 4 tests
+    backends:
+      - integration-test
+    environment:
+      CONCIERGE: concierge-juju4.yaml
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_deploy.py").write_text("")
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        assert "build/tests/integration/" in parsed["suites"]
+        assert "build/tests/integration/juju4/" in parsed["suites"]
+
+        juju4_env = parsed["suites"]["build/tests/integration/juju4/"]["environment"]
+        assert juju4_env.get("CONCIERGE") == "concierge-juju4.yaml"
+        assert juju4_env.get("MODULE/test_deploy") == "tests/integration/test_deploy.py"
+
 
 class TestGetSuiteConfig:
     """Tests for get_suite_config()."""
 
     def test_no_spread_yaml_returns_default(self, tmp_path: Path) -> None:
         cfg = get_suite_config(tmp_path)
-        assert cfg == {"cwd": "./"}
+        assert cfg == {"working-dir": "./"}
 
     def test_single_integration_suite_auto_detected(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
         cfg = get_suite_config(tmp_path)
-        assert cfg == {"cwd": "./"}
+        assert cfg == {"working-dir": "./"}
 
     def test_explicit_suite_lookup(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _MULTI_SUITE_SPREAD)
         cfg = get_suite_config(tmp_path, suite="haproxy-operator/tests/integration/")
-        assert cfg == {"cwd": "haproxy-operator/"}
+        assert cfg == {"working-dir": "haproxy-operator/"}
 
     def test_multiple_suites_no_flag_raises(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _MULTI_SUITE_SPREAD)
@@ -1828,13 +1981,13 @@ class TestGetSuiteConfig:
     def test_falls_back_to_native_suites(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
         cfg = get_suite_config(tmp_path, suite="tests/integration/")
-        assert cfg == {"cwd": "./"}
+        assert cfg == {"working-dir": "./"}
 
     def test_trailing_slash_normalization(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
         # Works with or without trailing slash
         cfg = get_suite_config(tmp_path, suite="tests/integration")
-        assert cfg == {"cwd": "./"}
+        assert cfg == {"working-dir": "./"}
 
 
 class TestMaterializeTaskFiles:
@@ -1911,13 +2064,21 @@ suites:
 class TestValidateSafePath:
     """Tests for _validate_safe_path."""
 
+    def test_rejects_empty_path(self) -> None:
+        with pytest.raises(ConfigurationError, match="Empty path"):
+            _validate_safe_path("", "discover-path")
+
+    def test_rejects_whitespace_only_path(self) -> None:
+        with pytest.raises(ConfigurationError, match="Empty path"):
+            _validate_safe_path("   ", "discover-path")
+
     def test_rejects_absolute_path(self) -> None:
         with pytest.raises(ConfigurationError, match="Absolute path"):
             _validate_safe_path("/etc/passwd", "suite path")
 
     def test_rejects_path_traversal(self) -> None:
         with pytest.raises(ConfigurationError, match="Path traversal"):
-            _validate_safe_path("../../../etc/passwd", "cwd")
+            _validate_safe_path("../../../etc/passwd", "working-dir")
 
     def test_rejects_embedded_traversal(self) -> None:
         with pytest.raises(ConfigurationError, match="Path traversal"):
@@ -1925,17 +2086,39 @@ class TestValidateSafePath:
 
     def test_rejects_shell_injection_characters(self) -> None:
         with pytest.raises(ConfigurationError, match="Unsafe characters"):
-            _validate_safe_path("tests/$(whoami)/", "cwd")
+            _validate_safe_path("tests/$(whoami)/", "working-dir")
 
     def test_accepts_normal_paths(self) -> None:
         # These should not raise
         _validate_safe_path("tests/integration/", "suite path")
-        _validate_safe_path("./", "cwd")
+        _validate_safe_path("./", "working-dir")
         _validate_safe_path("haproxy-operator/tests/integration/", "suite path")
 
 
 class TestExplicitSuiteValidation:
     """Tests for explicit suite missing MODULE/ validation."""
+
+    def test_discover_path_empty_string_raises(self, tmp_path: Path) -> None:
+        """discover-path: '' is rejected with a clear error."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/:
+    discover-path: ""
+    working-dir: ./
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match="Empty path"):
+            spread_expand(tmp_path, ci=False)
 
     def test_explicit_suite_no_modules_raises(self, tmp_path: Path) -> None:
         """auto-discover: false with no MODULE/ variants raises."""
@@ -1949,7 +2132,7 @@ backends:
       - ubuntu-24.04
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     auto-discover: false
     summary: explicit suite
     backends:
@@ -1975,7 +2158,7 @@ backends:
       - ubuntu-24.04
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     backends:
       - integration-test
 """
@@ -1998,7 +2181,7 @@ backends:
       - ubuntu-24.04
 integration-suites:
   ../../../etc/:
-    cwd: ./
+    working-dir: ./
     backends:
       - integration-test
 """
