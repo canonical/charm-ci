@@ -560,17 +560,13 @@ def _resolve_effective_discover_path(
     return discover_path.rstrip("/")
 
 
-def _build_suite_entry(
-    suite_path: str,
-    suite_cfg_raw: object,
-    root: Path,
-) -> tuple[str, dict[str, object]]:
-    """Build a single expanded suite entry from an integration-suites config."""
-    _validate_safe_path(suite_path, "integration-suites key")
+def _pop_opcli_keys(
+    suite_cfg: dict[str, object],
+) -> tuple[bool, str, str | None, str]:
+    """Pop all opcli-only keys from *suite_cfg* and return their typed values.
 
-    suite_cfg: dict[str, object] = dict(suite_cfg_raw) if isinstance(suite_cfg_raw, dict) else {}
-
-    # Extract opcli-only keys
+    Returns (auto_discover, discover_pattern, discover_path, working_dir).
+    """
     auto_discover = suite_cfg.pop("auto-discover", True)
     if not isinstance(auto_discover, bool):
         auto_discover = True
@@ -584,6 +580,24 @@ def _build_suite_entry(
     if not isinstance(discover_pattern, str):
         discover_pattern = "test_*.py"
     discover_path: str | None = discover_path_raw if isinstance(discover_path_raw, str) else None
+    return auto_discover, discover_pattern, discover_path, working_dir
+
+
+def _build_suite_entry(
+    suite_path: str,
+    suite_cfg_raw: object,
+    root: Path,
+) -> tuple[str, dict[str, object]]:
+    """Build a single expanded suite entry from an integration-suites config."""
+    _validate_safe_path(suite_path, "integration-suites key")
+
+    suite_cfg: dict[str, object] = dict(suite_cfg_raw) if isinstance(suite_cfg_raw, dict) else {}
+
+    if "cwd" in suite_cfg:
+        msg = f"Suite '{suite_path}': 'cwd' is no longer supported. Use 'working-dir' instead."
+        raise ConfigurationError(msg)
+
+    auto_discover, discover_pattern, discover_path, working_dir = _pop_opcli_keys(suite_cfg)
 
     _validate_safe_path(working_dir, "working-dir")
     effective_discover = _resolve_effective_discover_path(suite_path, discover_path, auto_discover)

@@ -2189,3 +2189,24 @@ integration-suites:
 
         with pytest.raises(ConfigurationError, match="Path traversal"):
             spread_expand(tmp_path, ci=False)
+
+    def test_cwd_key_raises_configuration_error(self, tmp_path: Path) -> None:
+        """The old 'cwd' key raises a clear error directing users to 'working-dir'."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/:
+    cwd: k8s-charm/
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match=r"'cwd' is no longer supported.*working-dir"):
+            spread_expand(tmp_path, ci=False)
