@@ -23,6 +23,7 @@ uv run ruff check src/ tests/              # lint
 uv run ruff format --check src/ tests/     # format check
 uv run mypy src/                           # type check
 uv run pytest tests/unit/                  # unit tests
+uv run codespell src/ tests/               # spell check
 ```
 
 Never use `pip install`. All dependency management goes through `uv` and `pyproject.toml`.
@@ -56,6 +57,12 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 4. **Avoid `Any`.** Prefer specific types; `mypy --strict` must pass. Legacy `Any` in YAML-handling helpers is tolerated but should not spread.
 5. **CLI consistency: `run` / `expand` pairs.** Commands that execute a subprocess (`run`) and commands that print the equivalent command (`expand`) must be aligned in arguments, flags, and semantics. If `opcli foo run --bar baz` executes something, then `opcli foo expand --bar baz` must print the equivalent command with the same flags accepted. This applies to `spread`, `pytest`, and any future command groups with this pattern.
 6. **Stepdown rule.** Within each module, order functions so callers appear before callees. Public API at the top, then private helpers below in call-order. Read top-to-bottom like a narrative.
+7. **License headers required.** Every new `.py` file must begin with:
+   ```python
+   # Copyright <year> Canonical Ltd.
+   # See LICENSE file for licensing details.
+   ```
+   CI enforces this via `skywalking-eyes` and `.licenserc.yaml`. YAML, TOML, Markdown, and other non-Python files are excluded — see `.licenserc.yaml` for the full exclusion list.
 
 ---
 
@@ -67,7 +74,7 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 | Packaging | `uv` |
 | CLI | `Typer` |
 | Data models | `Pydantic V2` |
-| Lint/format | `Ruff` (rules: `E F W I UP B SIM PL RUF`; ignores: `B008` globally, `E501` in `spread.py`) |
+| Lint/format | `Ruff` (see `pyproject.toml [tool.ruff.lint]` for full config — selected rule groups include `A B C D E F I N PL RUF S SIM TC UP W`) |
 | YAML (user files) | `ruamel.yaml` (preserves comments) |
 | Templating | `Jinja2` (pytest invocation templates) |
 | Testing | `pytest` + `pytest-mock` |
@@ -112,7 +119,7 @@ The virtual backend in `spread.yaml` accepts opcli-only keys that are stripped d
 
 | Key | Values | Default | Effect |
 |---|---|---|---|
-| `type` | `integration-test`, `tutorial` | (required) | Selects the backend template |
+| `type` | `integration-test` | (required) | Selects the backend template |
 | `runner` | JSON array of labels | — | CI runner labels for GitHub Actions matrix |
 | `cpu`, `memory`, `disk` | integer | 4, 8, 20 | Local LXD VM resource allocation |
 
@@ -229,6 +236,9 @@ The table below distinguishes *mechanically enforced* rules from *advisory* ones
 | Type safety (`mypy --strict`) | ✅ CI blocks | `ci.yml` step |
 | Unit tests pass | ✅ CI blocks | `ci.yml` step |
 | Coverage ≥ 85% | ✅ CI blocks | `pytest --cov-fail-under=85` |
+| Spell check (`codespell`) | ✅ CI blocks | `ci.yml` lint step |
+| License headers | ✅ CI blocks | `.licenserc.yaml` via `skywalking-eyes` |
+| Shell scripts (`shellcheck`) | ✅ CI blocks | `ci.yml` shellcheck step |
 | No push to main | ⚠️ Advisory | Branch protection (enable on canonical/charm-ci) |
 | CI green before merge | ⚠️ Advisory | Branch protection (enable on canonical/charm-ci) |
 | Docs updated with code | ⚠️ Advisory | PR review discipline |
