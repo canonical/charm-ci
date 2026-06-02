@@ -255,7 +255,7 @@ def spread_jobs(
             _MIN_PARTS = 3  # noqa: N806
             if len(parts) < _MIN_PARTS:
                 continue
-            if exclude and any(fnmatch.fnmatch(line, pattern) for pattern in exclude):
+            if exclude and any(fnmatch.fnmatchcase(line, pattern) for pattern in exclude):
                 continue
             system = parts[1]
             runner = runner_map.get(system, json.dumps(_DEFAULT_RUNNER))

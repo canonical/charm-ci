@@ -58,12 +58,12 @@ def jobs(
             "--exclude",
             help=(
                 "Exclude jobs whose spread selector matches this fnmatch pattern. "
-                "Patterns match the raw selector strings produced by 'spread -list' "
-                "(e.g. 'my-backend-ci:*'). May be repeated."
+                "Selectors have the form 'backend-ci:system:suite/task:variant' "
+                "(e.g. 'my-docs-ci:*', '*:ubuntu-24.04:tests/docs/*'). May be repeated."
             ),
         ),
     ] = [],  # noqa: B006
 ) -> None:
-    """Print CI test job selectors as a JSON array for GitHub Actions matrix."""
+    """Print CI test job selectors as a GitHub Actions matrix object."""
     entries = spread_jobs(Path.cwd(), exclude=exclude)
     typer.echo(json.dumps({"include": entries}))

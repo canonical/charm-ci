@@ -192,6 +192,40 @@ class TestRstExtraction:
         result = expand_tutorial(doc)
         assert "echo rest" in result
 
+    def test_code_block_with_internal_blank_line(self, tmp_path: Path) -> None:
+        """Commands after an internal blank line are not silently dropped."""
+        doc = tmp_path / "tutorial.rst"
+        _write(
+            doc,
+            ".. code-block:: bash\n\n   echo one\n\n   echo two\n\n",
+        )
+        result = expand_tutorial(doc)
+        assert "echo one" in result
+        assert "echo two" in result
+
+    def test_code_block_with_directive_options(self, tmp_path: Path) -> None:
+        """Directive option lines (:caption:, :linenos:) are skipped, not emitted."""
+        doc = tmp_path / "tutorial.rst"
+        _write(
+            doc,
+            ".. code-block:: bash\n   :caption: demo\n   :linenos:\n\n   echo real\n\n",
+        )
+        result = expand_tutorial(doc)
+        assert "echo real" in result
+        assert ":caption:" not in result
+        assert ":linenos:" not in result
+
+    def test_code_block_directive_options_do_not_truncate_code(self, tmp_path: Path) -> None:
+        """Directive options followed by blank + code yield all code lines."""
+        doc = tmp_path / "tutorial.rst"
+        _write(
+            doc,
+            ".. code-block:: bash\n   :emphasize-lines: 1\n\n   echo first\n   echo second\n\n",
+        )
+        result = expand_tutorial(doc)
+        assert "echo first" in result
+        assert "echo second" in result
+
 
 # ---------------------------------------------------------------------------
 # File type detection

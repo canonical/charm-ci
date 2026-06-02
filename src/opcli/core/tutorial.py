@@ -23,6 +23,11 @@ from opcli.core.exceptions import ValidationError
 # ---------------------------------------------------------------------------
 
 
+def _line_number(content: str, pos: int) -> int:
+    """Return the 1-based line number for a byte offset in *content*."""
+    return content.count("\n", 0, pos) + 1
+
+
 def _validate_paired_markers(
     content: str,
     start_pattern: str,
@@ -52,14 +57,14 @@ def _validate_paired_markers(
             if not stack:
                 msg = (
                     f"Found closing {marker_name} marker without corresponding "
-                    f"opening marker at position {pos}"
+                    f"opening marker at line {_line_number(content, pos)}"
                 )
                 raise ValidationError(msg)
             start_pos = stack.pop()
             pairs.append((start_pos, pos))
 
     if stack:
-        msg = f"Unclosed {marker_name} marker found at position {stack[0]}"
+        msg = f"Unclosed {marker_name} marker found at line {_line_number(content, stack[0])}"
         raise ValidationError(msg)
 
     return pairs
@@ -72,19 +77,18 @@ def _validate_paired_markers(
 
 def _extract_markdown_spread_comments(content: str) -> list[tuple[int, str]]:
     """Return ``(position, command_string)`` tuples for ``<!-- SPREAD -->`` blocks."""
+    result: list[tuple[int, str]] = []
     spread_starts = [m.start() for m in re.finditer(r"<!-- SPREAD(?! SKIP)\s*", content)]
     for start_pos in spread_starts:
         remaining = content[start_pos:]
         if "-->" not in remaining:
-            msg = f"Unclosed SPREAD comment block found at position {start_pos}"
+            msg = f"Unclosed SPREAD comment block found at line {_line_number(content, start_pos)}"
             raise ValidationError(msg)
         next_spread = remaining.find("<!-- SPREAD", 1)
         closing_pos = remaining.find("-->")
         if next_spread != -1 and closing_pos > next_spread:
-            msg = f"Unclosed SPREAD comment block found at position {start_pos}"
+            msg = f"Unclosed SPREAD comment block found at line {_line_number(content, start_pos)}"
             raise ValidationError(msg)
-
-    result: list[tuple[int, str]] = []
     pattern = r"<!-- SPREAD(?! SKIP)\s*\n(.*?)-->"
     for match in re.finditer(pattern, content, re.DOTALL):
         text = match.group(1).strip()
@@ -208,6 +212,49 @@ def _extract_rst_skip_ranges(content: str) -> list[tuple[int, int]]:
     return ranges
 
 
+def _parse_rst_code_block_body(
+    lines: list[str],
+    start_idx: int,
+) -> tuple[list[str], int]:
+    """Parse the body of a ``.. code-block::`` directive starting at *start_idx*.
+
+    Skips directive option lines (``:option: value``), the blank-line separator,
+    then collects all indented lines (including internal blank lines) until the
+    first non-blank, non-indented line.
+
+    Returns:
+        A tuple of ``(body_lines, new_index)`` where *body_lines* is the raw
+        (still-indented) content and *new_index* is the line index after the block.
+    """
+    i = start_idx
+
+    # Skip directive option lines (:option: value, indented)
+    while i < len(lines) and re.match(r"^[ \t]+:[a-zA-Z]", lines[i]):
+        i += 1
+
+    # Skip blank-line separator(s)
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+
+    # Collect indented body including internal blank lines
+    body: list[str] = []
+    while i < len(lines):
+        bl = lines[i]
+        if not bl.strip():
+            body.append("")
+        elif bl.startswith((" ", "\t")):
+            body.append(bl)
+        else:
+            break
+        i += 1
+
+    # Strip trailing blank lines
+    while body and not body[-1].strip():
+        body.pop()
+
+    return body, i
+
+
 def _extract_commands_from_rst(file_path: Path) -> list[str]:
     """Extract shell commands from a reStructuredText tutorial file."""
     content = file_path.read_text(encoding="utf-8")
@@ -215,25 +262,37 @@ def _extract_commands_from_rst(file_path: Path) -> list[str]:
     spread_blocks = _extract_rst_spread_comments(content)
     skip_ranges = _extract_rst_skip_ranges(content)
 
-    # .. code-block:: directive; allow one optional blank line after directive
-    pattern = r"^\.\. code-block::[^\n]*\n(?:\n)?((?:[ \t]+.+(?:\n|$))+)"
+    # Parse .. code-block:: directives line by line to correctly handle:
+    #   - directive option lines (:caption:, :linenos:, etc.)
+    #   - blank lines within the code body
     code_blocks: list[tuple[int, str]] = []
-    for m in re.finditer(pattern, content, re.MULTILINE):
-        start = m.start()
-        if any(s <= start < e for s, e in skip_ranges):
-            continue
+    lines = content.split("\n")
+    byte_pos = 0  # running byte offset for lines[i] in content
 
-        indented = m.group(1)
-        lines = indented.split("\n")
-        non_empty = [ln for ln in lines if ln.strip()]
-        if not non_empty:
-            continue
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if re.match(r"^\.\. code-block::", line):
+            block_start = byte_pos
+            byte_pos += len(line) + 1
+            i += 1
+            pre_body_i = i
 
-        min_indent = min(len(ln) - len(ln.lstrip()) for ln in non_empty)
-        dedented = [ln[min_indent:] if ln.strip() else "" for ln in lines]
-        text = "\n".join(dedented).strip()
-        if text:
-            code_blocks.append((start, text))
+            body, i = _parse_rst_code_block_body(lines, i)
+            byte_pos += sum(len(lines[j]) + 1 for j in range(pre_body_i, i))
+
+            if not body or any(s <= block_start < e for s, e in skip_ranges):
+                continue
+
+            non_empty = [ln for ln in body if ln.strip()]
+            min_indent = min(len(ln) - len(ln.lstrip()) for ln in non_empty)
+            dedented = [ln[min_indent:] if ln.strip() else "" for ln in body]
+            text = "\n".join(dedented)
+            if text:
+                code_blocks.append((block_start, text))
+        else:
+            byte_pos += len(line) + 1
+            i += 1
 
     filtered_spread: list[tuple[int, str]] = [
         (pos, cmd) for pos, cmd in spread_blocks if not any(s <= pos < e for s, e in skip_ranges)
