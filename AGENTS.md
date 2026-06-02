@@ -123,6 +123,17 @@ The virtual backend in `spread.yaml` accepts opcli-only keys that are stripped d
 | `runner` | JSON array of labels | — | CI runner labels for GitHub Actions matrix |
 | `cpu`, `memory`, `disk` | integer | 4, 8, 20 | Local LXD VM resource allocation |
 
+### Per-suite opcli keys
+
+These keys live in `integration-suites` entries and are consumed by opcli during expansion (not passed to spread):
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `working-dir` | path string | `"./"` | Directory pytest is invoked from. In monorepo patterns, set to the sub-charm directory (e.g. `k8s-charm/`). Controls both the pytest working directory and how MODULE values are computed. |
+| `discover-path` | path string | (suite key) | Directory used for test auto-discovery. When set, the suite key acts as a unique identifier only — the actual test files are discovered from this path instead. Ignored when `auto-discover: false`. |
+| `auto-discover` | bool | `true` | Walk the discovery directory recursively for test files matching `discover-pattern`. |
+| `discover-pattern` | glob string | `"test_*.py"` | Filename pattern used during auto-discovery. |
+
 ### Per-suite pytest template keys
 
 These keys live in `integration-suites` entries (not the backend) and control how `opcli pytest run/expand` passes artifacts to the test framework:
@@ -161,7 +172,7 @@ integration-suites:
 
 **Auto-discovery** (`auto-discover: true`, the default) walks the suite directory **recursively** (like pytest). MODULE keys flatten subdirectory paths with underscores; MODULE values are **relative to `OPCLI_CWD`** (the directory pytest is invoked from) so pytest can resolve them:
 
-| File | Key | Value (suite `tests/integration/`, `cwd: ./`) |
+| File | Key | Value (suite `tests/integration/`, `working-dir: ./`) |
 |---|---|---|
 | `test_foo.py` | `MODULE/test_foo` | `tests/integration/test_foo.py` |
 | `subdir/test_foo.py` | `MODULE/subdir_test_foo` | `tests/integration/subdir/test_foo.py` |

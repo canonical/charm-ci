@@ -264,7 +264,7 @@ class TestAssembleToxArgvWithTemplate:
         write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
 
         suite_config: dict[str, str | None] = {
-            "cwd": "./",
+            "working-dir": "./",
             "pytest-arguments-template": "--custom-flag={{ artifacts.charms[0].builds[0].path }}",
         }
 
@@ -278,7 +278,7 @@ class TestAssembleToxArgvWithTemplate:
         write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
 
         suite_config: dict[str, str | None] = {
-            "cwd": "./",
+            "working-dir": "./",
             "pytest-arguments-template": "--custom=value",
         }
 
@@ -297,7 +297,7 @@ class TestPytestRunWithTemplate:
         write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
 
         suite_config: dict[str, str | None] = {
-            "cwd": "./",
+            "working-dir": "./",
             "pytest-environment-template": ("CHARM_PATH={{ artifacts.charms[0].builds[0].path }}"),
         }
 
@@ -353,7 +353,7 @@ class TestGetSuiteConfigTemplates:
 
     def test_no_spread_yaml_returns_default(self, tmp_path: Path) -> None:
         cfg = get_suite_config(tmp_path)
-        assert cfg == {"cwd": "./"}
+        assert cfg == {"working-dir": "./"}
 
 
 class TestCLIRunnerTemplates:

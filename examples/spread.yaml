@@ -18,17 +18,17 @@ exclude:
 - .venv
 - .*_cache
 integration-suites:
-  # Top-level integration tests (multi-charm, cwd is project root)
+  # Top-level integration tests (multi-charm, working-dir is project root)
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     summary: top-level integration tests
     backends:
     - integration-test
     environment:
       CONCIERGE/test_k8s_charm: concierge-microk8s.yaml
-  # Sub-charm tests (monorepo pattern — cwd scopes artifacts to k8s-charm/)
+  # Sub-charm tests (monorepo pattern — working-dir scopes artifacts to k8s-charm/)
   k8s-charm/tests/integration/:
-    cwd: k8s-charm/
+    working-dir: k8s-charm/
     summary: k8s-charm sub-charm tests
     backends:
     - integration-test
@@ -36,7 +36,7 @@ integration-suites:
       CONCIERGE: concierge-microk8s.yaml
   # Machine-charm tests with explicit variants (no auto-discover)
   machine-charm/tests/integration/:
-    cwd: machine-charm/
+    working-dir: machine-charm/
     auto-discover: false
     summary: machine-charm sub-charm tests
     backends:
