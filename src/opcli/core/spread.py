@@ -7,7 +7,7 @@
 plus ``tests/integration/run/task.yaml``.
 
 ``expand`` reads ``spread.yaml``, finds backends whose ``type:`` field is a
-recognized virtual type (``integration-test``), replaces them with concrete
+recognized virtual type (``integration-test``, ``opcli-minimal``), replaces them with concrete
 ``<name>-local`` or ``<name>-ci`` backends, and returns the expanded YAML.
 The original file is **never** modified.
 
@@ -17,6 +17,8 @@ that directory.  Spread discovers ``spread.yaml`` in the temp dir and
 uses ``reroot`` to locate the actual project tree one level up.
 """
 
+import collections.abc
+import fnmatch
 import json
 import logging
 import posixpath
@@ -44,6 +46,7 @@ _SPREAD_YAML = "spread.yaml"
 _TASK_YAML_REL = "tests/integration/run/task.yaml"
 _BUILD_DIR = "build"
 _VIRTUAL_BACKEND = "integration-test"
+_OPCLI_MINIMAL_BACKEND = "opcli-minimal"
 _INTEGRATION_SUITES_KEY = "integration-suites"
 
 
@@ -192,11 +195,14 @@ def spread_run(
         run_command(cmd, cwd=str(build_dir), interactive=True, env=secrets_env)
 
 
-def spread_jobs(root: Path) -> list[dict[str, str]]:
+def spread_jobs(
+    root: Path,
+    exclude: collections.abc.Sequence[str] = (),
+) -> list[dict[str, str]]:
     """Return all CI spread task selectors as a list of GitHub Actions matrix entries.
 
     Calls ``spread -list`` on the expanded (CI-mode) ``spread.yaml``, restricted
-    to virtual backends (``integration-test``).  Non-virtual
+    to virtual backends (``integration-test``, ``opcli-minimal``).  Non-virtual
     spread-native backends are excluded.
 
     Each entry has:
@@ -208,6 +214,15 @@ def spread_jobs(root: Path) -> list[dict[str, str]]:
       ``runner:`` field on the system entry, or ``"ubuntu-latest"`` if absent).
     - ``arch``: architecture string — taken from the explicit ``arch:`` field
       on the system entry when present, otherwise derived from the runner label.
+
+    Args:
+        root: Project root directory containing ``spread.yaml``.
+        exclude: Sequence of ``fnmatch`` glob patterns matched against the raw
+            spread selector strings (e.g. ``"my-docs-ci:*"``).  Any job whose
+            selector matches at least one pattern is omitted from the result.
+            Patterns use the same concrete backend names that appear in the
+            ``spread -list`` output (i.e. with the ``-ci`` suffix appended by
+            opcli during expansion).
 
     Raises:
         ConfigurationError: If ``spread.yaml`` is missing, malformed, or
@@ -239,6 +254,8 @@ def spread_jobs(root: Path) -> list[dict[str, str]]:
             parts = line.split(":")
             _MIN_PARTS = 3  # noqa: N806
             if len(parts) < _MIN_PARTS:
+                continue
+            if exclude and any(fnmatch.fnmatchcase(line, pattern) for pattern in exclude):
                 continue
             system = parts[1]
             runner = runner_map.get(system, json.dumps(_DEFAULT_RUNNER))
@@ -1013,12 +1030,29 @@ echo "root:${SPREAD_PASSWORD}" | sudo chpasswd
 ADDRESS localhost
 """
 
+# opcli-minimal backend: install uv + opcli so the VM has opcli available.
+# No concierge, no Juju — users write their own task.yaml.
+# The CI prepare is empty: CI workflows are expected to install opcli themselves
+# before invoking spread.
+_OPCLI_MINIMAL_LOCAL_PREPARE = """\
+snap install astral-uv --classic
+export UV_TOOL_BIN_DIR=/usr/local/bin
+export UV_TOOL_DIR=/usr/local/share/uv-tools
+if grep -q 'name = "opcli"' "${SPREAD_PATH}/pyproject.toml" 2>/dev/null; then
+  uv tool install "${SPREAD_PATH}" --quiet
+else
+  uv tool install \
+      "git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
+      --quiet
+fi
+"""
+
 # Map each virtual backend type value to:
 #   (local_prepare_before, local_prepare_after, ci_prepare_before, ci_prepare_after)
 # Backends in spread.yaml declare their virtual type via the ``type:`` field
-# (e.g. ``type: integration-test``).  Concrete names are derived as
-# ``"{backend_name}-local"`` / ``"{backend_name}-ci"`` from the user-defined
-# backend name.
+# (e.g. ``type: integration-test`` or ``type: opcli-minimal``).  Concrete names
+# are derived as ``"{backend_name}-local"`` / ``"{backend_name}-ci"`` from the
+# user-defined backend name.
 _BACKEND_CONFIGS: dict[str, tuple[str, str, str, str]] = {
     _VIRTUAL_BACKEND: (
         _LOCAL_PREPARE_BEFORE_USER,
@@ -1026,6 +1060,7 @@ _BACKEND_CONFIGS: dict[str, tuple[str, str, str, str]] = {
         _CI_PREPARE_BEFORE_USER,
         _CI_PREPARE_AFTER_USER,
     ),
+    _OPCLI_MINIMAL_BACKEND: (_OPCLI_MINIMAL_LOCAL_PREPARE, "", "", ""),
 }
 
 # Keys in system entries that are opcli-specific and must be stripped before

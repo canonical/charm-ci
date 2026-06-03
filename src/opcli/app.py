@@ -16,6 +16,7 @@ from opcli.commands import (
     install,
     pytest_cmd,
     spread,
+    tutorial_cmd,
 )
 from opcli.core.exceptions import OpcliError
 
@@ -58,3 +59,4 @@ typer_app.add_typer(env.app, name="env")
 typer_app.add_typer(install.app, name="install")
 typer_app.add_typer(spread.app, name="spread")
 typer_app.add_typer(pytest_cmd.app, name="pytest")
+typer_app.add_typer(tutorial_cmd.app, name="tutorial")

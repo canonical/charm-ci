@@ -5,6 +5,7 @@
 
 import json
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -48,7 +49,19 @@ def expand() -> None:
 
 
 @app.command()
-def jobs() -> None:
-    """Print CI test job selectors as a JSON array for GitHub Actions matrix."""
-    entries = spread_jobs(Path.cwd())
+def jobs(
+    exclude: Annotated[
+        list[str],
+        typer.Option(
+            "--exclude",
+            help=(
+                "Exclude jobs whose spread selector matches this fnmatch pattern. "
+                "Selectors have the form 'backend-ci:system:suite/task:variant' "
+                "(e.g. 'my-docs-ci:*', '*:ubuntu-24.04:tests/docs/*'). May be repeated."
+            ),
+        ),
+    ] = [],  # noqa: B006
+) -> None:
+    """Print CI test job selectors as a GitHub Actions matrix object."""
+    entries = spread_jobs(Path.cwd(), exclude=exclude)
     typer.echo(json.dumps({"include": entries}))

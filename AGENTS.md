@@ -85,7 +85,7 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 
 opcli follows a two-tier output convention:
 
-- **Data commands** (`artifacts matrix`, `spread jobs`, `spread expand`, `artifacts path`) — always emit structured output (JSON/YAML) to stdout. These exist solely to produce machine-readable data.
+- **Data commands** (`artifacts matrix`, `spread jobs`, `spread expand`, `artifacts path`, `tutorial expand`) — always emit structured output (JSON/YAML/text) to stdout. These exist solely to produce machine-readable or script-ready data.
 - **Action commands** (`artifacts publish`, `artifacts build`, `spread run`) — print human-readable status to stdout by default. Use `--json` to opt into structured JSON output for CI consumption.
 
 This mirrors the `gh` CLI pattern: action commands are human-first; `--json` switches to machine-parseable output.
@@ -119,11 +119,30 @@ The virtual backend in `spread.yaml` accepts opcli-only keys that are stripped d
 
 | Key | Values | Default | Effect |
 |---|---|---|---|
-| `type` | `integration-test` | (required) | Selects the backend template |
+| `type` | `integration-test`, `opcli-minimal` | (required) | Selects the backend template |
 | `runner` | JSON array of labels | — | CI runner labels for GitHub Actions matrix |
 | `cpu`, `memory`, `disk` | integer | 4, 8, 20 | Local LXD VM resource allocation |
 
-### Per-suite opcli keys
+**`integration-test`**: Full backend — installs concierge, Juju, opcli, and runs `opcli env provision`. For standard charm integration tests.
+
+**`opcli-minimal`**: Lightweight backend — installs only uv and opcli (no concierge, no Juju). Users write their own `task.yaml`. Suitable for tutorial runs, linting, or any test that only needs opcli. In CI, the prepare script is empty (the GitHub Actions workflow installs opcli before invoking spread).
+
+### opcli spread jobs --exclude
+
+`opcli spread jobs` accepts `--exclude <pattern>` (repeatable) to filter out jobs from the output matrix. Patterns use `fnmatch` glob syntax and match against the **raw spread selector string** (format: `backend-ci:system:suite/variant`). Examples:
+
+```bash
+# Exclude all jobs from the 'my-docs' backend
+opcli spread jobs --exclude "my-docs-ci:*"
+
+# Exclude a specific suite across all systems
+opcli spread jobs --exclude "*:tests/docs/*"
+
+# Multiple patterns (OR semantics — any match = excluded)
+opcli spread jobs --exclude "my-docs-ci:*" --exclude "*:ubuntu-24.04-juju3:*:*"
+```
+
+
 
 These keys live in `integration-suites` entries and are consumed by opcli during expansion (not passed to spread). The first group controls suite identity and test discovery; the second group controls how artifacts are passed to pytest.
 
