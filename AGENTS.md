@@ -85,7 +85,7 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 
 opcli follows a two-tier output convention:
 
-- **Data commands** (`artifacts matrix`, `spread jobs`, `spread expand`, `artifacts path`) — always emit structured output (JSON/YAML) to stdout. These exist solely to produce machine-readable data.
+- **Data commands** (`artifacts matrix`, `spread jobs`, `spread expand`, `artifacts path`, `tutorial expand`) — always emit structured output (JSON/YAML/text) to stdout. These exist solely to produce machine-readable or script-ready data.
 - **Action commands** (`artifacts publish`, `artifacts build`, `spread run`) — print human-readable status to stdout by default. Use `--json` to opt into structured JSON output for CI consumption.
 
 This mirrors the `gh` CLI pattern: action commands are human-first; `--json` switches to machine-parseable output.
@@ -119,13 +119,47 @@ The virtual backend in `spread.yaml` accepts opcli-only keys that are stripped d
 
 | Key | Values | Default | Effect |
 |---|---|---|---|
-| `type` | `integration-test` | (required) | Selects the backend template |
+| `type` | `integration-test`, `opcli-minimal` | (required) | Selects the backend template |
 | `runner` | JSON array of labels | — | CI runner labels for GitHub Actions matrix |
 | `cpu`, `memory`, `disk` | integer | 4, 8, 20 | Local LXD VM resource allocation |
 
+**`integration-test`**: Full backend — installs concierge, Juju, opcli, and runs `opcli env provision`. For standard charm integration tests.
+
+**`opcli-minimal`**: Lightweight backend — installs only uv and opcli (no concierge, no Juju). Users write their own `task.yaml`. Suitable for tutorial runs, linting, or any test that only needs opcli. In CI, the prepare script installs uv and opcli from `${GITHUB_WORKSPACE}` (or from the canonical/charm-ci repo), mirroring the `integration-test` CI prepare but without concierge or provisioning.
+
+### opcli spread jobs --exclude
+
+`opcli spread jobs` accepts `--exclude <pattern>` (repeatable) to filter out jobs from the output matrix. Patterns use `fnmatch` glob syntax and match against the **raw spread selector string** (format: `backend-ci:system:suite/variant`). Examples:
+
+```bash
+# Exclude all jobs from the 'my-docs' backend
+opcli spread jobs --exclude "my-docs-ci:*"
+
+# Exclude a specific suite across all systems
+opcli spread jobs --exclude "*:tests/docs/*"
+
+# Multiple patterns (OR semantics — any match = excluded)
+opcli spread jobs --exclude "my-docs-ci:*" --exclude "*:ubuntu-24.04-juju3:*:*"
+```
+
+
+
+These keys live in `integration-suites` entries and are consumed by opcli during expansion (not passed to spread). The first group controls suite identity and test discovery; the second group controls how artifacts are passed to pytest.
+
+**Discovery and identity keys:**
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `working-dir` | path string | `"./"` | Directory pytest is invoked from. In monorepo patterns, set to the sub-charm directory (e.g. `k8s-charm/`). Controls both the pytest working directory and how MODULE values are computed. |
+| `discover-path` | path string | (none) | Root directory for test auto-discovery. When omitted, the suite key path is used. When set, the suite key acts as a unique identifier only — the actual test files are discovered from `discover-path` instead. Note: distinct from `discover-pattern` which controls the filename glob, not the directory. Raises an error if combined with `auto-discover: false`. |
+| `auto-discover` | bool | `true` | Walk the discovery directory recursively for test files matching `discover-pattern`. |
+| `discover-pattern` | glob string | `"test_*.py"` | Filename pattern used during auto-discovery. |
+
 ### Per-suite pytest template keys
 
-These keys live in `integration-suites` entries (not the backend) and control how `opcli pytest run/expand` passes artifacts to the test framework:
+**Pytest artifact keys:**
+
+These keys control how `opcli pytest run/expand` passes artifacts to the test framework:
 
 | Key | Type | Effect |
 |---|---|---|
@@ -161,7 +195,7 @@ integration-suites:
 
 **Auto-discovery** (`auto-discover: true`, the default) walks the suite directory **recursively** (like pytest). MODULE keys flatten subdirectory paths with underscores; MODULE values are **relative to `OPCLI_CWD`** (the directory pytest is invoked from) so pytest can resolve them:
 
-| File | Key | Value (suite `tests/integration/`, `cwd: ./`) |
+| File | Key | Value (suite `tests/integration/`, `working-dir: ./`) |
 |---|---|---|
 | `test_foo.py` | `MODULE/test_foo` | `tests/integration/test_foo.py` |
 | `subdir/test_foo.py` | `MODULE/subdir_test_foo` | `tests/integration/subdir/test_foo.py` |

@@ -13,6 +13,7 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 - [`artifacts.yaml` schema](#artifactsyaml-schema)
 - [`spread.yaml` virtual backends](#spreadyaml-virtual-backends)
 - [`integration-suites` in `spread.yaml`](#integration-suites-in-spreadyaml)
+- [Tutorial testing](#tutorial-testing)
 - [CI vs local](#ci-vs-local)
 - [GitHub Actions reusable workflows](#github-actions-reusable-workflows)
 - [Secrets for integration tests](#secrets-for-integration-tests)
@@ -132,7 +133,7 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 | `init` | Generate `spread.yaml` with `integration-suites`. `--force` to overwrite. |
 | `expand` | Print fully expanded `spread.yaml` to stdout. |
 | `run` | Expand virtual backend and run spread. Args after `--` forwarded verbatim. |
-| `jobs` | Print CI test matrix JSON (one entry per spread task/variant). |
+| `jobs` | Print CI test matrix JSON (one entry per spread task/variant). `--exclude <pattern>` to filter by selector (repeatable, fnmatch glob, e.g. `--exclude 'my-docs-ci:*'`). |
 
 ### `opcli pytest`
 
@@ -166,6 +167,27 @@ opcli pytest expand --suite machine-charm/tests/integration/
 
 When a single `integration-suites` entry exists, `--suite` is auto-detected. With multiple suites, it's required.
 
+### `opcli tutorial`
+
+| Command | Description |
+|---|---|
+| `expand <file>` | Extract shell commands from a Markdown (.md) or RST (.rst) tutorial file and print them to stdout as a shell script. |
+
+Typical usage in a spread `task.yaml` backed by the `opcli-minimal` backend:
+
+```bash
+runuser -l ubuntu -s /bin/bash -c 'set -ex; . <(opcli tutorial expand -- "$1")' _ "${SPREAD_PATH}${TUTORIAL}"
+```
+
+**What gets extracted:**
+
+| File type | Included | Excluded |
+|---|---|---|
+| `.md` | 3-backtick code fences (all languages except `{…}` tags like `{terminal}`) | 4+-backtick fences; `<!-- SPREAD SKIP --> … <!-- SPREAD SKIP END -->` ranges |
+| `.md` | `<!-- SPREAD … -->` HTML comment blocks (always) | — |
+| `.rst` | `.. code-block::` directives (directive options like `:caption:` are skipped) | `.. SPREAD SKIP … .. SPREAD SKIP END` ranges |
+| `.rst` | `.. SPREAD … .. SPREAD END` blocks (always) | — |
+
 ## `artifacts.yaml` schema
 
 ```yaml
@@ -197,7 +219,11 @@ Key fields:
 
 ## `spread.yaml` virtual backends
 
-opcli recognises the `integration-test` virtual backend type and expands it into a concrete spread backend at runtime:
+opcli recognises two virtual backend types and expands them into concrete spread backends at runtime.
+
+### `integration-test` — full integration backend
+
+For standard charm integration tests with Juju and concierge provisioning:
 
 ```yaml
 backends:
@@ -211,8 +237,28 @@ backends:
           disk: 20                       # local LXD VM disk (GiB)
 ```
 
-- Locally (`CI` unset): expands to `integration-test-local` with an LXD backend.
+- Locally (`CI` unset): expands to `integration-test-local` with an LXD backend; installs concierge, Juju, and opcli, then runs `opcli env provision`.
 - In CI (`CI=true`): expands to `integration-test-ci` with an adhoc backend targeting the current runner.
+
+### `opcli-minimal` — lightweight backend
+
+For tests that only need opcli itself (e.g. tutorial runs, doc validation), with no Juju or concierge:
+
+```yaml
+backends:
+  my-docs:
+    type: opcli-minimal
+    systems:
+      - ubuntu-24.04:
+          runner: [self-hosted, noble]
+```
+
+- Locally: expands to `my-docs-local`; installs uv and opcli only.
+- In CI: expands to `my-docs-ci`; prepare is empty (the CI workflow installs opcli before spread runs).
+
+Users write their own `task.yaml` for this backend (or use `opcli tutorial expand` — see [Tutorial testing](#tutorial-testing)).
+
+---
 
 The `runner`, `cpu`, `memory`, and `disk` fields are opcli-only metadata — they are stripped before spread sees the YAML.
 
@@ -292,6 +338,69 @@ integration-suites:
       CHARM_PATH={{ build.path }}
       {% endfor %}
 ```
+
+## Tutorial testing
+
+`opcli tutorial expand` extracts shell commands from a Markdown or RST tutorial file and prints them as a shell script. Combined with the `opcli-minimal` backend, this lets you gate docs PRs by running the tutorial in CI.
+
+### Example setup
+
+1. **Declare the backend and suite in `spread.yaml`:**
+
+```yaml
+backends:
+  docs:
+    type: opcli-minimal
+    systems:
+      - ubuntu-24.04:
+          runner: [ubuntu-latest]
+
+suites:
+  docs/tutorial/:
+    summary: Tutorial smoke test
+    systems:
+      - ubuntu-24.04
+
+environment:
+  TUTORIAL: docs/tutorial/getting-started.md
+```
+
+2. **Write `docs/tutorial/run/task.yaml`:**
+
+```yaml
+summary: Run getting-started tutorial
+
+execute: |
+  runuser -l ubuntu -s /bin/bash -c \
+    'set -ex; . <(opcli tutorial expand -- "$1")' \
+    _ "${SPREAD_PATH}${TUTORIAL}"
+```
+
+3. **Exclude tutorial jobs from the integration-test matrix** (they run in a separate job):
+
+```bash
+opcli spread jobs --exclude 'docs-ci:*'
+```
+
+### Marker syntax
+
+Inline `SPREAD` markers let you include commands that are not in code fences, or skip blocks that shouldn't run:
+
+```markdown
+<!-- SPREAD
+sudo snap install my-charm --classic
+-->
+
+Normal prose here. The next shell block is skipped:
+
+<!-- SPREAD SKIP -->
+```bash
+$ interactive-command  # won't be extracted
+```
+<!-- SPREAD SKIP END -->
+```
+
+RST equivalent uses `.. SPREAD`, `.. SPREAD END`, `.. SPREAD SKIP`, and `.. SPREAD SKIP END` directives.
 
 ## CI vs local
 

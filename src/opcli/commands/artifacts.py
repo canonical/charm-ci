@@ -195,9 +195,15 @@ def path(
 def publish(
     *,
     channel: Annotated[
-        str,
-        typer.Option("--channel", help="CharmHub channel (e.g. latest/edge, 1.0/stable)."),
-    ],
+        str | None,
+        typer.Option(
+            "--channel",
+            help=(
+                "CharmHub channel (e.g. latest/edge, 1.0/stable). "
+                "Overrides any per-charm 'channel' set in artifacts.yaml."
+            ),
+        ),
+    ] = None,
     charm: Annotated[
         list[str] | None,
         typer.Option("--charm", help="Publish only this charm. Repeatable."),
@@ -216,6 +222,11 @@ def publish(
     Reads artifacts.yaml and artifacts.build.yaml to determine what to
     publish.  For each charm, uploads OCI-image resources (rocks) first,
     then uploads and releases the .charm file(s) with resource bindings.
+
+    The channel for each charm is resolved in this order:
+    1. ``--channel`` flag (highest priority — overrides everything)
+    2. Per-charm ``channel`` field in ``artifacts.yaml`` (project default)
+    3. Error if neither is set for a given charm
     """
     if charm is None:
         charm = []

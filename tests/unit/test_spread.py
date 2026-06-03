@@ -1578,7 +1578,7 @@ environment:
   CONCIERGE: concierge.yaml
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     summary: integration tests
     backends:
       - integration-test
@@ -1596,12 +1596,12 @@ environment:
   CONCIERGE: concierge.yaml
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     summary: cross-charm tests
     backends:
       - integration-test
   haproxy-operator/tests/integration/:
-    cwd: haproxy-operator/
+    working-dir: haproxy-operator/
     summary: haproxy tests
     backends:
       - integration-test
@@ -1750,7 +1750,7 @@ suites:
     summary: hand-crafted suite
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     summary: auto suite
     backends:
       - integration-test
@@ -1774,7 +1774,7 @@ backends:
       - ubuntu-24.04
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     auto-discover: false
     summary: explicit suite
     backends:
@@ -1797,23 +1797,176 @@ integration-suites:
         assert "MODULE/test_ha" in suite_env
         assert "MODULE/test_other" not in suite_env
 
+    def test_discover_path_overrides_suite_key_for_discovery(self, tmp_path: Path) -> None:
+        """discover-path uses a different directory than the suite key for test discovery."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/juju4/:
+    discover-path: tests/integration/
+    working-dir: ./
+    summary: juju4 tests
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_deploy.py").write_text("")
+        (test_dir / "test_upgrade.py").write_text("")
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        # Suite identity is the key, not discover-path
+        assert "build/tests/integration/juju4/" in parsed["suites"]
+        suite_env = parsed["suites"]["build/tests/integration/juju4/"]["environment"]
+        # Discovery used tests/integration/, so MODULE values are relative to working-dir
+        assert suite_env.get("MODULE/test_deploy") == "tests/integration/test_deploy.py"
+        assert suite_env.get("MODULE/test_upgrade") == "tests/integration/test_upgrade.py"
+        # discover-path directory does not need to exist as a suite
+        assert "build/tests/integration/" not in parsed["suites"]
+
+    def test_discover_path_does_not_require_suite_key_dir_to_exist(self, tmp_path: Path) -> None:
+        """Suite key path (e.g. tests/integration/juju4/) need not exist on disk."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/juju4/:
+    discover-path: tests/integration/
+    working-dir: ./
+    summary: virtual suite key
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_foo.py").write_text("")
+        # Note: tests/integration/juju4/ is NOT created
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        suite_env = parsed["suites"]["build/tests/integration/juju4/"]["environment"]
+        assert "MODULE/test_foo" in suite_env
+
+    def test_discover_path_with_auto_discover_false_raises(self, tmp_path: Path) -> None:
+        """discover-path combined with auto-discover: false is an error."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/juju4/:
+    discover-path: tests/integration/
+    auto-discover: false
+    working-dir: ./
+    backends:
+      - integration-test
+    environment:
+      MODULE/test_foo: tests/integration/test_foo.py
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match=r"discover-path.*auto-discover"):
+            spread_expand(tmp_path, ci=False)
+
+    def test_discover_path_path_traversal_raises(self, tmp_path: Path) -> None:
+        """discover-path with traversal is rejected."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/juju4/:
+    discover-path: ../../etc/
+    working-dir: ./
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match="Path traversal"):
+            spread_expand(tmp_path, ci=False)
+
+    def test_two_suites_same_discover_path_different_envs(self, tmp_path: Path) -> None:
+        """Two suite entries can share a discover-path with different environment overrides."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/:
+    working-dir: ./
+    summary: juju 3 tests
+    backends:
+      - integration-test
+  tests/integration/juju4/:
+    discover-path: tests/integration/
+    working-dir: ./
+    summary: juju 4 tests
+    backends:
+      - integration-test
+    environment:
+      CONCIERGE: concierge-juju4.yaml
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_deploy.py").write_text("")
+
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+
+        assert "build/tests/integration/" in parsed["suites"]
+        assert "build/tests/integration/juju4/" in parsed["suites"]
+
+        juju4_env = parsed["suites"]["build/tests/integration/juju4/"]["environment"]
+        assert juju4_env.get("CONCIERGE") == "concierge-juju4.yaml"
+        assert juju4_env.get("MODULE/test_deploy") == "tests/integration/test_deploy.py"
+
 
 class TestGetSuiteConfig:
     """Tests for get_suite_config()."""
 
     def test_no_spread_yaml_returns_default(self, tmp_path: Path) -> None:
         cfg = get_suite_config(tmp_path)
-        assert cfg == {"cwd": "./"}
+        assert cfg == {"working-dir": "./"}
 
     def test_single_integration_suite_auto_detected(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
         cfg = get_suite_config(tmp_path)
-        assert cfg == {"cwd": "./"}
+        assert cfg == {"working-dir": "./"}
 
     def test_explicit_suite_lookup(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _MULTI_SUITE_SPREAD)
         cfg = get_suite_config(tmp_path, suite="haproxy-operator/tests/integration/")
-        assert cfg == {"cwd": "haproxy-operator/"}
+        assert cfg == {"working-dir": "haproxy-operator/"}
 
     def test_multiple_suites_no_flag_raises(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _MULTI_SUITE_SPREAD)
@@ -1828,13 +1981,13 @@ class TestGetSuiteConfig:
     def test_falls_back_to_native_suites(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
         cfg = get_suite_config(tmp_path, suite="tests/integration/")
-        assert cfg == {"cwd": "./"}
+        assert cfg == {"working-dir": "./"}
 
     def test_trailing_slash_normalization(self, tmp_path: Path) -> None:
         write_file(tmp_path / "spread.yaml", _INTEGRATION_SUITES_SPREAD)
         # Works with or without trailing slash
         cfg = get_suite_config(tmp_path, suite="tests/integration")
-        assert cfg == {"cwd": "./"}
+        assert cfg == {"working-dir": "./"}
 
 
 class TestMaterializeTaskFiles:
@@ -1911,13 +2064,21 @@ suites:
 class TestValidateSafePath:
     """Tests for _validate_safe_path."""
 
+    def test_rejects_empty_path(self) -> None:
+        with pytest.raises(ConfigurationError, match="Empty path"):
+            _validate_safe_path("", "discover-path")
+
+    def test_rejects_whitespace_only_path(self) -> None:
+        with pytest.raises(ConfigurationError, match="Empty path"):
+            _validate_safe_path("   ", "discover-path")
+
     def test_rejects_absolute_path(self) -> None:
         with pytest.raises(ConfigurationError, match="Absolute path"):
             _validate_safe_path("/etc/passwd", "suite path")
 
     def test_rejects_path_traversal(self) -> None:
         with pytest.raises(ConfigurationError, match="Path traversal"):
-            _validate_safe_path("../../../etc/passwd", "cwd")
+            _validate_safe_path("../../../etc/passwd", "working-dir")
 
     def test_rejects_embedded_traversal(self) -> None:
         with pytest.raises(ConfigurationError, match="Path traversal"):
@@ -1925,17 +2086,39 @@ class TestValidateSafePath:
 
     def test_rejects_shell_injection_characters(self) -> None:
         with pytest.raises(ConfigurationError, match="Unsafe characters"):
-            _validate_safe_path("tests/$(whoami)/", "cwd")
+            _validate_safe_path("tests/$(whoami)/", "working-dir")
 
     def test_accepts_normal_paths(self) -> None:
         # These should not raise
         _validate_safe_path("tests/integration/", "suite path")
-        _validate_safe_path("./", "cwd")
+        _validate_safe_path("./", "working-dir")
         _validate_safe_path("haproxy-operator/tests/integration/", "suite path")
 
 
 class TestExplicitSuiteValidation:
     """Tests for explicit suite missing MODULE/ validation."""
+
+    def test_discover_path_empty_string_raises(self, tmp_path: Path) -> None:
+        """discover-path: '' is rejected with a clear error."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  tests/integration/:
+    discover-path: ""
+    working-dir: ./
+    backends:
+      - integration-test
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+
+        with pytest.raises(ConfigurationError, match="Empty path"):
+            spread_expand(tmp_path, ci=False)
 
     def test_explicit_suite_no_modules_raises(self, tmp_path: Path) -> None:
         """auto-discover: false with no MODULE/ variants raises."""
@@ -1949,7 +2132,7 @@ backends:
       - ubuntu-24.04
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     auto-discover: false
     summary: explicit suite
     backends:
@@ -1975,7 +2158,7 @@ backends:
       - ubuntu-24.04
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     backends:
       - integration-test
 """
@@ -1998,7 +2181,7 @@ backends:
       - ubuntu-24.04
 integration-suites:
   ../../../etc/:
-    cwd: ./
+    working-dir: ./
     backends:
       - integration-test
 """
@@ -2006,3 +2189,244 @@ integration-suites:
 
         with pytest.raises(ConfigurationError, match="Path traversal"):
             spread_expand(tmp_path, ci=False)
+
+
+# ---------------------------------------------------------------------------
+# opcli-minimal backend tests
+# ---------------------------------------------------------------------------
+
+_SPREAD_OPCLI_MINIMAL = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  my-docs:
+    type: opcli-minimal
+    systems:
+      - ubuntu-24.04
+suites:
+  tests/docs/:
+    summary: docs tests
+    backends:
+      - my-docs
+    environment:
+      TUTORIAL: /doc/tutorial.md
+"""
+
+
+class TestOpcliMinimalBackend:
+    """Tests for the ``opcli-minimal`` virtual backend type."""
+
+    def test_expand_local_removes_virtual_backend(self, tmp_path: Path) -> None:
+        """Virtual backend 'my-docs' is replaced with 'my-docs-local'."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        assert "my-docs" not in parsed["backends"]
+        assert "my-docs-local" in parsed["backends"]
+
+    def test_expand_ci_removes_virtual_backend(self, tmp_path: Path) -> None:
+        """Virtual backend 'my-docs' is replaced with 'my-docs-ci'."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=True)
+        parsed = loads_yaml(result)
+        assert "my-docs" not in parsed["backends"]
+        assert "my-docs-ci" in parsed["backends"]
+
+    def test_local_prepare_installs_opcli(self, tmp_path: Path) -> None:
+        """Local prepare includes uv install of opcli."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        prepare = parsed["backends"]["my-docs-local"].get("prepare", "")
+        assert "astral-uv" in prepare
+        assert "opcli" in prepare
+
+    def test_local_prepare_no_concierge(self, tmp_path: Path) -> None:
+        """Local prepare for opcli-minimal does NOT install concierge or provision."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        prepare = parsed["backends"]["my-docs-local"].get("prepare", "")
+        assert "concierge" not in prepare
+        assert "opcli env provision" not in prepare
+
+    def test_ci_prepare_installs_opcli(self, tmp_path: Path) -> None:
+        """CI prepare for opcli-minimal installs uv and opcli via GITHUB_WORKSPACE."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=True)
+        parsed = loads_yaml(result)
+        prepare = parsed["backends"]["my-docs-ci"].get("prepare", "")
+        assert "loginctl enable-linger ubuntu" in prepare
+        assert 'chown -R ubuntu:ubuntu "${SPREAD_PATH}"' in prepare
+        assert "astral-uv" in prepare
+        assert "GITHUB_WORKSPACE" in prepare
+        assert "opcli" in prepare
+
+    def test_ci_prepare_no_concierge(self, tmp_path: Path) -> None:
+        """CI prepare for opcli-minimal does NOT install concierge or provision."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=True)
+        parsed = loads_yaml(result)
+        prepare = parsed["backends"]["my-docs-ci"].get("prepare", "")
+        assert "concierge" not in prepare
+        assert "opcli env provision" not in prepare
+
+    def test_local_backend_type_is_adhoc(self, tmp_path: Path) -> None:
+        """Expanded local backend has type: adhoc."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        assert parsed["backends"]["my-docs-local"]["type"] == "adhoc"
+
+    def test_opcli_minimal_and_integration_test_coexist(self, tmp_path: Path) -> None:
+        """Both opcli-minimal and integration-test backends can coexist."""
+        spread = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+  my-docs:
+    type: opcli-minimal
+    systems:
+      - ubuntu-24.04
+suites:
+  tests/integration/:
+    summary: integration tests
+    backends:
+      - integration-test
+    environment:
+      MODULE/test_charm: test_charm
+  tests/docs/:
+    summary: docs tests
+    backends:
+      - my-docs
+"""
+        write_file(tmp_path / "spread.yaml", spread)
+        result = spread_expand(tmp_path, ci=False)
+        parsed = loads_yaml(result)
+        assert "integration-test-local" in parsed["backends"]
+        assert "my-docs-local" in parsed["backends"]
+
+
+# ---------------------------------------------------------------------------
+# spread_jobs --exclude filter tests
+# ---------------------------------------------------------------------------
+
+
+class TestSpreadJobsExclude:
+    """Tests for the ``exclude`` parameter of ``spread_jobs``."""
+
+    _SPREAD_TWO_BACKENDS = """\
+project: test-project
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+  my-docs:
+    type: opcli-minimal
+    systems:
+      - ubuntu-24.04
+suites:
+  tests/integration/:
+    summary: integration tests
+    backends:
+      - integration-test
+    environment:
+      MODULE/test_charm: test_charm
+  tests/docs/:
+    summary: docs tests
+    backends:
+      - my-docs
+    environment:
+      TUTORIAL: /doc/tutorial.md
+"""
+
+    _SPREAD_LIST_BOTH = (
+        "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm\n"
+        "my-docs-ci:ubuntu-24.04:tests/docs/run:test_tutorial\n"
+    )
+
+    def _mock_list(self, stdout: str) -> SubprocessResult:
+        return SubprocessResult(stdout=stdout, stderr="", returncode=0)
+
+    def test_no_exclude_returns_all(self, tmp_path: Path) -> None:
+        """Without --exclude all jobs are returned."""
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
+        ):
+            entries = spread_jobs(tmp_path)
+
+        selectors = [e["selector"] for e in entries]
+        assert any("integration-test-ci" in s for s in selectors)
+        assert any("my-docs-ci" in s for s in selectors)
+
+    def test_exclude_pattern_removes_matching_jobs(self, tmp_path: Path) -> None:
+        """Jobs matching the exclude pattern are omitted."""
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
+        ):
+            entries = spread_jobs(tmp_path, exclude=["my-docs-ci:*"])
+
+        selectors = [e["selector"] for e in entries]
+        assert all("my-docs-ci" not in s for s in selectors)
+        assert any("integration-test-ci" in s for s in selectors)
+
+    def test_exclude_all_pattern(self, tmp_path: Path) -> None:
+        """A wildcard pattern that matches everything returns an empty list."""
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
+        ):
+            entries = spread_jobs(tmp_path, exclude=["*"])
+
+        assert entries == []
+
+    def test_exclude_multiple_patterns(self, tmp_path: Path) -> None:
+        """Multiple exclude patterns are all applied."""
+        spread_list = (
+            "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm\n"
+            "integration-test-ci:ubuntu-24.04:tests/integration/run:test_other\n"
+            "my-docs-ci:ubuntu-24.04:tests/docs/run:test_tutorial\n"
+        )
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(spread_list),
+        ):
+            entries = spread_jobs(
+                tmp_path,
+                exclude=[
+                    "my-docs-ci:*",
+                    "*:ubuntu-24.04:tests/integration/run:test_other",
+                ],
+            )
+
+        selectors = [e["selector"] for e in entries]
+        assert len(selectors) == 1
+        assert selectors[0] == "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm"
+
+    def test_exclude_non_matching_pattern_keeps_all(self, tmp_path: Path) -> None:
+        """A pattern that matches nothing leaves all jobs intact."""
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
+        ):
+            entries = spread_jobs(tmp_path, exclude=["nonexistent-backend:*"])
+
+        assert len(entries) == 2  # noqa: PLR2004
