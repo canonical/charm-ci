@@ -220,6 +220,7 @@ jobs:
       # See https://documentation.ubuntu.com/lxd/latest/howto/network_bridge_firewalld/#network-lxd-docker
       - name: Fix LXD+Docker forwarding
         run: |
+          sudo iptables -P FORWARD ACCEPT
           if sudo iptables -nL DOCKER-USER 2>/dev/null; then
             sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
             sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
