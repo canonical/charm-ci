@@ -1046,6 +1046,8 @@ fi
 """
 
 _OPCLI_MINIMAL_CI_PREPARE = """\
+loginctl enable-linger ubuntu
+chown -R ubuntu:ubuntu "${SPREAD_PATH}"
 snap install astral-uv --classic
 export UV_TOOL_BIN_DIR=/usr/local/bin
 export UV_TOOL_DIR=/usr/local/share/uv-tools
