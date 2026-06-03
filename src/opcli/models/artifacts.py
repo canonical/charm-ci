@@ -54,6 +54,7 @@ class CharmArtifact(BaseModel):
     pack_dir: str | None = Field(default=None, alias="pack-dir")
     resources: dict[str, ArtifactResource] = {}
     platforms: list[BuildTarget] = Field(default_factory=_default_platforms, alias="platforms")
+    channel: str | None = None
 
 
 class RockArtifact(BaseModel):

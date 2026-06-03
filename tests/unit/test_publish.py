@@ -925,3 +925,180 @@ class TestPublishResultsToDicts:
         parsed = json.loads(serialized)
         assert parsed[0]["charm_name"] == "test"
         assert parsed[0]["resources"]["img"] == parsed[0]["resources"]["img"]
+
+
+# ---------------------------------------------------------------------------
+#  Tests for per-charm channel resolution
+# ---------------------------------------------------------------------------
+
+_PLAN_YAML_MACHINE_ONLY = """\
+version: 1
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+    channel: 1.0/stable
+"""
+
+_PLAN_YAML_BOTH_CHARMS_WITH_CHANNELS = """\
+version: 1
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+    channel: 1.0/stable
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    channel: 2.0/edge
+"""
+
+_PLAN_YAML_MIXED_CHANNELS = """\
+version: 1
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+    channel: 1.0/stable
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+"""
+
+_BUILD_YAML_MACHINE_ONLY = """\
+version: 1
+charms:
+  - name: machine-charm
+    charmcraft-yaml: machine-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: machine-charm/machine-charm_ubuntu-24.04-amd64.charm
+"""
+
+
+def _setup_project_with_plan(tmp_path: Path, build_yaml: str, plan_yaml: str) -> Path:
+    """Write both artifacts.yaml and artifacts.build.yaml to tmp_path."""
+    (tmp_path / "artifacts.yaml").write_text(plan_yaml)
+    (tmp_path / "artifacts.build.yaml").write_text(build_yaml)
+    (tmp_path / "machine-charm").mkdir(exist_ok=True)
+    (tmp_path / "k8s-charm").mkdir(exist_ok=True)
+    (tmp_path / "k8s-rock").mkdir(exist_ok=True)
+    (tmp_path / "machine-charm" / "machine-charm_ubuntu-24.04-amd64.charm").write_bytes(b"fake")
+    (tmp_path / "k8s-charm" / "k8s-charm_ubuntu-24.04-amd64.charm").write_bytes(b"fake")
+    (tmp_path / "k8s-rock" / "k8s-rock_amd64.rock").write_bytes(b"fake")
+    return tmp_path
+
+
+class TestPerCharmChannel:
+    """Tests for per-charm channel resolution."""
+
+    def test_per_charm_channel_used_without_global_channel(self, tmp_path: Path) -> None:
+        """Charm's channel from artifacts.yaml is used when --channel is not passed."""
+        root = _setup_project_with_plan(
+            tmp_path, _BUILD_YAML_MACHINE_ONLY, _PLAN_YAML_MACHINE_ONLY
+        )
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            return _mock_result(stdout=json.dumps({"revision": 10}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel=None)
+
+        assert len(results) == 1
+        assert results[0].channel == "1.0/stable"
+        release_cmd = calls[0]
+        assert "--release=1.0/stable" in release_cmd
+
+    def test_global_channel_used_as_fallback(self, tmp_path: Path) -> None:
+        """--channel is used when a charm has no per-charm channel set."""
+        root = _setup_project_with_plan(
+            tmp_path,
+            _BUILD_YAML_MACHINE_ONLY,
+            _PLAN_YAML_MACHINE_ONLY.replace("channel: 1.0/stable\n", ""),
+        )
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            return _mock_result(stdout=json.dumps({"revision": 7}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge")
+
+        assert results[0].channel == "latest/edge"
+        assert "--release=latest/edge" in calls[0]
+
+    def test_global_channel_overrides_per_charm_channel(self, tmp_path: Path) -> None:
+        """--channel takes precedence over the charm's channel in artifacts.yaml."""
+        root = _setup_project_with_plan(
+            tmp_path, _BUILD_YAML_MACHINE_ONLY, _PLAN_YAML_MACHINE_ONLY
+        )
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            return _mock_result(stdout=json.dumps({"revision": 3}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge")
+
+        # --channel (latest/edge) must win over per-charm channel (1.0/stable)
+        assert results[0].channel == "latest/edge"
+        assert "--release=latest/edge" in calls[0]
+        assert "--release=1.0/stable" not in " ".join(" ".join(c) for c in calls)
+
+    def test_mixed_channels_with_global_override(self, tmp_path: Path) -> None:
+        """--channel overrides ALL charms, ignoring per-charm config."""
+        root = _setup_project_with_plan(tmp_path, _BUILD_YAML_LOCAL, _PLAN_YAML_MIXED_CHANNELS)
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": 5}))
+            return _mock_result(stdout=json.dumps({"revision": 20}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="hotfix/edge")
+
+        # Both charms must use the --channel override
+        machine_result = next(r for r in results if r.charm_name == "machine-charm")
+        k8s_result = next(r for r in results if r.charm_name == "k8s-charm")
+        assert machine_result.channel == "hotfix/edge"
+        assert k8s_result.channel == "hotfix/edge"
+
+    def test_error_when_no_channel_and_no_plan_channel(self, tmp_path: Path) -> None:
+        """ConfigurationError raised when neither --channel nor per-charm channel is set."""
+        root = _setup_project_with_plan(
+            tmp_path,
+            _BUILD_YAML_MACHINE_ONLY,
+            _PLAN_YAML_MACHINE_ONLY.replace("channel: 1.0/stable\n", ""),
+        )
+
+        with pytest.raises(ConfigurationError, match=r"No channel.*machine-charm"):
+            artifacts_publish(root, channel=None)
+
+    def test_error_when_no_artifacts_yaml_and_no_global_channel(self, tmp_path: Path) -> None:
+        """ConfigurationError raised when artifacts.yaml is absent and --channel is not set."""
+        root = _setup_project(tmp_path, _BUILD_YAML_MACHINE_ONLY)
+
+        with pytest.raises(ConfigurationError, match=r"No channel.*machine-charm"):
+            artifacts_publish(root, channel=None)
+
+    def test_all_per_charm_channels_no_global_needed(self, tmp_path: Path) -> None:
+        """All charms publish successfully when every charm has a per-charm channel."""
+        root = _setup_project_with_plan(
+            tmp_path, _BUILD_YAML_LOCAL, _PLAN_YAML_BOTH_CHARMS_WITH_CHANNELS
+        )
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": 5}))
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel=None)
+
+        assert len(results) == 2  # noqa: PLR2004
+        machine_result = next(r for r in results if r.charm_name == "machine-charm")
+        k8s_result = next(r for r in results if r.charm_name == "k8s-charm")
+        assert machine_result.channel == "1.0/stable"
+        assert k8s_result.channel == "2.0/edge"
