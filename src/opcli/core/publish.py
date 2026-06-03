@@ -15,18 +15,16 @@ import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from ruamel.yaml.error import YAMLError
-
-if TYPE_CHECKING:
-    from opcli.models.artifacts import CharmArtifact
 
 from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML
 from opcli.core.exceptions import ConfigurationError, DiscoveryError
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
 from opcli.core.yaml_io import load_artifacts_build, load_artifacts_plan, load_yaml
+from opcli.models.artifacts import CharmArtifact
 from opcli.models.artifacts_build import (
     ArtifactsGenerated,
     CharmOutput,
@@ -180,7 +178,7 @@ def _select_charms(
 
 def _resolve_channel(
     charm_name: str,
-    plan_charm: "CharmArtifact | None",
+    plan_charm: CharmArtifact | None,
     global_channel: str | None,
 ) -> str:
     """Return the effective channel for a charm.
