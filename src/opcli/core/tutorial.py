@@ -8,9 +8,6 @@ and returns them as a shell script suitable for use with process substitution
 in spread ``task.yaml``::
 
     runuser -l ubuntu -s /bin/bash -c 'set -ex; . <(opcli tutorial expand -- "$1")' _ "${SPREAD_PATH}${TUTORIAL}"
-
-Ported and adapted from
-https://github.com/javierdelapuente/operator-ci-poc/blob/main/src/opcli/core/tutorial.py
 """
 
 import re
