@@ -15,15 +15,18 @@ import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from ruamel.yaml.error import YAMLError
 
-from opcli.core.constants import ARTIFACTS_BUILD_YAML
+if TYPE_CHECKING:
+    from opcli.models.artifacts import CharmArtifact
+
+from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML
 from opcli.core.exceptions import ConfigurationError, DiscoveryError
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
-from opcli.core.yaml_io import load_artifacts_build, load_yaml
+from opcli.core.yaml_io import load_artifacts_build, load_artifacts_plan, load_yaml
 from opcli.models.artifacts_build import (
     ArtifactsGenerated,
     CharmOutput,
@@ -76,7 +79,7 @@ def publish_results_to_dicts(results: list[PublishResult]) -> list[dict[str, obj
 def artifacts_publish(
     root: Path,
     *,
-    channel: str,
+    channel: str | None = None,
     charm_names: list[str] | None = None,
     dry_run: bool = False,
 ) -> list[PublishResult]:
@@ -85,6 +88,9 @@ def artifacts_publish(
     Args:
         root: Project root directory.
         channel: CharmHub channel (e.g. ``latest/edge``, ``1.0/stable``).
+            Acts as a global default/fallback.  A per-charm ``channel`` set
+            in ``artifacts.yaml`` takes precedence over this value.
+            Either this or a per-charm channel must be set for every charm.
         charm_names: Publish only these charms. ``None`` means all.
         dry_run: Print what would be uploaded without executing.
 
@@ -92,8 +98,8 @@ def artifacts_publish(
         List of publish results, one per charm.
 
     Raises:
-        ConfigurationError: If manifest files are missing or charms have
-            un-fetched CI artifacts.
+        ConfigurationError: If manifest files are missing, charms have
+            un-fetched CI artifacts, or no channel is resolvable for a charm.
         DiscoveryError: If a resource references a rock not in the build manifest.
     """
     gen_path = root / ARTIFACTS_BUILD_YAML
@@ -107,6 +113,13 @@ def artifacts_publish(
 
     generated = load_artifacts_build(gen_path)
 
+    # Load per-charm channel overrides from artifacts.yaml (optional).
+    plan_charms: dict[str, CharmArtifact] = {}
+    plan_path = root / ARTIFACTS_YAML
+    if plan_path.exists():
+        plan = load_artifacts_plan(plan_path)
+        plan_charms = {c.name: c for c in plan.charms}
+
     charms = _select_charms(generated, charm_names)
     rocks_by_name = {r.name: r for r in generated.rocks}
 
@@ -118,13 +131,24 @@ def artifacts_publish(
                 res_name: res.rock for res_name, res in charm.resources.items()
             }
 
+    # Resolve and validate channels before doing any work.
+    charm_channels: dict[str, str] = {}
+    for charm in charms:
+        charm_channels[charm.name] = _resolve_channel(
+            charm.name,
+            plan_charms.get(charm.name),
+            channel,
+        )
+
     if dry_run:
-        _print_dry_run(charms, rocks_by_name, plan_resources, channel, root)
+        _print_dry_run(charms, rocks_by_name, plan_resources, charm_channels, root)
         return []
 
     results: list[PublishResult] = []
     for charm in charms:
-        result = _publish_charm(charm, rocks_by_name, plan_resources, channel, root)
+        result = _publish_charm(
+            charm, rocks_by_name, plan_resources, charm_channels[charm.name], root
+        )
         results.append(result)
 
     return results
@@ -154,11 +178,33 @@ def _select_charms(
     return [c for c in generated.charms if c.name in set(charm_names)]
 
 
+def _resolve_channel(
+    charm_name: str,
+    plan_charm: "CharmArtifact | None",
+    global_channel: str | None,
+) -> str:
+    """Return the effective channel for a charm.
+
+    Resolution order:
+    1. Per-charm ``channel`` in ``artifacts.yaml`` (highest priority)
+    2. Global ``--channel`` CLI flag (fallback)
+    3. ``ConfigurationError`` if neither is set.
+    """
+    resolved = (plan_charm.channel if plan_charm is not None else None) or global_channel
+    if not resolved:
+        msg = (
+            f"No channel specified for charm '{charm_name}'. "
+            "Set 'channel' in artifacts.yaml or pass --channel."
+        )
+        raise ConfigurationError(msg)
+    return resolved
+
+
 def _print_dry_run(
     charms: list[GeneratedCharm],
     rocks_by_name: dict[str, GeneratedRock],
     plan_resources: dict[str, dict[str, str | None]],
-    channel: str,
+    charm_channels: dict[str, str],
     root: Path,
 ) -> None:
     """Print what would be published without executing.
@@ -171,6 +217,7 @@ def _print_dry_run(
     out.write("Dry run — the following would be published:\n\n")
 
     for charm in charms:
+        channel = charm_channels[charm.name]
         out.write(f"{charm.name} → {channel}:\n")
 
         # Same validation as _publish_charm

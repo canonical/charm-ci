@@ -132,6 +132,43 @@ class TestArtifactsPlan:
         assert "rockcraft_yaml" not in rock
         assert "pack_dir" not in rock
 
+    def test_charm_channel_optional(self) -> None:
+        """CharmArtifact.channel defaults to None."""
+        charm = CharmArtifact(name="mycharm", charmcraft_yaml="charmcraft.yaml")
+        assert charm.channel is None
+
+    def test_charm_channel_set(self) -> None:
+        """CharmArtifact.channel can be set to a track/channel string."""
+        charm = CharmArtifact(
+            name="mycharm", charmcraft_yaml="charmcraft.yaml", channel="1.0/stable"
+        )
+        assert charm.channel == "1.0/stable"
+
+    def test_charm_channel_from_yaml_dict(self) -> None:
+        """Channel field is accepted when loading from a YAML-style dict."""
+        data = {
+            "version": 1,
+            "charms": [
+                {"name": "mycharm", "charmcraft-yaml": "charmcraft.yaml", "channel": "2.0/edge"},
+            ],
+        }
+        plan = ArtifactsPlan.model_validate(data)
+        assert plan.charms[0].channel == "2.0/edge"
+
+    def test_charm_channel_serialized(self) -> None:
+        """Channel is included in serialized output when set."""
+        charm = CharmArtifact(
+            name="mycharm", charmcraft_yaml="charmcraft.yaml", channel="latest/edge"
+        )
+        dumped = charm.model_dump(by_alias=True, exclude_none=True)
+        assert dumped["channel"] == "latest/edge"
+
+    def test_charm_channel_excluded_when_none(self) -> None:
+        """Channel is absent from serialized output when not set."""
+        charm = CharmArtifact(name="mycharm", charmcraft_yaml="charmcraft.yaml")
+        dumped = charm.model_dump(by_alias=True, exclude_none=True)
+        assert "channel" not in dumped
+
 
 class TestArtifactsGenerated:
     """Validation tests for artifacts.build.yaml models."""
