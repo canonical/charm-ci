@@ -2250,13 +2250,24 @@ class TestOpcliMinimalBackend:
         assert "concierge" not in prepare
         assert "opcli env provision" not in prepare
 
-    def test_ci_prepare_is_empty(self, tmp_path: Path) -> None:
-        """CI prepare for opcli-minimal is empty (CI installs opcli itself)."""
+    def test_ci_prepare_installs_opcli(self, tmp_path: Path) -> None:
+        """CI prepare for opcli-minimal installs uv and opcli via GITHUB_WORKSPACE."""
         write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
-        ci_backend = parsed["backends"]["my-docs-ci"]
-        assert ci_backend.get("prepare", "") == ""
+        prepare = parsed["backends"]["my-docs-ci"].get("prepare", "")
+        assert "astral-uv" in prepare
+        assert "GITHUB_WORKSPACE" in prepare
+        assert "opcli" in prepare
+
+    def test_ci_prepare_no_concierge(self, tmp_path: Path) -> None:
+        """CI prepare for opcli-minimal does NOT install concierge or provision."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_OPCLI_MINIMAL)
+        result = spread_expand(tmp_path, ci=True)
+        parsed = loads_yaml(result)
+        prepare = parsed["backends"]["my-docs-ci"].get("prepare", "")
+        assert "concierge" not in prepare
+        assert "opcli env provision" not in prepare
 
     def test_local_backend_type_is_adhoc(self, tmp_path: Path) -> None:
         """Expanded local backend has type: adhoc."""

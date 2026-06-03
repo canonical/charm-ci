@@ -125,7 +125,7 @@ The virtual backend in `spread.yaml` accepts opcli-only keys that are stripped d
 
 **`integration-test`**: Full backend — installs concierge, Juju, opcli, and runs `opcli env provision`. For standard charm integration tests.
 
-**`opcli-minimal`**: Lightweight backend — installs only uv and opcli (no concierge, no Juju). Users write their own `task.yaml`. Suitable for tutorial runs, linting, or any test that only needs opcli. In CI, the prepare script is empty (the GitHub Actions workflow installs opcli before invoking spread).
+**`opcli-minimal`**: Lightweight backend — installs only uv and opcli (no concierge, no Juju). Users write their own `task.yaml`. Suitable for tutorial runs, linting, or any test that only needs opcli. In CI, the prepare script installs uv and opcli from `${GITHUB_WORKSPACE}` (or from the canonical/charm-ci repo), mirroring the `integration-test` CI prepare but without concierge or provisioning.
 
 ### opcli spread jobs --exclude
 

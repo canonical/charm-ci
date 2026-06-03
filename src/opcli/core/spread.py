@@ -1032,14 +1032,25 @@ ADDRESS localhost
 
 # opcli-minimal backend: install uv + opcli so the VM has opcli available.
 # No concierge, no Juju — users write their own task.yaml.
-# The CI prepare is empty: CI workflows are expected to install opcli themselves
-# before invoking spread.
 _OPCLI_MINIMAL_LOCAL_PREPARE = """\
 snap install astral-uv --classic
 export UV_TOOL_BIN_DIR=/usr/local/bin
 export UV_TOOL_DIR=/usr/local/share/uv-tools
 if grep -q 'name = "opcli"' "${SPREAD_PATH}/pyproject.toml" 2>/dev/null; then
   uv tool install "${SPREAD_PATH}" --quiet
+else
+  uv tool install \
+      "git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
+      --quiet
+fi
+"""
+
+_OPCLI_MINIMAL_CI_PREPARE = """\
+snap install astral-uv --classic
+export UV_TOOL_BIN_DIR=/usr/local/bin
+export UV_TOOL_DIR=/usr/local/share/uv-tools
+if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
+  uv tool install "${GITHUB_WORKSPACE}" --quiet
 else
   uv tool install \
       "git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
@@ -1060,7 +1071,7 @@ _BACKEND_CONFIGS: dict[str, tuple[str, str, str, str]] = {
         _CI_PREPARE_BEFORE_USER,
         _CI_PREPARE_AFTER_USER,
     ),
-    _OPCLI_MINIMAL_BACKEND: (_OPCLI_MINIMAL_LOCAL_PREPARE, "", "", ""),
+    _OPCLI_MINIMAL_BACKEND: (_OPCLI_MINIMAL_LOCAL_PREPARE, "", _OPCLI_MINIMAL_CI_PREPARE, ""),
 }
 
 # Keys in system entries that are opcli-specific and must be stripped before
