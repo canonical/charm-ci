@@ -2256,6 +2256,8 @@ class TestOpcliMinimalBackend:
         result = spread_expand(tmp_path, ci=True)
         parsed = loads_yaml(result)
         prepare = parsed["backends"]["my-docs-ci"].get("prepare", "")
+        assert "loginctl enable-linger ubuntu" in prepare
+        assert 'chown -R ubuntu:ubuntu "${SPREAD_PATH}"' in prepare
         assert "astral-uv" in prepare
         assert "GITHUB_WORKSPACE" in prepare
         assert "opcli" in prepare
