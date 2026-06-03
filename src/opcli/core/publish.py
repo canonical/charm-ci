@@ -86,9 +86,11 @@ def artifacts_publish(
     Args:
         root: Project root directory.
         channel: CharmHub channel (e.g. ``latest/edge``, ``1.0/stable``).
-            Acts as a global default/fallback.  A per-charm ``channel`` set
-            in ``artifacts.yaml`` takes precedence over this value.
-            Either this or a per-charm channel must be set for every charm.
+            When provided, overrides any per-charm ``channel`` set in
+            ``artifacts.yaml`` (CLI flag wins over config file).
+            When omitted, each charm's ``channel`` from ``artifacts.yaml``
+            is used.  Either this or a per-charm channel must be set for
+            every charm.
         charm_names: Publish only these charms. ``None`` means all.
         dry_run: Print what would be uploaded without executing.
 
@@ -111,12 +113,16 @@ def artifacts_publish(
 
     generated = load_artifacts_build(gen_path)
 
-    # Load per-charm channel overrides from artifacts.yaml (optional).
+    # Load per-charm channel defaults from artifacts.yaml only when --channel
+    # is not provided.  This keeps publish self-contained when an explicit
+    # channel is given, and avoids failures from unrelated artifacts.yaml
+    # changes when a global channel override is in use.
     plan_charms: dict[str, CharmArtifact] = {}
-    plan_path = root / ARTIFACTS_YAML
-    if plan_path.exists():
-        plan = load_artifacts_plan(plan_path)
-        plan_charms = {c.name: c for c in plan.charms}
+    if channel is None:
+        plan_path = root / ARTIFACTS_YAML
+        if plan_path.exists():
+            plan = load_artifacts_plan(plan_path)
+            plan_charms = {c.name: c for c in plan.charms}
 
     charms = _select_charms(generated, charm_names)
     rocks_by_name = {r.name: r for r in generated.rocks}
@@ -184,11 +190,15 @@ def _resolve_channel(
     """Return the effective channel for a charm.
 
     Resolution order:
-    1. Per-charm ``channel`` in ``artifacts.yaml`` (highest priority)
-    2. Global ``--channel`` CLI flag (fallback)
+    1. ``--channel`` CLI flag (highest priority — explicit runtime override)
+    2. Per-charm ``channel`` in ``artifacts.yaml`` (project default)
     3. ``ConfigurationError`` if neither is set.
+
+    Note: ``global_channel`` is only passed when ``--channel`` was given;
+    callers skip loading ``artifacts.yaml`` entirely in that case, so
+    ``plan_charm`` will always be ``None`` when ``global_channel`` is set.
     """
-    resolved = (plan_charm.channel if plan_charm is not None else None) or global_channel
+    resolved = global_channel or (plan_charm.channel if plan_charm is not None else None)
     if not resolved:
         msg = (
             f"No channel specified for charm '{charm_name}'. "

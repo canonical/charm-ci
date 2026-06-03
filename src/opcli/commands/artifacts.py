@@ -200,7 +200,7 @@ def publish(
             "--channel",
             help=(
                 "CharmHub channel (e.g. latest/edge, 1.0/stable). "
-                "Acts as a global default; per-charm 'channel' in artifacts.yaml takes precedence."
+                "Overrides any per-charm 'channel' set in artifacts.yaml."
             ),
         ),
     ] = None,
@@ -224,8 +224,8 @@ def publish(
     then uploads and releases the .charm file(s) with resource bindings.
 
     The channel for each charm is resolved in this order:
-    1. Per-charm ``channel`` field in ``artifacts.yaml`` (highest priority)
-    2. ``--channel`` flag (global default/fallback)
+    1. ``--channel`` flag (highest priority — overrides everything)
+    2. Per-charm ``channel`` field in ``artifacts.yaml`` (project default)
     3. Error if neither is set for a given charm
     """
     if charm is None:

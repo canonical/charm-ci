@@ -1026,8 +1026,8 @@ class TestPerCharmChannel:
         assert results[0].channel == "latest/edge"
         assert "--release=latest/edge" in calls[0]
 
-    def test_per_charm_channel_overrides_global_channel(self, tmp_path: Path) -> None:
-        """Charm's channel from artifacts.yaml takes precedence over --channel."""
+    def test_global_channel_overrides_per_charm_channel(self, tmp_path: Path) -> None:
+        """--channel takes precedence over the charm's channel in artifacts.yaml."""
         root = _setup_project_with_plan(
             tmp_path, _BUILD_YAML_MACHINE_ONLY, _PLAN_YAML_MACHINE_ONLY
         )
@@ -1040,13 +1040,13 @@ class TestPerCharmChannel:
         with patch("opcli.core.publish.run_command", side_effect=fake_run):
             results = artifacts_publish(root, channel="latest/edge")
 
-        # Per-charm channel (1.0/stable) must win over --channel (latest/edge)
-        assert results[0].channel == "1.0/stable"
-        assert "--release=1.0/stable" in calls[0]
-        assert "--release=latest/edge" not in " ".join(" ".join(c) for c in calls)
+        # --channel (latest/edge) must win over per-charm channel (1.0/stable)
+        assert results[0].channel == "latest/edge"
+        assert "--release=latest/edge" in calls[0]
+        assert "--release=1.0/stable" not in " ".join(" ".join(c) for c in calls)
 
-    def test_mixed_channels(self, tmp_path: Path) -> None:
-        """One charm uses per-charm channel; the other falls back to --channel."""
+    def test_mixed_channels_with_global_override(self, tmp_path: Path) -> None:
+        """--channel overrides ALL charms, ignoring per-charm config."""
         root = _setup_project_with_plan(tmp_path, _BUILD_YAML_LOCAL, _PLAN_YAML_MIXED_CHANNELS)
         calls: list[list[str]] = []
 
@@ -1057,12 +1057,13 @@ class TestPerCharmChannel:
             return _mock_result(stdout=json.dumps({"revision": 20}))
 
         with patch("opcli.core.publish.run_command", side_effect=fake_run):
-            results = artifacts_publish(root, channel="latest/edge")
+            results = artifacts_publish(root, channel="hotfix/edge")
 
+        # Both charms must use the --channel override
         machine_result = next(r for r in results if r.charm_name == "machine-charm")
         k8s_result = next(r for r in results if r.charm_name == "k8s-charm")
-        assert machine_result.channel == "1.0/stable"
-        assert k8s_result.channel == "latest/edge"
+        assert machine_result.channel == "hotfix/edge"
+        assert k8s_result.channel == "hotfix/edge"
 
     def test_error_when_no_channel_and_no_plan_channel(self, tmp_path: Path) -> None:
         """ConfigurationError raised when neither --channel nor per-charm channel is set."""
