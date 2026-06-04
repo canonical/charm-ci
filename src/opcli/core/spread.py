@@ -1024,6 +1024,9 @@ if [ -n "${GITHUB_RUN_ID:-}" ]; then
 fi
 opcli artifacts push-images --missing-registry deploy
 chown -R ubuntu:ubuntu "${SPREAD_PATH}"
+if [ -n "${GITHUB_WORKSPACE:-}" ]; then
+  chmod -R o+rX "${GITHUB_WORKSPACE}"
+fi
 """
 
 _CI_ALLOCATE = """\

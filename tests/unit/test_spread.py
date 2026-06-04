@@ -470,6 +470,9 @@ suites:
         assert "opcli install tox" in prepare
         assert "SPREAD_PATH" in prepare
         assert "pipx install" not in prepare
+        # GITHUB_WORKSPACE must be world-readable so the ubuntu user can install
+        # opcli from it via tox (file:// path).
+        assert 'chmod -R o+rX "${GITHUB_WORKSPACE}"' in prepare
 
     def test_local_username_injection_mapping_systems(self, tmp_path: Path) -> None:
         """Username injection deep-merges; runner is stripped; native fields kept."""
