@@ -20,6 +20,10 @@ from opcli.pytest_plugin import (
     _select_arch_builds_rock,
 )
 
+# Patch target: lazy-imported inside functions
+_ARCH = "opcli.core.env.current_arch"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -115,11 +119,16 @@ class TestSelectArchBuilds:
         result = _select_arch_builds_charm(builds, "amd64", "mycharm")
         assert [b.arch for b in result] == ["amd64"]
 
-    def test_charm_fallback_to_all(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_charm_fallback_to_all_nonempty(self, caplog: pytest.LogCaptureFixture) -> None:
         builds = [CharmOutput(arch="arm64", path="b.charm")]
         result = _select_arch_builds_charm(builds, "amd64", "mycharm")
         assert result == builds
         assert "No charm build" in caplog.text
+
+    def test_charm_fallback_empty_list(self) -> None:
+        """When there are no builds at all, return empty list without warning."""
+        result = _select_arch_builds_charm([], "amd64", "mycharm")
+        assert result == []
 
     def test_rock_exact_match(self) -> None:
         builds = [
@@ -129,10 +138,15 @@ class TestSelectArchBuilds:
         result = _select_arch_builds_rock(builds, "amd64", "myrock")
         assert [b.arch for b in result] == ["amd64"]
 
-    def test_rock_fallback_to_all(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_rock_fallback_to_all_nonempty(self, caplog: pytest.LogCaptureFixture) -> None:
         builds = [RockOutput(arch="arm64", image="img:arm64")]
         result = _select_arch_builds_rock(builds, "amd64", "myrock")
         assert result == builds
+
+    def test_rock_fallback_empty_list(self) -> None:
+        """When there are no builds at all, return empty list without warning."""
+        result = _select_arch_builds_rock([], "amd64", "myrock")
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +170,7 @@ class TestBuildCharmPath:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="amd64"):
+        with patch(_ARCH, return_value="amd64"):
             result = _build_charm_path(arts)
         assert result == "./mycharm.charm"
 
@@ -184,7 +198,7 @@ class TestBuildCharmPath:
             }
         )
         with (
-            patch("opcli.pytest_plugin.current_arch", return_value="amd64"),
+            patch(_ARCH, return_value="amd64"),
             pytest.raises(pytest.fail.Exception, match="multiple charms"),
         ):
             _build_charm_path(arts)
@@ -206,7 +220,7 @@ class TestBuildCharmPath:
             }
         )
         with (
-            patch("opcli.pytest_plugin.current_arch", return_value="amd64"),
+            patch(_ARCH, return_value="amd64"),
             pytest.raises(pytest.fail.Exception, match="2 builds"),
         ):
             _build_charm_path(arts)
@@ -225,7 +239,7 @@ class TestBuildCharmPath:
             }
         )
         with (
-            patch("opcli.pytest_plugin.current_arch", return_value="amd64"),
+            patch(_ARCH, return_value="amd64"),
             pytest.raises(pytest.fail.Exception, match="no local path"),
         ):
             _build_charm_path(arts)
@@ -250,7 +264,7 @@ class TestBuildCharmPaths:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="amd64"):
+        with patch(_ARCH, return_value="amd64"):
             result = _build_charm_paths(arts)
         assert result == {"mycharm": ["./a.charm"]}
 
@@ -270,7 +284,7 @@ class TestBuildCharmPaths:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="amd64"):
+        with patch(_ARCH, return_value="amd64"):
             result = _build_charm_paths(arts)
         assert result == {"mycharm": ["./a-22.charm", "./a-24.charm"]}
 
@@ -292,7 +306,7 @@ class TestBuildCharmPaths:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="amd64"):
+        with patch(_ARCH, return_value="amd64"):
             result = _build_charm_paths(arts)
         assert result == {"op": ["./op.charm"], "agent": ["./agent.charm"]}
 
@@ -309,7 +323,7 @@ class TestBuildCharmPaths:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="amd64"):
+        with patch(_ARCH, return_value="amd64"):
             result = _build_charm_paths(arts)
         assert result == {"mycharm": []}
 
@@ -333,7 +347,7 @@ class TestBuildRockImages:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="amd64"):
+        with patch(_ARCH, return_value="amd64"):
             result = _build_rock_images(arts)
         assert result == {"myrock": "ghcr.io/org/myrock:1.0"}
 
@@ -350,7 +364,7 @@ class TestBuildRockImages:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="amd64"):
+        with patch(_ARCH, return_value="amd64"):
             result = _build_rock_images(arts)
         assert result == {"myrock": "./myrock.rock"}
 
@@ -370,7 +384,7 @@ class TestBuildRockImages:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="arm64"):
+        with patch(_ARCH, return_value="arm64"):
             result = _build_rock_images(arts)
         assert result == {"myrock": "img:arm64"}
 
@@ -402,7 +416,7 @@ class TestBuildCharmResourceImages:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="amd64"):
+        with patch(_ARCH, return_value="amd64"):
             ri = _build_rock_images(arts)
         result = _build_charm_resource_images(arts, ri)
         assert result == {"mycharm": {"myrock-image": "ghcr.io/org/myrock:1.0"}}
@@ -452,7 +466,7 @@ class TestBuildCharmResourceImages:
                 ],
             }
         )
-        with patch("opcli.pytest_plugin.current_arch", return_value="amd64"):
+        with patch(_ARCH, return_value="amd64"):
             ri = _build_rock_images(arts)
         result = _build_charm_resource_images(arts, ri)
         assert result["operator"] == {"backend-image": "ghcr.io/org/backend:1.0"}

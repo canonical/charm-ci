@@ -54,10 +54,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from opcli.core.constants import ARTIFACTS_BUILD_YAML
-from opcli.core.env import current_arch
-from opcli.core.yaml_io import load_artifacts_build
-
 if TYPE_CHECKING:
     from opcli.models.artifacts_build import ArtifactsGenerated, CharmOutput, RockOutput
 
@@ -69,7 +65,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def pytest_addoption(parser: pytest.Parser) -> None:
+def pytest_addoption(parser: pytest.Parser) -> None:  # pragma: no cover
     """Register the ``--artifacts-build-yaml`` option under the "opcli" group."""
     group = parser.getgroup("opcli")
     group.addoption(
@@ -96,11 +92,13 @@ def _discover_artifacts_build(config: pytest.Config) -> Path:
 
     1. ``OPCLI_ARTIFACTS_BUILD_YAML`` environment variable.
     2. ``--artifacts-build-yaml`` pytest CLI option.
-    3. Walk up from ``config.rootdir`` until the file is found.
+    3. Walk up from ``config.rootpath`` until the file is found.
 
     Raises:
         pytest.UsageError: If the file cannot be found.
     """
+    from opcli.core.constants import ARTIFACTS_BUILD_YAML
+
     env_path = os.environ.get("OPCLI_ARTIFACTS_BUILD_YAML")
     if env_path:
         p = Path(env_path)
@@ -175,6 +173,8 @@ def _select_arch_builds_rock(
 
 def _build_charm_path(artifacts: ArtifactsGenerated) -> str:
     """Core logic for the ``charm_path`` fixture."""
+    from opcli.core.env import current_arch
+
     charms = artifacts.charms
     if not charms:
         pytest.fail("charm_path: no charms found in artifacts.build.yaml")
@@ -206,6 +206,8 @@ def _build_charm_path(artifacts: ArtifactsGenerated) -> str:
 
 def _build_charm_paths(artifacts: ArtifactsGenerated) -> dict[str, list[str]]:
     """Core logic for the ``charm_paths`` fixture."""
+    from opcli.core.env import current_arch
+
     arch = current_arch()
     result: dict[str, list[str]] = {}
     for charm in artifacts.charms:
@@ -216,6 +218,8 @@ def _build_charm_paths(artifacts: ArtifactsGenerated) -> dict[str, list[str]]:
 
 def _build_rock_images(artifacts: ArtifactsGenerated) -> dict[str, str]:
     """Core logic for the ``rock_images`` fixture."""
+    from opcli.core.env import current_arch
+
     arch = current_arch()
     result: dict[str, str] = {}
     for rock in artifacts.rocks:
@@ -268,6 +272,8 @@ def _build_resource_images(
 @pytest.fixture(scope="session")
 def opcli_artifacts(request: pytest.FixtureRequest) -> ArtifactsGenerated:
     """The full ``ArtifactsGenerated`` model from ``artifacts.build.yaml``."""
+    from opcli.core.yaml_io import load_artifacts_build
+
     path = _discover_artifacts_build(request.config)
     return load_artifacts_build(path)
 

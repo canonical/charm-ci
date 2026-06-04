@@ -63,6 +63,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011", "D100", "D101", "D102", "D103", "D104", "D212", "D415", "D417", "S"]
+# PLC0415: opcli.pytest_plugin uses lazy imports to avoid the module-not-measured
+# coverage bootstrapping problem (pytest loads this plugin before pytest-cov starts).
+"src/opcli/pytest_plugin.py" = ["PLC0415"]
 "src/opcli/core/spread.py" = ["E501"]
 
 [tool.ruff.lint.mccabe]
@@ -98,6 +101,7 @@ skip = "build,lib,venv,.tox,.git,.mypy_cache,.ruff_cache,.coverage,htmlcov,uv.lo
 
 [tool.coverage.run]
 branch = true
+source_pkgs = ["opcli"]
 
 [tool.coverage.report]
 show_missing = true
