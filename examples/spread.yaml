@@ -17,31 +17,36 @@ exclude:
 - .tox
 - .venv
 - .*_cache
+# YAML anchor for shared pytest options — referenced by each suite below.
+# pytest-arguments-template and pytest-environment-template are per-suite keys
+# inside integration-suites. Use YAML anchors to avoid repetition.
+x-pytest-args: &pytest-args
+  pytest-arguments-template: |
+    --model testing
+    --keep-models
+
 integration-suites:
   # Top-level integration tests (multi-charm, working-dir is project root)
   tests/integration/:
+    <<: *pytest-args
     working-dir: ./
     summary: top-level integration tests
     backends:
     - integration-test
     environment:
       CONCIERGE/test_k8s_charm: concierge-microk8s.yaml
-    pytest-arguments-template: |
-      --model testing
-      --keep-models
   # Sub-charm tests (monorepo pattern — working-dir scopes artifacts to k8s-charm/)
   k8s-charm/tests/integration/:
+    <<: *pytest-args
     working-dir: k8s-charm/
     summary: k8s-charm sub-charm tests
     backends:
     - integration-test
     environment:
       CONCIERGE: concierge-microk8s.yaml
-    pytest-arguments-template: |
-      --model testing
-      --keep-models
   # Machine-charm tests with explicit variants (no auto-discover)
   machine-charm/tests/integration/:
+    <<: *pytest-args
     working-dir: machine-charm/
     auto-discover: false
     summary: machine-charm sub-charm tests
@@ -49,6 +54,3 @@ integration-suites:
     - integration-test
     environment:
       MODULE/test_charm: tests/integration/test_charm.py
-    pytest-arguments-template: |
-      --model testing
-      --keep-models

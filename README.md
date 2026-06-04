@@ -327,28 +327,38 @@ At expand time, `integration-suites` entries are converted into native spread `s
 
 ### Pytest invocation templates
 
-Controls how `opcli pytest run` and `opcli pytest expand` pass extra flags to the test framework. These keys are per-suite in `integration-suites`:
+Controls how `opcli pytest run` and `opcli pytest expand` pass extra flags to the test framework. These keys live **per-suite inside `integration-suites`** — they are opcli-only and stripped from the spread output:
 
 | Key | Effect |
 |---|---|
 | `pytest-arguments-template` | Jinja2 template rendered into CLI args passed to tox/pytest |
 | `pytest-environment-template` | Jinja2 template rendered into `KEY=VALUE` env vars |
 
-When no template is specified, `opcli pytest` runs bare `tox -e integration` with no extra flags. Artifact fixtures are provided by the pytest-opcli plugin automatically. Use `pytest-arguments-template` to pass any additional options (Juju model name, test selection flags, etc.):
+When no template is specified, `opcli pytest` runs bare `tox -e integration` with no extra flags. Artifact fixtures are provided by the pytest-opcli plugin automatically. Use `pytest-arguments-template` to pass additional options (Juju model name, test selection flags, etc.):
 
 **Template context:** `artifacts` (full `ArtifactsGenerated` model) and `arch` (current architecture string).
 
+For projects with multiple suites, use a YAML anchor to avoid repetition:
+
 ```yaml
+x-pytest-args: &pytest-args
+  pytest-arguments-template: |
+    --model testing
+    --keep-models
+
 integration-suites:
   tests/integration/:
-    pytest-arguments-template: |
-      --model testing
+    <<: *pytest-args
+    working-dir: ./
+  k8s-charm/tests/integration/:
+    <<: *pytest-args
+    working-dir: k8s-charm/
+    pytest-arguments-template: |   # override for this suite
+      --model testing-k8s
       --keep-models
-    pytest-environment-template: |
-      {% for build in artifacts.charms[0].builds if build.arch == arch %}
-      CHARM_PATH={{ build.path }}
-      {% endfor %}
 ```
+
+The `x-pytest-args` key at the top level is ignored by both spread and opcli — it exists only for the YAML anchor.
 
 ## pytest-opcli plugin
 
