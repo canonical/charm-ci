@@ -60,8 +60,7 @@ _TASK_YAML_CONTENT = (
     "\n"
     "execute: |\n"
     '    cd "${SPREAD_PATH}"\n'
-    '    PYTEST_CMD=$(opcli pytest expand -e "${TOX_ENV:-integration}"'
-    ' -- --model testing --keep-models "$MODULE") || exit 1\n'
+    '    PYTEST_CMD=$(opcli pytest expand -e "${TOX_ENV:-integration}") || exit 1\n'
     "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && ${PYTEST_CMD}\"\n"
 )
 
@@ -71,8 +70,7 @@ _TASK_YAML_CONTENT_SUITE = (
     "execute: |\n"
     '    cd "${SPREAD_PATH}"\n'
     '    PYTEST_CMD=$(opcli pytest expand --suite "$OPCLI_SUITE"'
-    ' -e "${TOX_ENV:-integration}"'
-    ' -- --model testing --keep-models "$MODULE") || exit 1\n'
+    ' -e "${TOX_ENV:-integration}") || exit 1\n'
     "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}/${OPCLI_CWD}' && ${PYTEST_CMD}\"\n"
 )
 
