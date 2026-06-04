@@ -132,7 +132,7 @@ def _extract_commands_from_markdown(file_path: Path) -> list[str]:
         start = m.start()
         end = m.end()
 
-        if lang.strip().startswith("{"):
+        if lang.strip().startswith("{") and not lang.strip().startswith("{code-cell}"):
             continue
 
         is_excluded = any(start < e2 and end > s for s, e2 in excluded)

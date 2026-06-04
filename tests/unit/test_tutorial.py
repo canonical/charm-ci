@@ -51,6 +51,13 @@ class TestMarkdownExtraction:
         assert "A tip." not in result
         assert "my command" in result
 
+    def test_includes_code_cell_blocks(self, tmp_path: Path) -> None:
+        doc = tmp_path / "tutorial.md"
+        _write(doc, "```{code-cell}\njupyter command\n```\n\n```\nreal command\n```\n")
+        result = expand_tutorial(doc)
+        assert "jupyter command" in result
+        assert "real command" in result
+
     def test_includes_spread_comment_block(self, tmp_path: Path) -> None:
         doc = tmp_path / "tutorial.md"
         _write(doc, "<!-- SPREAD\necho from spread\n-->\n")
