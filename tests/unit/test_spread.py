@@ -2015,6 +2015,8 @@ suites:
         assert task_file.exists()
         content = task_file.read_text()
         assert "opcli pytest expand" in content
+        assert "--module" in content
+        assert "OPCLI_PACKAGE=" in content
         assert "runuser" in content
 
     def test_native_suites_not_touched(self, tmp_path: Path) -> None:
@@ -2062,6 +2064,8 @@ suites:
         _materialize_task_files(root, build_dir)
         content = task_file.read_text()
         assert "opcli pytest expand" in content
+        assert "--module" in content
+        assert "OPCLI_PACKAGE=" in content
         assert "runuser" in content
 
 

@@ -46,6 +46,26 @@ class TestAssembleToxArgv:
         assert "-k" in tail
         assert "test_charm" in tail
 
+    def test_module_path_prepended_to_posargs(self, tmp_path: Path) -> None:
+        """module_path is the first posarg, ensuring conftest.py in test dir is loaded early."""
+        argv = assemble_tox_argv(
+            tmp_path,
+            module_path="tests/integration/test_charm.py",
+            extra_args=["--model", "testing"],
+        )
+
+        sep_idx = argv.index("--")
+        posargs = argv[sep_idx + 1 :]
+        assert posargs[0] == "tests/integration/test_charm.py"
+        assert "--model" in posargs
+
+    def test_module_path_alone_adds_separator(self, tmp_path: Path) -> None:
+        argv = assemble_tox_argv(tmp_path, module_path="tests/integration/test_charm.py")
+
+        assert "--" in argv
+        sep_idx = argv.index("--")
+        assert argv[sep_idx + 1] == "tests/integration/test_charm.py"
+
 
 class TestPytestRun:
     """Tests for ``pytest_run`` — executes tox interactively."""

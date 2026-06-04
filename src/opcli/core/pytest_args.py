@@ -32,6 +32,7 @@ def pytest_run(  # noqa: PLR0913
     ci: bool | None = None,
     suite_config: dict[str, str | None] | None = None,
     cwd: Path | None = None,
+    module_path: str | None = None,
 ) -> None:
     """Assemble the tox command and execute it interactively.
 
@@ -53,7 +54,13 @@ def pytest_run(  # noqa: PLR0913
         SubprocessError: If tox exits non-zero.
     """
     cfg = suite_config or {}
-    cmd = assemble_tox_argv(root, tox_env=tox_env, extra_args=extra_args, suite_config=cfg)
+    cmd = assemble_tox_argv(
+        root,
+        tox_env=tox_env,
+        extra_args=extra_args,
+        suite_config=cfg,
+        module_path=module_path,
+    )
 
     is_ci_env = ci if ci is not None else is_ci()
     env: dict[str, str] = {}
@@ -78,12 +85,17 @@ def assemble_tox_argv(
     tox_env: str = "integration",
     extra_args: list[str] | None = None,
     suite_config: dict[str, str | None] | None = None,
+    module_path: str | None = None,
 ) -> list[str]:
     """Build the full tox argv for running integration tests.
 
     Returns a list of tokens suitable for shell execution or display via
     ``shlex.join()``.  The ``--`` separator is included only when there are
     pytest flags or forwarded extra args to pass.
+
+    If *module_path* is provided, it is prepended to the pytest posargs so
+    that pytest discovers the test file's ``conftest.py`` (and its
+    ``pytest_addoption`` hooks) before parsing the remaining arguments.
 
     If ``pytest-arguments-template`` is present in *suite_config*, the
     template is rendered and its output tokens are passed after ``--``.
@@ -97,10 +109,13 @@ def assemble_tox_argv(
     cfg = suite_config or {}
     args_template = cfg.get("pytest-arguments-template")
 
+    pytest_args: list[str] = []
+    if module_path:
+        pytest_args.append(module_path)
     if isinstance(args_template, str):
-        pytest_args = render_arguments_template(root, args_template) + (extra_args or [])
+        pytest_args += render_arguments_template(root, args_template) + (extra_args or [])
     else:
-        pytest_args = extra_args or []
+        pytest_args += extra_args or []
 
     cmd: list[str] = ["tox", "-e", tox_env]
     if pytest_args:

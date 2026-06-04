@@ -36,6 +36,13 @@ def run(
         help="Suite key from integration-suites (trailing slash optional). "
         "Auto-detected when only one integration-suite exists.",
     ),
+    module: str | None = typer.Option(
+        None,
+        "--module",
+        help="Specific test file to run (relative to the working directory). "
+        "Passed as the first pytest argument so that conftest.py in the test "
+        "directory is loaded before option parsing.",
+    ),
 ) -> None:
     """Assemble and execute the tox integration test command.
 
@@ -50,6 +57,7 @@ def run(
         extra_args=ctx.args or None,
         suite_config=suite_cfg,
         cwd=cwd,
+        module_path=module,
     )
 
 
@@ -66,6 +74,13 @@ def expand(
         help="Suite key from integration-suites (trailing slash optional). "
         "Auto-detected when only one integration-suite exists.",
     ),
+    module: str | None = typer.Option(
+        None,
+        "--module",
+        help="Specific test file to run (relative to the working directory). "
+        "Passed as the first pytest argument so that conftest.py in the test "
+        "directory is loaded before option parsing.",
+    ),
 ) -> None:
     """Print the full tox command that would be executed.
 
@@ -76,7 +91,11 @@ def expand(
     root = Path.cwd()
     suite_cfg = get_suite_config(root, suite=suite)
     argv = assemble_tox_argv(
-        root, tox_env=tox_env, extra_args=ctx.args or None, suite_config=suite_cfg
+        root,
+        tox_env=tox_env,
+        extra_args=ctx.args or None,
+        suite_config=suite_cfg,
+        module_path=module,
     )
 
     env_template = suite_cfg.get("pytest-environment-template")
