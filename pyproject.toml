@@ -21,6 +21,9 @@ Issues = "https://github.com/canonical/charm-ci/issues"
 [project.scripts]
 opcli = "opcli.app:app"
 
+[project.entry-points.pytest11]
+pytest_opcli = "opcli.pytest_plugin"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/opcli"]
 
