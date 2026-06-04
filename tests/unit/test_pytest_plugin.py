@@ -119,6 +119,20 @@ class TestDiscoverArtifactsBuild:
         with pytest.raises(pytest.UsageError, match=r"artifacts\.build\.yaml"):
             _discover_artifacts_build(_mock_config(tmp_path))
 
+    def test_walk_stops_at_git_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Walk-up does not cross a .git boundary into an unrelated parent."""
+        monkeypatch.delenv("OPCLI_ARTIFACTS_BUILD_YAML", raising=False)
+        # Place an artifacts.build.yaml ABOVE the .git root — should not be found.
+        parent_file = tmp_path / "artifacts.build.yaml"
+        parent_file.write_text("version: 1\n")
+        git_root = tmp_path / "repo"
+        git_root.mkdir()
+        (git_root / ".git").mkdir()
+        nested = git_root / "sub"
+        nested.mkdir()
+        with pytest.raises(pytest.UsageError, match=r"artifacts\.build\.yaml"):
+            _discover_artifacts_build(_mock_config(nested))
+
 
 # ---------------------------------------------------------------------------
 # _resolve_path
@@ -411,6 +425,25 @@ class TestBuildCharmPaths:
             result = _build_charm_paths(arts, _FAKE_ROOT)
         assert result == {"mycharm": []}
 
+    def test_fails_arch_mismatch(self) -> None:
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "mycharm",
+                        "charmcraft-yaml": "c.yaml",
+                        "builds": [{"arch": "arm64", "path": "./a.charm", "base": "ubuntu@24.04"}],
+                    }
+                ],
+            }
+        )
+        with (
+            patch(_ARCH, return_value="amd64"),
+            pytest.raises(pytest.fail.Exception, match=r"charm_paths.*mycharm.*amd64"),
+        ):
+            _build_charm_paths(arts, _FAKE_ROOT)
+
 
 # ---------------------------------------------------------------------------
 # _build_rock_images
@@ -471,6 +504,25 @@ class TestBuildRockImages:
         with patch(_ARCH, return_value="arm64"):
             result = _build_rock_images(arts, _FAKE_ROOT)
         assert result == {"myrock": "img:arm64"}
+
+    def test_fails_arch_mismatch(self) -> None:
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "rocks": [
+                    {
+                        "name": "myrock",
+                        "rockcraft-yaml": "r.yaml",
+                        "builds": [{"arch": "arm64", "image": "img:arm64"}],
+                    }
+                ],
+            }
+        )
+        with (
+            patch(_ARCH, return_value="amd64"),
+            pytest.raises(pytest.fail.Exception, match=r"rock_images.*myrock.*amd64"),
+        ):
+            _build_rock_images(arts, _FAKE_ROOT)
 
 
 # ---------------------------------------------------------------------------

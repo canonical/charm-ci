@@ -11,7 +11,8 @@ Discovery order:
 
 1. ``--artifacts-build-yaml`` pytest CLI option.
 2. ``OPCLI_ARTIFACTS_BUILD_YAML`` environment variable (absolute path).
-3. Walk up from pytest's ``rootdir`` until ``artifacts.build.yaml`` is found.
+3. Walk up from pytest's ``rootdir`` until ``artifacts.build.yaml`` is found
+   (stops at the git root or filesystem root).
 4. ``pytest.UsageError`` if not found.
 
 Fixtures
@@ -225,6 +226,12 @@ def _build_charm_paths(
     result: dict[str, list[str]] = {}
     for charm in artifacts.charms:
         arch_builds = _select_arch_builds_charm(charm.builds, arch)
+        if not arch_builds:
+            available = sorted({b.arch for b in charm.builds})
+            pytest.fail(
+                f"charm_paths: no build for charm '{charm.name}' matches arch '{arch}'; "
+                f"available arches: {available!r}"
+            )
         result[charm.name] = [_resolve_path(b.path, artifacts_root) for b in arch_builds if b.path]
     return result
 
@@ -237,6 +244,12 @@ def _build_rock_images(artifacts: ArtifactsGenerated, artifacts_root: Path) -> d
     result: dict[str, str] = {}
     for rock in artifacts.rocks:
         arch_builds = _select_arch_builds_rock(rock.builds, arch)
+        if not arch_builds:
+            available = sorted({b.arch for b in rock.builds})
+            pytest.fail(
+                f"rock_images: no build for rock '{rock.name}' matches arch '{arch}'; "
+                f"available arches: {available!r}"
+            )
         for build in arch_builds:
             if build.image:
                 result[rock.name] = build.image
@@ -302,7 +315,7 @@ def _discover_artifacts_build(config: pytest.Config) -> Path:
 
     1. ``--artifacts-build-yaml`` pytest CLI option.
     2. ``OPCLI_ARTIFACTS_BUILD_YAML`` environment variable.
-    3. Walk up from ``config.rootpath`` until the file is found.
+    3. Walk up from ``config.rootpath`` until the file is found (stops at git root).
 
     Raises:
         pytest.UsageError: If the file cannot be found.
@@ -332,6 +345,8 @@ def _discover_artifacts_build(config: pytest.Config) -> Path:
         candidate = directory / ARTIFACTS_BUILD_YAML
         if candidate.is_file():
             return candidate
+        if (directory / ".git").exists():
+            break
         parent = directory.parent
         if parent == directory:
             break

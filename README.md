@@ -440,9 +440,9 @@ def test_deploy(juju, charm_paths, charm_resource_images):
 
 The plugin locates `artifacts.build.yaml` in this order:
 
-1. `OPCLI_ARTIFACTS_BUILD_YAML` environment variable (absolute path).
-2. `--artifacts-build-yaml` pytest CLI option.
-3. Walk up from pytest's rootdir until `artifacts.build.yaml` is found.
+1. `--artifacts-build-yaml` pytest CLI option.
+2. `OPCLI_ARTIFACTS_BUILD_YAML` environment variable (absolute path).
+3. Walk up from pytest's rootdir until `artifacts.build.yaml` is found (stops at git root).
 4. `pytest.UsageError` if none of the above succeed — run `opcli artifacts build` first.
 
 ## Tutorial testing
