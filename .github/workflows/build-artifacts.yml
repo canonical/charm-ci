@@ -127,10 +127,12 @@ jobs:
         run: |
           # Determine the source directory to hash: pack-dir if set, otherwise
           # the directory containing rockcraft.yaml.
+          # The shell CWD is already inputs.working-directory (set by defaults.run.working-directory),
+          # so matrix fields are resolved relative to it directly.
           if [ -n "${{ matrix.pack-dir }}" ]; then
-            source_dir="${{ inputs.working-directory }}/${{ matrix.pack-dir }}"
+            source_dir="${{ matrix.pack-dir }}"
           else
-            source_dir="$(dirname "${{ inputs.working-directory }}/${{ matrix.rockcraft-yaml }}")"
+            source_dir="$(dirname "${{ matrix.rockcraft-yaml }}")"
           fi
           # Hash all files in source_dir, excluding any pre-built .rock outputs.
           hash=$(find "$source_dir" -type f -not -name "*.rock" | sort | xargs sha256sum | sha256sum | cut -c1-32)
