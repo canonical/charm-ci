@@ -2015,8 +2015,7 @@ suites:
         assert task_file.exists()
         content = task_file.read_text()
         assert "opcli pytest expand" in content
-        assert "GITHUB_WORKSPACE" in content
-        assert "_OPCLI_PKG" in content
+        assert "runuser" in content
 
     def test_native_suites_not_touched(self, tmp_path: Path) -> None:
         """Suites without OPCLI_SUITE are not materialized."""
@@ -2063,7 +2062,7 @@ suites:
         _materialize_task_files(root, build_dir)
         content = task_file.read_text()
         assert "opcli pytest expand" in content
-        assert "GITHUB_WORKSPACE" in content
+        assert "runuser" in content
 
 
 class TestValidateSafePath:
