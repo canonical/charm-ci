@@ -16,12 +16,16 @@ from opcli.pytest_plugin import (
     _build_resource_images,
     _build_rock_images,
     _discover_artifacts_build,
+    _resolve_path,
     _select_arch_builds_charm,
     _select_arch_builds_rock,
 )
 
 # Patch target: lazy-imported inside functions
 _ARCH = "opcli.core.env.current_arch"
+
+# Fixed root used when a real directory is not required
+_FAKE_ROOT = Path("/fake/root")
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +53,18 @@ def _mock_config(rootdir: Path, cli_path: str | None = None) -> MagicMock:
 
 
 class TestDiscoverArtifactsBuild:
-    def test_env_var_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cli_option_wins_over_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cli_file = tmp_path / "cli.yaml"
+        cli_file.write_text("version: 1\n")
+        env_file = tmp_path / "env.yaml"
+        env_file.write_text("version: 1\n")
+        monkeypatch.setenv("OPCLI_ARTIFACTS_BUILD_YAML", str(env_file))
+        result = _discover_artifacts_build(_mock_config(tmp_path, cli_path=str(cli_file)))
+        assert result == cli_file
+
+    def test_env_var_wins_over_walk(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         f = tmp_path / "my_artifacts.build.yaml"
         f.write_text("version: 1\n")
         monkeypatch.setenv("OPCLI_ARTIFACTS_BUILD_YAML", str(f))
@@ -103,6 +118,25 @@ class TestDiscoverArtifactsBuild:
         monkeypatch.delenv("OPCLI_ARTIFACTS_BUILD_YAML", raising=False)
         with pytest.raises(pytest.UsageError, match=r"artifacts\.build\.yaml"):
             _discover_artifacts_build(_mock_config(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# _resolve_path
+# ---------------------------------------------------------------------------
+
+
+class TestResolvePath:
+    def test_relative_path_resolved_against_root(self) -> None:
+        result = _resolve_path("./foo.charm", Path("/proj/root"))
+        assert result == "/proj/root/foo.charm"
+
+    def test_subdir_relative_path(self) -> None:
+        result = _resolve_path("./k8s-charm/foo.charm", Path("/proj/root"))
+        assert result == "/proj/root/k8s-charm/foo.charm"
+
+    def test_absolute_path_returned_unchanged(self) -> None:
+        result = _resolve_path("/abs/path/foo.charm", Path("/proj/root"))
+        assert result == "/abs/path/foo.charm"
 
 
 # ---------------------------------------------------------------------------
@@ -171,13 +205,13 @@ class TestBuildCharmPath:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            result = _build_charm_path(arts)
-        assert result == "./mycharm.charm"
+            result = _build_charm_path(arts, _FAKE_ROOT)
+        assert result == str(_FAKE_ROOT / "mycharm.charm")
 
     def test_fails_no_charms(self) -> None:
         arts = ArtifactsGenerated(version=1)
         with pytest.raises(pytest.fail.Exception, match="no charms"):
-            _build_charm_path(arts)
+            _build_charm_path(arts, _FAKE_ROOT)
 
     def test_fails_multi_charm(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -201,7 +235,7 @@ class TestBuildCharmPath:
             patch(_ARCH, return_value="amd64"),
             pytest.raises(pytest.fail.Exception, match="multiple charms"),
         ):
-            _build_charm_path(arts)
+            _build_charm_path(arts, _FAKE_ROOT)
 
     def test_fails_multi_base(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -223,7 +257,32 @@ class TestBuildCharmPath:
             patch(_ARCH, return_value="amd64"),
             pytest.raises(pytest.fail.Exception, match="2 builds"),
         ):
-            _build_charm_path(arts)
+            _build_charm_path(arts, _FAKE_ROOT)
+
+    def test_fails_arch_fallback_multi_build(self) -> None:
+        """Arch fallback with multiple builds gives a clear 'no match' error."""
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "mycharm",
+                        "charmcraft-yaml": "charmcraft.yaml",
+                        "builds": [
+                            {"arch": "arm64", "path": "./a-22.charm", "base": "ubuntu@22.04"},
+                            {"arch": "arm64", "path": "./a-24.charm", "base": "ubuntu@24.04"},
+                        ],
+                    }
+                ],
+            }
+        )
+        with (
+            patch(_ARCH, return_value="amd64"),
+            pytest.raises(
+                pytest.fail.Exception, match="no build for charm 'mycharm' matches arch 'amd64'"
+            ),
+        ):
+            _build_charm_path(arts, _FAKE_ROOT)
 
     def test_fails_ci_artifact_no_path(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -242,7 +301,7 @@ class TestBuildCharmPath:
             patch(_ARCH, return_value="amd64"),
             pytest.raises(pytest.fail.Exception, match="no local path"),
         ):
-            _build_charm_path(arts)
+            _build_charm_path(arts, _FAKE_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -265,8 +324,8 @@ class TestBuildCharmPaths:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            result = _build_charm_paths(arts)
-        assert result == {"mycharm": ["./a.charm"]}
+            result = _build_charm_paths(arts, _FAKE_ROOT)
+        assert result == {"mycharm": [str(_FAKE_ROOT / "a.charm")]}
 
     def test_multi_base_returns_list(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -285,8 +344,10 @@ class TestBuildCharmPaths:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            result = _build_charm_paths(arts)
-        assert result == {"mycharm": ["./a-22.charm", "./a-24.charm"]}
+            result = _build_charm_paths(arts, _FAKE_ROOT)
+        assert result == {
+            "mycharm": [str(_FAKE_ROOT / "a-22.charm"), str(_FAKE_ROOT / "a-24.charm")]
+        }
 
     def test_multi_charm(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -307,8 +368,11 @@ class TestBuildCharmPaths:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            result = _build_charm_paths(arts)
-        assert result == {"op": ["./op.charm"], "agent": ["./agent.charm"]}
+            result = _build_charm_paths(arts, _FAKE_ROOT)
+        assert result == {
+            "op": [str(_FAKE_ROOT / "op.charm")],
+            "agent": [str(_FAKE_ROOT / "agent.charm")],
+        }
 
     def test_skips_ci_artifacts(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -324,7 +388,7 @@ class TestBuildCharmPaths:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            result = _build_charm_paths(arts)
+            result = _build_charm_paths(arts, _FAKE_ROOT)
         assert result == {"mycharm": []}
 
 
@@ -348,7 +412,7 @@ class TestBuildRockImages:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            result = _build_rock_images(arts)
+            result = _build_rock_images(arts, _FAKE_ROOT)
         assert result == {"myrock": "ghcr.io/org/myrock:1.0"}
 
     def test_returns_file_when_no_image(self) -> None:
@@ -365,8 +429,8 @@ class TestBuildRockImages:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            result = _build_rock_images(arts)
-        assert result == {"myrock": "./myrock.rock"}
+            result = _build_rock_images(arts, _FAKE_ROOT)
+        assert result == {"myrock": str(_FAKE_ROOT / "myrock.rock")}
 
     def test_filters_by_arch(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -385,7 +449,7 @@ class TestBuildRockImages:
             }
         )
         with patch(_ARCH, return_value="arm64"):
-            result = _build_rock_images(arts)
+            result = _build_rock_images(arts, _FAKE_ROOT)
         assert result == {"myrock": "img:arm64"}
 
 
@@ -417,7 +481,7 @@ class TestBuildCharmResourceImages:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            ri = _build_rock_images(arts)
+            ri = _build_rock_images(arts, _FAKE_ROOT)
         result = _build_charm_resource_images(arts, ri)
         assert result == {"mycharm": {"myrock-image": "ghcr.io/org/myrock:1.0"}}
 
@@ -467,7 +531,7 @@ class TestBuildCharmResourceImages:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            ri = _build_rock_images(arts)
+            ri = _build_rock_images(arts, _FAKE_ROOT)
         result = _build_charm_resource_images(arts, ri)
         assert result["operator"] == {"backend-image": "ghcr.io/org/backend:1.0"}
         assert result["agent"] == {}

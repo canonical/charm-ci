@@ -277,7 +277,7 @@ Instead of committing boilerplate `task.yaml` files, declare test suites declara
 ```yaml
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     summary: top-level integration tests
     backends:
       - integration-test
@@ -286,14 +286,14 @@ integration-suites:
 
   # Monorepo pattern — sub-charm with its own tests
   k8s-charm/tests/integration/:
-    cwd: k8s-charm/
+    working-dir: k8s-charm/
     summary: k8s-charm sub-charm tests
     backends:
       - integration-test
 
   # Explicit variants (no auto-discovery)
   machine-charm/tests/integration/:
-    cwd: machine-charm/
+    working-dir: machine-charm/
     auto-discover: false
     summary: machine-charm tests
     backends:
@@ -304,7 +304,7 @@ integration-suites:
 
 At expand time, `integration-suites` entries are converted into native spread `suites:` entries with:
 - **Auto-discovery** (default): scans the suite directory for `test_*.py` files and generates `MODULE/<name>` spread variants.
-- **`cwd`**: tells `opcli pytest` which directory to scope artifact resolution to. Always explicit, default `./`.
+- **`working-dir`**: tells `opcli pytest` which directory to run pytest from. Defaults to `./` (project root).
 - **`task.yaml` generation**: written into the `build/` directory at runtime (e.g. `build/tests/integration/run/task.yaml`). Files persist for inspection and are overwritten on next run. Add `build/` to your `.gitignore`.
 - **`discover-pattern`**: customize the glob for auto-discovery (e.g., `discover-pattern: "test_*.py"` is the default; use `"*_test.py"` if your project uses that convention).
 
@@ -316,7 +316,7 @@ At expand time, `integration-suites` entries are converted into native spread `s
 
 | Key | Default | Description |
 |---|---|---|
-| `cwd` | `./` | Working directory for artifact resolution (opcli-only, stripped from spread output) |
+| `working-dir` | `./` | Working directory for pytest invocation (opcli-only, stripped from spread output) |
 | `auto-discover` | `true` | Scan for `test_*.py` and generate `MODULE/` variants |
 | `discover-pattern` | `test_*.py` | Glob pattern for auto-discovery |
 | `pytest-arguments-template` | — | Jinja2 template for pytest CLI args (opcli-only, stripped) |
