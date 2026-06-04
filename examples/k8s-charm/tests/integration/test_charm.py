@@ -13,14 +13,14 @@ import jubilant
 
 def test_deploy(
     juju: jubilant.Juju,
-    charm_file: str,
-    rock_image: str,
+    charm_path: str,
+    resource_images: dict[str, str],
 ) -> None:
     """Deploy the k8s-charm and verify active/idle."""
     juju.deploy(
-        charm_file,
+        charm_path,
         app="k8s-charm",
-        resources={"k8s-rock-image": rock_image},
+        resources=resource_images,
     )
     status = juju.wait(jubilant.all_active, timeout=300)
     assert status.apps["k8s-charm"].units["k8s-charm/0"].workload_status.current == "active"

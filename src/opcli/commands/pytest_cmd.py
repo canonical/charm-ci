@@ -14,9 +14,10 @@ from opcli.core.template import render_environment_template
 
 app = typer.Typer(
     help=(
-        "Assemble pytest flags from build output and run integration tests.\n\n"
-        "By default generates --charm-file and rock image flags. Customize via\n"
-        "pytest-arguments-template or pytest-environment-template in spread.yaml."
+        "Run integration tests via tox.\n\n"
+        "Artifacts are injected into tests via the pytest-opcli plugin fixtures.\n"
+        "Custom pytest flags can be added via pytest-arguments-template or\n"
+        "pytest-environment-template in spread.yaml integration-suites."
     ),
     no_args_is_help=True,
 )
@@ -66,18 +67,16 @@ def expand(
         "Auto-detected when only one integration-suite exists.",
     ),
 ) -> None:
-    """Print the full tox command assembled from artifacts.build.yaml.
+    """Print the full tox command that would be executed.
 
     Extra args after -- are forwarded into the printed command.
-    By default generates --charm-file and rock image flags. When
-    pytest-environment-template is set, outputs env var prefixes.
-    Customize invocation via templates in spread.yaml integration-suites.
+    When pytest-environment-template is set in spread.yaml, the env var
+    prefix is also printed.
     """
     root = Path.cwd()
     suite_cfg = get_suite_config(root, suite=suite)
-    cwd = root / str(suite_cfg["working-dir"])
     argv = assemble_tox_argv(
-        root, tox_env=tox_env, extra_args=ctx.args or None, suite_config=suite_cfg, cwd=cwd
+        root, tox_env=tox_env, extra_args=ctx.args or None, suite_config=suite_cfg
     )
 
     env_template = suite_cfg.get("pytest-environment-template")

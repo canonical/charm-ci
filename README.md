@@ -143,7 +143,24 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 | `run` | Assemble and execute the tox integration test command. `-e` for env, `--suite` for suite, `--` forwards args. |
 | `expand` | Print full `tox -e integration -- <flags>` command. `-e` for env, `--suite` for suite, `--` forwards args. |
 
-By default, `opcli pytest` generates `--charm-file=` and `--rock-image=` flags from `artifacts.build.yaml` (pfe-style). To customize invocation, add Jinja2 templates to your `integration-suites` entry in `spread.yaml`:
+By default, `opcli pytest` generates `--charm-file=` and `--rock-image=` flags from `artifacts.build.yaml` (pfe-style). This is the legacy approach: the flags are consumed by a `conftest.py` that registers them as pytest options and re-exposes them as fixtures.
+
+**With the pytest-opcli plugin (recommended for new projects):** tests request fixtures directly and no CLI flags are needed. To suppress the default flag generation, add an empty template to each `integration-suites` entry:
+
+```yaml
+integration-suites:
+  tests/integration/:
+    pytest-arguments-template: ""   # plugin handles artifact injection
+```
+
+This is the complete migration path from pfe-style:
+
+1. Add `opcli` to test dependencies (see [pytest-opcli plugin](#pytest-opcli-plugin)).
+2. Delete the pfe boilerplate from `conftest.py` (`pytest_addoption`, `charm_path`, `resource_images` fixtures, etc.).
+3. Add `pytest-arguments-template: ""` to each `integration-suites` entry.
+4. Update tests to request fixtures directly: `charm_path`, `resource_images`, etc.
+
+To fully customise invocation instead of suppressing it, write a real Jinja2 template:
 
 ```yaml
 integration-suites:

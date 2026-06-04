@@ -251,14 +251,14 @@ class TestRenderEnvironmentTemplate:
 class TestAssembleToxArgvWithTemplate:
     """Tests for assemble_tox_argv with suite_config templates."""
 
-    def test_default_pfe_when_no_template(self, tmp_path: Path) -> None:
+    def test_default_no_template_produces_no_flags(self, tmp_path: Path) -> None:
+        """Without a template, no artifact flags are generated — plugin handles injection."""
         write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
 
-        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
-            argv = assemble_tox_argv(tmp_path)
+        argv = assemble_tox_argv(tmp_path)
 
-        joined = " ".join(argv)
-        assert "--charm-file=" in joined
+        assert argv == ["tox", "-e", "integration"]
+        assert "--" not in " ".join(argv)
 
     def test_arguments_template_overrides_pfe(self, tmp_path: Path) -> None:
         write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
@@ -359,16 +359,20 @@ class TestGetSuiteConfigTemplates:
 class TestCLIRunnerTemplates:
     """CliRunner tests for opcli pytest expand with templates."""
 
-    def test_expand_default_pfe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_expand_no_template_produces_bare_tox(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a template, expand emits just 'tox -e integration' — no artifact flags."""
         write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
         monkeypatch.chdir(tmp_path)
 
         runner = CliRunner()
-        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
-            result = runner.invoke(pytest_app, ["expand"], catch_exceptions=False)
+        result = runner.invoke(pytest_app, ["expand"], catch_exceptions=False)
 
         assert result.exit_code == 0, result.output
-        assert "--charm-file=" in result.output
+        assert "--charm-file=" not in result.output
+        assert "tox" in result.output
+        assert "-e integration" in result.output
 
     def test_expand_with_env_template(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -392,12 +396,11 @@ class TestCLIRunnerTemplates:
         monkeypatch.chdir(tmp_path)
 
         runner = CliRunner()
-        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
-            result = runner.invoke(
-                pytest_app,
-                ["expand", "--", "-k", "test_foo"],
-                catch_exceptions=False,
-            )
+        result = runner.invoke(
+            pytest_app,
+            ["expand", "--", "-k", "test_foo"],
+            catch_exceptions=False,
+        )
 
         assert result.exit_code == 0, result.output
         assert "-k" in result.output
