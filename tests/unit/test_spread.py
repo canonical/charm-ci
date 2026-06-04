@@ -2013,7 +2013,10 @@ suites:
 
         task_file = root / "build" / "tests" / "integration" / "run" / "task.yaml"
         assert task_file.exists()
-        assert "opcli pytest expand" in task_file.read_text()
+        content = task_file.read_text()
+        assert "opcli pytest expand" in content
+        assert "GITHUB_WORKSPACE" in content
+        assert "_OPCLI_PKG" in content
 
     def test_native_suites_not_touched(self, tmp_path: Path) -> None:
         """Suites without OPCLI_SUITE are not materialized."""
@@ -2058,7 +2061,9 @@ suites:
 
         # Second run overwrites
         _materialize_task_files(root, build_dir)
-        assert "opcli pytest expand" in task_file.read_text()
+        content = task_file.read_text()
+        assert "opcli pytest expand" in content
+        assert "GITHUB_WORKSPACE" in content
 
 
 class TestValidateSafePath:
