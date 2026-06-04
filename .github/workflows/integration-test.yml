@@ -51,14 +51,6 @@ on:
         description: "Rock upload mode passed to build-artifacts (registry or artifact)"
         type: string
         default: ""
-      opcli-package:
-        description: >-
-          Pip spec for opcli installed into the tox venv during each test task.
-          Defaults to the empty string, which lets tox fall back to the plain
-          'opcli' PyPI package. Override to pin a specific commit or wheel, e.g.
-          'opcli @ git+https://github.com/canonical/charm-ci.git@<sha>'.
-        type: string
-        default: ""
 
 jobs:
   # ── Job 1: build all artifacts ──────────────────────────────────────────────
@@ -247,9 +239,6 @@ jobs:
           # Spread captures it via $(HOST: echo "${GITHUB_TOKEN:-}") and the
           # _CI_PREPARE script uses it to authenticate `gh run download`.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Passed by the caller to pin the opcli version installed in the tox
-          # venv. Empty for regular charm projects (falls back to PyPI 'opcli').
-          OPCLI_PACKAGE: ${{ inputs.opcli-package }}
         run: opcli spread run -- -vv ${{ matrix.selector }}
 
       - name: Juju status (on failure)
