@@ -12,7 +12,7 @@ backends:
 environment:
   CONCIERGE: '$(HOST: echo "${CONCIERGE:-concierge.yaml}")'
   OPCLI_GIT_REF: '$(HOST: echo "${OPCLI_GIT_REF:-main}")'
-  OPCLI_PACKAGE: '$(HOST: root=`git rev-parse --show-toplevel`; uv build "$root" --out-dir "$root/examples/opcli-dist/" -q >/dev/null && wheel=`ls -t "$root/examples/opcli-dist/opcli-*.whl" | head -1 | xargs basename` && echo "/home/ubuntu/proj/opcli-dist/$wheel")'
+  OPCLI_PACKAGE: '$(HOST: uv build "$PWD/.." --out-dir "$PWD/opcli-dist/" -q >/dev/null && wheel=`ls -t "$PWD/opcli-dist/opcli-*.whl" | head -1 | xargs basename` && echo "/home/ubuntu/proj/opcli-dist/$wheel" || echo opcli)'
 exclude:
 - .git
 - .tox
