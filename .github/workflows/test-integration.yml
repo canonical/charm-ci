@@ -25,6 +25,7 @@ jobs:
     with:
       working-directory: examples
       upload-image: ${{ inputs.upload-image || '' }}
+      opcli-package: "opcli @ git+https://github.com/canonical/charm-ci.git@${{ github.sha }}"
     secrets: inherit
     permissions:
       packages: write

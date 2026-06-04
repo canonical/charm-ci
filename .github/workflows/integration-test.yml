@@ -51,6 +51,14 @@ on:
         description: "Rock upload mode passed to build-artifacts (registry or artifact)"
         type: string
         default: ""
+      opcli-package:
+        description: >-
+          Pip spec for opcli installed into the tox venv during each test task.
+          Defaults to the empty string, which lets tox fall back to the plain
+          'opcli' PyPI package. Override to pin a specific commit or wheel, e.g.
+          'opcli @ git+https://github.com/canonical/charm-ci.git@<sha>'.
+        type: string
+        default: ""
 
 jobs:
   # ── Job 1: build all artifacts ──────────────────────────────────────────────
@@ -153,22 +161,6 @@ jobs:
             uv tool install "git+https://github.com/canonical/charm-ci.git@${{ needs.test-matrix.outputs.opcli-sha }}"
           fi
 
-      - name: Build opcli wheel
-        run: |
-          if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
-            uv build --wheel "${GITHUB_WORKSPACE}" \
-              -o "${GITHUB_WORKSPACE}/${{ inputs.working-directory }}/opcli-dist/" --quiet
-            wheel=$(ls "${GITHUB_WORKSPACE}/${{ inputs.working-directory }}/opcli-dist/opcli-"*.whl | head -1)
-            wheelname=$(basename "${wheel}")
-            # OPCLI_PACKAGE must use the spread environment path (SPREAD_PATH = path: in
-            # spread.yaml), not the GITHUB_WORKSPACE path. Tox runs as ubuntu inside the
-            # spread task; the wheel is synced to SPREAD_PATH and chowned there.
-            spread_path=$(grep -m1 '^path:' \
-              "${GITHUB_WORKSPACE}/${{ inputs.working-directory }}/spread.yaml" \
-              | sed 's/^path:[[:space:]]*//')
-            echo "OPCLI_PACKAGE=${spread_path}/opcli-dist/${wheelname}" >> "${GITHUB_ENV}"
-          fi
-
       # ── Install spread ────────────────────────────────────────────────────
       - name: Install spread
         run: |
@@ -255,10 +247,9 @@ jobs:
           # Spread captures it via $(HOST: echo "${GITHUB_TOKEN:-}") and the
           # _CI_PREPARE script uses it to authenticate `gh run download`.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # OPCLI_PACKAGE is set by "Build opcli wheel" for opcli self-tests.
-          # For regular charm projects it is empty; spread.yaml OPCLI_PACKAGE
-          # env var falls back to empty string and tox uses the PyPI version.
-          OPCLI_PACKAGE: ${{ env.OPCLI_PACKAGE }}
+          # Passed by the caller to pin the opcli version installed in the tox
+          # venv. Empty for regular charm projects (falls back to PyPI 'opcli').
+          OPCLI_PACKAGE: ${{ inputs.opcli-package }}
         run: opcli spread run -- -vv ${{ matrix.selector }}
 
       - name: Juju status (on failure)
