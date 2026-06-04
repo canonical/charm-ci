@@ -55,25 +55,13 @@ _INTEGRATION_SUITES_KEY = "integration-suites"
 # ---------------------------------------------------------------------------
 
 
-_OPCLI_PKG_DETECT = (
-    '    if [ -n "${GITHUB_WORKSPACE:-}" ] && '
-    'grep -q \'name = "opcli"\' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then\n'
-    '        _OPCLI_PKG="opcli @ file://${GITHUB_WORKSPACE}"\n'
-    '    elif grep -q \'name = "opcli"\' "${SPREAD_PATH}/pyproject.toml" 2>/dev/null; then\n'
-    '        _OPCLI_PKG="opcli @ file://${SPREAD_PATH}"\n'
-    "    else\n"
-    '        _OPCLI_PKG="opcli @ git+https://github.com/canonical/charm-ci.git@${OPCLI_GIT_REF:-main}"\n'
-    "    fi\n"
-)
-
 _TASK_YAML_CONTENT = (
     "summary: integration tests\n"
     "\n"
     "execute: |\n"
     '    cd "${SPREAD_PATH}"\n'
     '    PYTEST_CMD=$(opcli pytest expand -e "${TOX_ENV:-integration}") || exit 1\n'
-    + _OPCLI_PKG_DETECT
-    + "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && OPCLI_PACKAGE='${_OPCLI_PKG}' ${PYTEST_CMD}\"\n"
+    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && OPCLI_PACKAGE='${OPCLI_PACKAGE:-opcli}' ${PYTEST_CMD}\"\n"
 )
 
 _TASK_YAML_CONTENT_SUITE = (
@@ -83,8 +71,7 @@ _TASK_YAML_CONTENT_SUITE = (
     '    cd "${SPREAD_PATH}"\n'
     '    PYTEST_CMD=$(opcli pytest expand --suite "$OPCLI_SUITE"'
     ' --module "${MODULE}" -e "${TOX_ENV:-integration}") || exit 1\n'
-    + _OPCLI_PKG_DETECT
-    + "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}/${OPCLI_CWD}' && OPCLI_PACKAGE='${_OPCLI_PKG}' ${PYTEST_CMD}\"\n"
+    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}/${OPCLI_CWD}' && OPCLI_PACKAGE='${OPCLI_PACKAGE:-opcli}' ${PYTEST_CMD}\"\n"
 )
 
 
@@ -1024,9 +1011,6 @@ if [ -n "${GITHUB_RUN_ID:-}" ]; then
 fi
 opcli artifacts push-images --missing-registry deploy
 chown -R ubuntu:ubuntu "${SPREAD_PATH}"
-if [ -n "${GITHUB_WORKSPACE:-}" ]; then
-  chmod -R o+rX "${GITHUB_WORKSPACE}"
-fi
 """
 
 _CI_ALLOCATE = """\

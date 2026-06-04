@@ -153,6 +153,15 @@ jobs:
             uv tool install "git+https://github.com/canonical/charm-ci.git@${{ needs.test-matrix.outputs.opcli-sha }}"
           fi
 
+      - name: Build opcli wheel
+        run: |
+          if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
+            uv build --wheel "${GITHUB_WORKSPACE}" \
+              -o "${GITHUB_WORKSPACE}/${{ inputs.working-directory }}/opcli-dist/" --quiet
+            wheel=$(ls "${GITHUB_WORKSPACE}/${{ inputs.working-directory }}/opcli-dist/opcli-"*.whl | head -1)
+            echo "OPCLI_PACKAGE=${wheel}" >> "${GITHUB_ENV}"
+          fi
+
       # ── Install spread ────────────────────────────────────────────────────
       - name: Install spread
         run: |
@@ -239,6 +248,10 @@ jobs:
           # Spread captures it via $(HOST: echo "${GITHUB_TOKEN:-}") and the
           # _CI_PREPARE script uses it to authenticate `gh run download`.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # OPCLI_PACKAGE is set by "Build opcli wheel" for opcli self-tests.
+          # For regular charm projects it is empty; spread.yaml OPCLI_PACKAGE
+          # env var falls back to empty string and tox uses the PyPI version.
+          OPCLI_PACKAGE: ${{ env.OPCLI_PACKAGE }}
         run: opcli spread run -- -vv ${{ matrix.selector }}
 
       - name: Juju status (on failure)

@@ -12,6 +12,7 @@ backends:
 environment:
   CONCIERGE: '$(HOST: echo "${CONCIERGE:-concierge.yaml}")'
   OPCLI_GIT_REF: '$(HOST: echo "${OPCLI_GIT_REF:-main}")'
+  OPCLI_PACKAGE: '$(HOST: echo "${OPCLI_PACKAGE:-}")'
 exclude:
 - .git
 - .tox

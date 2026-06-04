@@ -109,10 +109,12 @@ jobs:
       # Explicitly clear CI to override GitHub Actions' default CI=true.
       # Set OPCLI_GIT_REF so the LXD VM installs the same opcli commit that
       # produced artifacts.build.yaml, keeping the format in sync.
+      # Set OPCLI_PACKAGE so tox installs the same commit into its venv.
       - name: Run spread (local/LXD)
         env:
           CI: ""
           OPCLI_GIT_REF: ${{ github.sha }}
+          OPCLI_PACKAGE: "opcli @ git+https://github.com/canonical/charm-ci.git@${{ github.sha }}"
         run: opcli spread run -- -vv integration-test-local:ubuntu-24.04:build/tests/integration/run:test_k8s_charm
 
   # ── Gate job (always reports) ────────────────────────────────────────────────
