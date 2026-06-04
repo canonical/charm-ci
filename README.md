@@ -13,6 +13,7 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 - [`artifacts.yaml` schema](#artifactsyaml-schema)
 - [`spread.yaml` virtual backends](#spreadyaml-virtual-backends)
 - [`integration-suites` in `spread.yaml`](#integration-suites-in-spreadyaml)
+- [pytest-opcli plugin](#pytest-opcli-plugin)
 - [Tutorial testing](#tutorial-testing)
 - [CI vs local](#ci-vs-local)
 - [GitHub Actions reusable workflows](#github-actions-reusable-workflows)
@@ -338,6 +339,91 @@ integration-suites:
       CHARM_PATH={{ build.path }}
       {% endfor %}
 ```
+
+## pytest-opcli plugin
+
+`opcli` ships a [pytest plugin](https://docs.pytest.org/en/stable/explanation/plugins.html) that auto-discovers `artifacts.build.yaml` and injects built artifacts as session-scoped fixtures. Integration tests stop needing manual `--charm-file` / `--rock-image` CLI flags in `conftest.py`.
+
+### Installation
+
+The plugin is bundled inside `opcli` and activates automatically whenever `opcli` is installed in the same Python environment as pytest. Add it as a test dependency alongside pytest-jubilant and your other test packages.
+
+**With uv — add to your project:**
+
+```bash
+uv add --group integration "opcli @ git+https://github.com/canonical/charm-ci.git"
+```
+
+Or in `pyproject.toml` directly:
+
+```toml
+[dependency-groups]
+integration = [
+    "opcli @ git+https://github.com/canonical/charm-ci.git",
+    "pytest-jubilant",
+]
+```
+
+**With tox — add to the integration test env:**
+
+```ini
+[testenv:integration]
+deps =
+    opcli @ git+https://github.com/canonical/charm-ci.git
+    pytest-jubilant
+```
+
+No further configuration is required. The `pytest11` entry point registers the plugin as soon as the package is installed.
+
+### Fixtures
+
+All fixtures are session-scoped and architecture-aware (they filter builds to the machine's current CPU architecture).
+
+| Fixture | Return type | Description |
+|---|---|---|
+| `opcli_artifacts` | `ArtifactsGenerated` | Full model parsed from `artifacts.build.yaml`. Use this to inspect any field not covered by a dedicated fixture. |
+| `charm_path` | `str` | Path to the single built `.charm`. Fails if the repo contains more than one charm, or if the single charm has more than one build for the current arch (ambiguous base — use `charm_paths` instead). |
+| `charm_paths` | `dict[str, list[str]]` | All `.charm` paths per charm name, as a list to handle multi-base builds. |
+| `rock_images` | `dict[str, str]` | Image reference or local `.rock` file path per rock name, for the current arch. |
+| `charm_resource_images` | `dict[str, dict[str, str]]` | `{charm_name: {resource_name: image_ref}}`. Resolves each OCI-image resource through the rock→image mapping. Use this in multi-charm repos. |
+| `resource_images` | `dict[str, str]` | `{resource_name: image_ref}`. Single-charm shortcut for `charm_resource_images`. Fails if the repo contains zero or more than one charm. |
+
+### Usage examples
+
+**Single charm with OCI resources (most common):**
+
+```python
+def test_deploy(juju, charm_path, resource_images):
+    juju.deploy(charm_path, resources=resource_images)
+    juju.wait(jubilant.all_active)
+```
+
+**Single charm built for multiple bases:**
+
+```python
+def test_deploy(juju, charm_paths):
+    for path in charm_paths["my-charm"]:
+        juju.deploy(path)
+        juju.wait(jubilant.all_active)
+```
+
+**Multi-charm repo:**
+
+```python
+def test_deploy(juju, charm_paths, charm_resource_images):
+    juju.deploy(charm_paths["operator"][0], resources=charm_resource_images["operator"])
+    juju.deploy(charm_paths["agent"][0], resources=charm_resource_images["agent"])
+    juju.wait(jubilant.all_active)
+```
+
+### Discovery
+
+The plugin locates `artifacts.build.yaml` in this order:
+
+1. `OPCLI_ARTIFACTS_BUILD_YAML` environment variable (absolute path).
+2. `--artifacts-build-yaml` pytest CLI option.
+3. Walk up from pytest's rootdir until `artifacts.build.yaml` is found.
+4. `pytest.UsageError` if none of the above succeed — run `opcli artifacts build` first.
 
 ## Tutorial testing
 
