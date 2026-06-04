@@ -12,7 +12,7 @@ backends:
 environment:
   CONCIERGE: '$(HOST: echo "${CONCIERGE:-concierge.yaml}")'
   OPCLI_GIT_REF: '$(HOST: echo "${OPCLI_GIT_REF:-main}")'
-  OPCLI_PACKAGE: '$(HOST: if grep -q "^name = .opcli." "${GITHUB_WORKSPACE:-}/pyproject.toml" 2>/dev/null; then echo "opcli @ git+https://github.com/canonical/charm-ci.git@$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD)"; else echo "opcli"; fi)'
+  OPCLI_PACKAGE: '$(HOST: cd "${GITHUB_WORKSPACE:-/nonexistent}" 2>/dev/null && grep -q "^name = .opcli." pyproject.toml 2>/dev/null && echo "opcli @ git+https://github.com/canonical/charm-ci.git@`git rev-parse HEAD`" || echo "opcli")'
 exclude:
 - .git
 - .tox
