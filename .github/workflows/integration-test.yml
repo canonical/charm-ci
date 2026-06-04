@@ -159,7 +159,14 @@ jobs:
             uv build --wheel "${GITHUB_WORKSPACE}" \
               -o "${GITHUB_WORKSPACE}/${{ inputs.working-directory }}/opcli-dist/" --quiet
             wheel=$(ls "${GITHUB_WORKSPACE}/${{ inputs.working-directory }}/opcli-dist/opcli-"*.whl | head -1)
-            echo "OPCLI_PACKAGE=${wheel}" >> "${GITHUB_ENV}"
+            wheelname=$(basename "${wheel}")
+            # OPCLI_PACKAGE must use the spread environment path (SPREAD_PATH = path: in
+            # spread.yaml), not the GITHUB_WORKSPACE path. Tox runs as ubuntu inside the
+            # spread task; the wheel is synced to SPREAD_PATH and chowned there.
+            spread_path=$(grep -m1 '^path:' \
+              "${GITHUB_WORKSPACE}/${{ inputs.working-directory }}/spread.yaml" \
+              | sed 's/^path:[[:space:]]*//')
+            echo "OPCLI_PACKAGE=${spread_path}/opcli-dist/${wheelname}" >> "${GITHUB_ENV}"
           fi
 
       # ── Install spread ────────────────────────────────────────────────────
