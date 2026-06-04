@@ -26,6 +26,9 @@ integration-suites:
     - integration-test
     environment:
       CONCIERGE/test_k8s_charm: concierge-microk8s.yaml
+    pytest-arguments-template: |
+      --model testing
+      --keep-models
   # Sub-charm tests (monorepo pattern — working-dir scopes artifacts to k8s-charm/)
   k8s-charm/tests/integration/:
     working-dir: k8s-charm/
@@ -34,6 +37,9 @@ integration-suites:
     - integration-test
     environment:
       CONCIERGE: concierge-microk8s.yaml
+    pytest-arguments-template: |
+      --model testing
+      --keep-models
   # Machine-charm tests with explicit variants (no auto-discover)
   machine-charm/tests/integration/:
     working-dir: machine-charm/
@@ -43,3 +49,6 @@ integration-suites:
     - integration-test
     environment:
       MODULE/test_charm: tests/integration/test_charm.py
+    pytest-arguments-template: |
+      --model testing
+      --keep-models

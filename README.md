@@ -143,37 +143,27 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 | `run` | Assemble and execute the tox integration test command. `-e` for env, `--suite` for suite, `--` forwards args. |
 | `expand` | Print full `tox -e integration -- <flags>` command. `-e` for env, `--suite` for suite, `--` forwards args. |
 
-By default, `opcli pytest` generates `--charm-file=` and `--rock-image=` flags from `artifacts.build.yaml` (pfe-style). This is the legacy approach: the flags are consumed by a `conftest.py` that registers them as pytest options and re-exposes them as fixtures.
+By default, `opcli pytest run/expand` invokes `tox -e integration` with no extra flags. Artifact fixtures are injected automatically by the pytest-opcli plugin — no CLI flag plumbing needed.
 
-**With the pytest-opcli plugin (recommended for new projects):** tests request fixtures directly and no CLI flags are needed. To suppress the default flag generation, add an empty template to each `integration-suites` entry:
-
-```yaml
-integration-suites:
-  tests/integration/:
-    pytest-arguments-template: ""   # plugin handles artifact injection
-```
-
-This is the complete migration path from pfe-style:
-
-1. Add `opcli` to test dependencies (see [pytest-opcli plugin](#pytest-opcli-plugin)).
-2. Delete the pfe boilerplate from `conftest.py` (`pytest_addoption`, `charm_path`, `resource_images` fixtures, etc.).
-3. Add `pytest-arguments-template: ""` to each `integration-suites` entry.
-4. Update tests to request fixtures directly: `charm_path`, `resource_images`, etc.
-
-To fully customise invocation instead of suppressing it, write a real Jinja2 template:
+To pass Juju-specific options or other pytest flags, use `pytest-arguments-template` on the suite entry in `spread.yaml`:
 
 ```yaml
 integration-suites:
   tests/integration/:
     pytest-arguments-template: |
-      {% for charm in artifacts.charms %}
-        {% for build in charm.builds if build.arch == arch %}
-          --charm-file={{ build.path }}
-        {% endfor %}
-      {% endfor %}
-    # Or use environment variables instead:
+      --model testing
+      --keep-models
+```
+
+To pass artifacts as environment variables instead of fixtures:
+
+```yaml
+integration-suites:
+  tests/integration/:
     pytest-environment-template: |
-      CHARM_PATH={{ artifacts.charms[0].builds[0].path }}
+      {% for build in artifacts.charms[0].builds if build.arch == arch %}
+      CHARM_PATH={{ build.path }}
+      {% endfor %}
 ```
 
 The `--suite` flag selects a specific integration suite (useful in monorepos with multiple test directories):
@@ -337,20 +327,23 @@ At expand time, `integration-suites` entries are converted into native spread `s
 
 ### Pytest invocation templates
 
-Controls how `opcli pytest run` and `opcli pytest expand` pass built artifacts to the test framework. These keys are per-suite in `integration-suites`:
+Controls how `opcli pytest run` and `opcli pytest expand` pass extra flags to the test framework. These keys are per-suite in `integration-suites`:
 
 | Key | Effect |
 |---|---|
 | `pytest-arguments-template` | Jinja2 template rendered into CLI args passed to tox/pytest |
 | `pytest-environment-template` | Jinja2 template rendered into `KEY=VALUE` env vars |
 
-When no template is specified, the default behaviour generates `--charm-file=<path>` and `--<rock>-image=<ref>` flags (pfe-style), filtered to the current machine's architecture.
+When no template is specified, `opcli pytest` runs bare `tox -e integration` with no extra flags. Artifact fixtures are provided by the pytest-opcli plugin automatically. Use `pytest-arguments-template` to pass any additional options (Juju model name, test selection flags, etc.):
 
 **Template context:** `artifacts` (full `ArtifactsGenerated` model) and `arch` (current architecture string).
 
 ```yaml
 integration-suites:
   tests/integration/:
+    pytest-arguments-template: |
+      --model testing
+      --keep-models
     pytest-environment-template: |
       {% for build in artifacts.charms[0].builds if build.arch == arch %}
       CHARM_PATH={{ build.path }}
