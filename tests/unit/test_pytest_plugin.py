@@ -150,18 +150,17 @@ class TestSelectArchBuilds:
             CharmOutput(arch="amd64", path="a.charm"),
             CharmOutput(arch="arm64", path="b.charm"),
         ]
-        result = _select_arch_builds_charm(builds, "amd64", "mycharm")
+        result = _select_arch_builds_charm(builds, "amd64")
         assert [b.arch for b in result] == ["amd64"]
 
-    def test_charm_fallback_to_all_nonempty(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_charm_no_match_returns_empty(self) -> None:
+        """No match returns empty list — callers handle the empty case."""
         builds = [CharmOutput(arch="arm64", path="b.charm")]
-        result = _select_arch_builds_charm(builds, "amd64", "mycharm")
-        assert result == builds
-        assert "No charm build" in caplog.text
+        result = _select_arch_builds_charm(builds, "amd64")
+        assert result == []
 
-    def test_charm_fallback_empty_list(self) -> None:
-        """When there are no builds at all, return empty list without warning."""
-        result = _select_arch_builds_charm([], "amd64", "mycharm")
+    def test_charm_empty_input_returns_empty(self) -> None:
+        result = _select_arch_builds_charm([], "amd64")
         assert result == []
 
     def test_rock_exact_match(self) -> None:
@@ -169,17 +168,16 @@ class TestSelectArchBuilds:
             RockOutput(arch="amd64", image="img:amd64"),
             RockOutput(arch="arm64", image="img:arm64"),
         ]
-        result = _select_arch_builds_rock(builds, "amd64", "myrock")
+        result = _select_arch_builds_rock(builds, "amd64")
         assert [b.arch for b in result] == ["amd64"]
 
-    def test_rock_fallback_to_all_nonempty(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_rock_no_match_returns_empty(self) -> None:
         builds = [RockOutput(arch="arm64", image="img:arm64")]
-        result = _select_arch_builds_rock(builds, "amd64", "myrock")
-        assert result == builds
+        result = _select_arch_builds_rock(builds, "amd64")
+        assert result == []
 
-    def test_rock_fallback_empty_list(self) -> None:
-        """When there are no builds at all, return empty list without warning."""
-        result = _select_arch_builds_rock([], "amd64", "myrock")
+    def test_rock_empty_input_returns_empty(self) -> None:
+        result = _select_arch_builds_rock([], "amd64")
         assert result == []
 
 
@@ -272,6 +270,28 @@ class TestBuildCharmPath:
                             {"arch": "arm64", "path": "./a-22.charm", "base": "ubuntu@22.04"},
                             {"arch": "arm64", "path": "./a-24.charm", "base": "ubuntu@24.04"},
                         ],
+                    }
+                ],
+            }
+        )
+        with (
+            patch(_ARCH, return_value="amd64"),
+            pytest.raises(
+                pytest.fail.Exception, match="no build for charm 'mycharm' matches arch 'amd64'"
+            ),
+        ):
+            _build_charm_path(arts, _FAKE_ROOT)
+
+    def test_fails_arch_mismatch_single_build(self) -> None:
+        """Single build of the wrong arch must fail hard, not silently use it."""
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "mycharm",
+                        "charmcraft-yaml": "charmcraft.yaml",
+                        "builds": [{"arch": "arm64", "path": "./mycharm.charm"}],
                     }
                 ],
             }

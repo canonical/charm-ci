@@ -191,21 +191,20 @@ def _build_charm_path(artifacts: ArtifactsGenerated, artifacts_root: Path) -> st
 
     charm = charms[0]
     arch = current_arch()
-    arch_builds = _select_arch_builds_charm(charm.builds, arch, charm.name)
+    arch_builds = _select_arch_builds_charm(charm.builds, arch)
 
+    if not arch_builds:
+        available = sorted({b.arch for b in charm.builds})
+        pytest.fail(
+            f"charm_path: no build for charm '{charm.name}' matches arch '{arch}'; "
+            f"available arches: {available!r}"
+        )
     if len(arch_builds) > 1:
-        if any(b.arch == arch for b in arch_builds):
-            bases = [b.base for b in arch_builds]
-            pytest.fail(
-                f"charm_path: charm '{charm.name}' has {len(arch_builds)} builds for "
-                f"arch '{arch}' (bases: {bases!r}); use charm_paths to get all paths"
-            )
-        else:
-            available = sorted({b.arch for b in arch_builds})
-            pytest.fail(
-                f"charm_path: no build for charm '{charm.name}' matches arch '{arch}'; "
-                f"available arches: {available!r}. Use charm_paths to select explicitly."
-            )
+        bases = [b.base for b in arch_builds]
+        pytest.fail(
+            f"charm_path: charm '{charm.name}' has {len(arch_builds)} builds for "
+            f"arch '{arch}' (bases: {bases!r}); use charm_paths to get all paths"
+        )
 
     build = arch_builds[0]
     if not build.path:
@@ -225,7 +224,7 @@ def _build_charm_paths(
     arch = current_arch()
     result: dict[str, list[str]] = {}
     for charm in artifacts.charms:
-        arch_builds = _select_arch_builds_charm(charm.builds, arch, charm.name)
+        arch_builds = _select_arch_builds_charm(charm.builds, arch)
         result[charm.name] = [_resolve_path(b.path, artifacts_root) for b in arch_builds if b.path]
     return result
 
@@ -237,7 +236,7 @@ def _build_rock_images(artifacts: ArtifactsGenerated, artifacts_root: Path) -> d
     arch = current_arch()
     result: dict[str, str] = {}
     for rock in artifacts.rocks:
-        arch_builds = _select_arch_builds_rock(rock.builds, arch, rock.name)
+        arch_builds = _select_arch_builds_rock(rock.builds, arch)
         for build in arch_builds:
             if build.image:
                 result[rock.name] = build.image
@@ -283,39 +282,17 @@ def _build_resource_images(
 def _select_arch_builds_charm(
     builds: list[CharmOutput],
     arch: str,
-    artifact_name: str,
 ) -> list[CharmOutput]:
-    """Return charm builds matching *arch*, or all builds if none match."""
-    matching = [b for b in builds if b.arch == arch]
-    if matching:
-        return matching
-    if builds:
-        logger.warning(
-            "No charm build for '%s' matches arch '%s'; using all available: %s",
-            artifact_name,
-            arch,
-            [b.arch for b in builds],
-        )
-    return builds
+    """Return charm builds matching *arch*."""
+    return [b for b in builds if b.arch == arch]
 
 
 def _select_arch_builds_rock(
     builds: list[RockOutput],
     arch: str,
-    artifact_name: str,
 ) -> list[RockOutput]:
-    """Return rock builds matching *arch*, or all builds if none match."""
-    matching = [b for b in builds if b.arch == arch]
-    if matching:
-        return matching
-    if builds:
-        logger.warning(
-            "No rock build for '%s' matches arch '%s'; using all available: %s",
-            artifact_name,
-            arch,
-            [b.arch for b in builds],
-        )
-    return builds
+    """Return rock builds matching *arch*."""
+    return [b for b in builds if b.arch == arch]
 
 
 def _discover_artifacts_build(config: pytest.Config) -> Path:
