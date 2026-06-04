@@ -121,7 +121,36 @@ jobs:
             uv tool install "git+https://github.com/canonical/charm-ci.git@${{ needs.build-matrix.outputs.opcli-sha }}"
           fi
 
+      - name: Compute rock cache metadata
+        id: rock-cache-meta
+        if: matrix.type == 'rock' && needs.build-matrix.outputs.rock-upload-mode == 'registry'
+        run: |
+          # Determine the source directory to hash: pack-dir if set, otherwise
+          # the directory containing rockcraft.yaml.
+          # The shell CWD is already inputs.working-directory (set by defaults.run.working-directory),
+          # so matrix fields are resolved relative to it directly.
+          if [ -n "${{ matrix.pack-dir }}" ]; then
+            source_dir="${{ matrix.pack-dir }}"
+          else
+            source_dir="$(dirname "${{ matrix.rockcraft-yaml }}")"
+          fi
+          # Hash all files in source_dir, excluding any pre-built .rock outputs.
+          hash=$(find "$source_dir" -type f -not -name "*.rock" | sort | xargs sha256sum | sha256sum | cut -c1-32)
+          # Weekly expiry: caches rotate each ISO week to prevent long-lived stale entries.
+          week=$(date +%Y-W%V)
+          key="rock-${{ matrix.name }}-${{ matrix.arch }}-${hash}-${week}"
+          echo "key=${key}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore rock cache
+        id: restore-rock-cache
+        if: matrix.type == 'rock' && needs.build-matrix.outputs.rock-upload-mode == 'registry'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ inputs.working-directory }}/artifacts.build.yaml
+          key: ${{ steps.rock-cache-meta.outputs.key }}
+
       - name: Install LXD
+        if: matrix.type != 'rock' || steps.restore-rock-cache.outputs.cache-hit != 'true'
         run: |
           sudo snap install lxd
           sudo lxd waitready
@@ -142,7 +171,7 @@ jobs:
         run: sudo snap install charmcraft --classic
 
       - name: Install rockcraft
-        if: matrix.type == 'rock'
+        if: matrix.type == 'rock' && steps.restore-rock-cache.outputs.cache-hit != 'true'
         run: sudo snap install rockcraft --classic
 
       - name: Install snapcraft
@@ -150,15 +179,29 @@ jobs:
         run: sudo snap install snapcraft --classic
 
       - name: Login to GHCR
-        if: matrix.type == 'rock' && needs.build-matrix.outputs.rock-upload-mode == 'registry'
+        if: >-
+          matrix.type == 'rock' &&
+          needs.build-matrix.outputs.rock-upload-mode == 'registry' &&
+          steps.restore-rock-cache.outputs.cache-hit != 'true'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             skopeo login ghcr.io --username "${{ github.actor }}" --password-stdin
 
       - name: Build ${{ matrix.type }} ${{ matrix.name }}
+        if: matrix.type != 'rock' || steps.restore-rock-cache.outputs.cache-hit != 'true'
         run: opcli artifacts build --${{ matrix.type }} ${{ matrix.name }}
         env:
           OPCLI_ROCK_UPLOAD: ${{ needs.build-matrix.outputs.rock-upload-mode }}
+
+      - name: Save rock cache
+        if: >-
+          matrix.type == 'rock' &&
+          needs.build-matrix.outputs.rock-upload-mode == 'registry' &&
+          steps.restore-rock-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ inputs.working-directory }}/artifacts.build.yaml
+          key: ${{ steps.rock-cache-meta.outputs.key }}
 
       - name: Upload ${{ matrix.type }} ${{ matrix.name }}
         if: matrix.type != 'rock' || needs.build-matrix.outputs.rock-upload-mode == 'artifact'

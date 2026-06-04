@@ -342,9 +342,11 @@ def artifacts_matrix(root: Path) -> dict[str, list[dict[str, object]]]:
     """Read ``artifacts.yaml`` and return a GitHub Actions matrix dict.
 
     The returned dict has a single key ``"include"`` whose value is a list of
-    entries — one per (artifact, arch) combination — each with ``"name"``,
-    ``"type"``, ``"arch"``, and ``"runner"`` keys.  ``runner`` is a list of
-    GitHub runner label strings.
+    entries — one per (artifact, arch) combination.  Each entry has
+    ``"name"``, ``"type"``, ``"arch"``, and ``"runner"`` keys; rock entries
+    additionally include ``"rockcraft-yaml"`` and ``"pack-dir"`` so the
+    calling workflow can locate the source directory for cache-key computation.
+    ``runner`` is a list of GitHub runner label strings.
 
     Rocks come first, then charms, then snaps.  Within each kind, entries are
     ordered by artifact declaration order, then by ``platforms`` order.
@@ -370,6 +372,8 @@ def artifacts_matrix(root: Path) -> dict[str, list[dict[str, object]]]:
                     "type": "rock",
                     "arch": build.arch,
                     "runner": json.dumps(build.runner or ["ubuntu-latest"]),
+                    "rockcraft-yaml": rock.rockcraft_yaml,
+                    "pack-dir": rock.pack_dir or "",
                 }
             )
     for charm in plan.charms:
