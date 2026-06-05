@@ -1,0 +1,129 @@
+name: Doc Test
+
+# Reusable workflow that:
+#   1. Generates a spread test matrix (opcli spread jobs)
+#   2. Runs each spread test task in a dedicated job
+#
+# Designed for documentation/tutorial tests that use the ``opcli-minimal``
+# virtual backend.  Unlike ``integration-test.yml`` there is no artifact build
+# step — the test environment only needs uv and opcli installed.
+#
+# Call from your operator repository:
+#
+#   jobs:
+#     doc-test:
+#       uses: canonical/charm-ci/.github/workflows/doc-test.yml@main
+#       permissions:
+#         contents: read
+#         actions: read
+#
+# Assumptions about the operator repository layout:
+#   - ``spread.yaml`` uses the ``opcli-minimal:`` virtual backend
+#   - Each suite's ``task.yaml`` runs the documentation tests
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Directory containing spread.yaml (relative to workspace root)"
+        type: string
+        default: "."
+      spread-jobs-include:
+        description: "fnmatch pattern to include only matching spread jobs (e.g. 'docs-ci:*'). When empty all jobs are included."
+        type: string
+        default: ""
+
+jobs:
+  # ── Job 1: generate the spread test matrix ──────────────────────────────────
+  test-matrix:
+    name: Test matrix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      opcli-sha: ${{ steps.workflow-version.outputs.sha }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get workflow version
+        id: workflow-version
+        uses: canonical/get-workflow-version-action@v1
+        with:
+          repository-name: canonical/charm-ci
+          file-name: doc-test.yml
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install opcli
+        run: |
+          if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
+            uv tool install "${GITHUB_WORKSPACE}"
+          else
+            uv tool install "git+https://github.com/canonical/charm-ci.git@${{ steps.workflow-version.outputs.sha }}"
+          fi
+
+      - name: Install spread
+        run: |
+          sudo snap install go --classic
+          go install github.com/canonical/spread/cmd/spread@latest
+          sudo ln -sf ~/go/bin/spread /usr/local/bin/spread
+
+      - name: Generate test matrix
+        id: matrix
+        run: |
+          args=()
+          if [ -n "${{ inputs.spread-jobs-include }}" ]; then
+            args+=(--include "${{ inputs.spread-jobs-include }}")
+          fi
+          matrix=$(opcli spread jobs "${args[@]}")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Test matrix: $matrix"
+
+  # ── Job 2: run each spread task ─────────────────────────────────────────────
+  test:
+    name: "${{ matrix.name }}"
+    needs: [test-matrix]
+    runs-on: ${{ fromJSON(matrix.runs-on) }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.test-matrix.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install opcli
+        run: |
+          if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
+            uv tool install "${GITHUB_WORKSPACE}"
+          else
+            uv tool install "git+https://github.com/canonical/charm-ci.git@${{ needs.test-matrix.outputs.opcli-sha }}"
+          fi
+
+      - name: Install spread
+        run: |
+          sudo snap install go --classic
+          go install github.com/canonical/spread/cmd/spread@latest
+          sudo ln -sf ~/go/bin/spread /usr/local/bin/spread
+
+      - name: Run spread task
+        env:
+          CI: "true"
+          OPCLI_GIT_REF: ${{ needs.test-matrix.outputs.opcli-sha }}
+        run: opcli spread run -- -vv ${{ matrix.selector }}

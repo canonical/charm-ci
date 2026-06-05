@@ -551,14 +551,15 @@ RST equivalent uses `.. SPREAD`, `.. SPREAD END`, `.. SPREAD SKIP`, and `.. SPRE
 
 ## GitHub Actions reusable workflows
 
-Two reusable workflows are available for operator repositories:
+Three reusable workflows are available for operator repositories:
 
 | Workflow | Purpose |
 |---|---|
 | `build-artifacts.yml` | Build matrix generation, parallel artifact builds, merged `artifacts.build.yaml` |
 | `integration-test.yml` | Download artifacts, generate spread task matrix, run integration tests |
+| `doc-test.yml` | Generate spread task matrix, run documentation/tutorial tests (no artifact build) |
 
-Example usage:
+Example usage for integration tests:
 
 ```yaml
 jobs:
@@ -578,6 +579,20 @@ jobs:
     secrets: inherit
     with:
       working-directory: .
+```
+
+Example usage for documentation tests:
+
+```yaml
+jobs:
+  doc-test:
+    uses: canonical/charm-ci/.github/workflows/doc-test.yml@main
+    permissions:
+      contents: read
+      actions: read
+    with:
+      working-directory: .
+      # spread-jobs-include: "docs-ci:*"  # optional: restrict to matching jobs
 ```
 
 Pinning to a SHA or tag automatically installs the matching `opcli` version via `canonical/get-workflow-version-action`.
