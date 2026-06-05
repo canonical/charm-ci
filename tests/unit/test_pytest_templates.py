@@ -489,8 +489,7 @@ class TestExpandCdPrefix:
         monkeypatch.chdir(tmp_path)
 
         runner = CliRunner()
-        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
-            result = runner.invoke(pytest_app, ["expand"], catch_exceptions=False)
+        result = runner.invoke(pytest_app, ["expand"], catch_exceptions=False)
 
         assert result.exit_code == 0, result.output
         assert not result.output.startswith("cd ")
@@ -506,12 +505,11 @@ class TestExpandCdPrefix:
         monkeypatch.chdir(tmp_path)
 
         runner = CliRunner()
-        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
-            result = runner.invoke(
-                pytest_app,
-                ["expand", "--suite", "sub-charm/tests/integration/"],
-                catch_exceptions=False,
-            )
+        result = runner.invoke(
+            pytest_app,
+            ["expand", "--suite", "sub-charm/tests/integration/"],
+            catch_exceptions=False,
+        )
 
         assert result.exit_code == 0, result.output
         assert result.output.startswith("cd sub-charm && ")

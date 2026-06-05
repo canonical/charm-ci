@@ -90,6 +90,7 @@ def expand(
     """
     root = Path.cwd()
     suite_cfg = get_suite_config(root, suite=suite)
+    cwd = root / str(suite_cfg["working-dir"])
     argv = assemble_tox_argv(
         root,
         tox_env=tox_env,
