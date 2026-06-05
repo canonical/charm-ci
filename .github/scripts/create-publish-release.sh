@@ -23,6 +23,8 @@ if ! jq empty publish-results.json 2>/dev/null; then
   exit 1
 fi
 
+: "${GH_TOKEN:?GH_TOKEN environment variable is required}"
+
 # Skip if no charms were published
 if [ "$(jq 'length' publish-results.json)" -eq 0 ]; then
   echo "No charms published — skipping release creation."
@@ -43,6 +45,13 @@ while IFS= read -r charm_entry; do
     arch=$(echo "$release_entry" | jq -r '.arch')
 
     TAG="${charm_name}-rev${revision}"
+
+    # Skip releases that already exist (safe to rerun after partial failures)
+    if gh release view "${TAG}" > /dev/null 2>&1; then
+      echo "Release ${TAG} already exists — skipping."
+      continue
+    fi
+
     TITLE="${charm_name} rev${revision}"
     BODY="## ${charm_name} rev${revision} — published to \`${channel}\`"$'\n\n'
     BODY+="**Base:** ${base}"$'\n'
