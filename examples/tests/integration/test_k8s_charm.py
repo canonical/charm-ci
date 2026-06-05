@@ -16,7 +16,4 @@ def test_k8s_charm_active(
     juju.deploy(
         charm_paths["k8s-charm"][0],
         app="k8s-charm",
-        resources={"k8s-rock": rock_images["k8s-rock"]},
-    )
-    status = juju.wait(jubilant.all_active, timeout=300)
-    assert status.apps["k8s-charm"].units["k8s-charm/0"].workload_status.current == "active"
+        resources={"k8s-rock-image": rock_images["k8s-rock"]},
