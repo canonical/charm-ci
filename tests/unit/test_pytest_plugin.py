@@ -10,6 +10,7 @@ import pytest
 
 from opcli.models.artifacts_build import ArtifactsGenerated, CharmOutput, RockOutput
 from opcli.pytest_plugin import (
+    CharmPathList,
     _build_charm_path,
     _build_charm_paths,
     _build_resource_images,
@@ -357,6 +358,76 @@ class TestBuildCharmPath:
 
 
 # ---------------------------------------------------------------------------
+# CharmPathList
+# ---------------------------------------------------------------------------
+
+
+class TestCharmPathList:
+    def test_path_single(self) -> None:
+        cpl = CharmPathList([("ubuntu@24.04", "/a.charm")])
+        assert cpl.path == "/a.charm"
+
+    def test_path_no_base_info(self) -> None:
+        cpl = CharmPathList([(None, "/a.charm")])
+        assert cpl.path == "/a.charm"
+
+    def test_path_multi_fails(self) -> None:
+        cpl = CharmPathList([("ubuntu@22.04", "/a-22.charm"), ("ubuntu@24.04", "/a-24.charm")])
+        with pytest.raises(pytest.fail.Exception, match="ambiguous"):
+            cpl.path  # noqa: B018
+
+    def test_getitem_by_base(self) -> None:
+        cpl = CharmPathList([("ubuntu@22.04", "/a-22.charm"), ("ubuntu@24.04", "/a-24.charm")])
+        assert cpl["ubuntu@22.04"] == "/a-22.charm"
+        assert cpl["ubuntu@24.04"] == "/a-24.charm"
+
+    def test_getitem_base_not_found(self) -> None:
+        cpl = CharmPathList([("ubuntu@22.04", "/a.charm")])
+        with pytest.raises(KeyError, match=r"ubuntu@24\.04"):
+            cpl["ubuntu@24.04"]
+
+    def test_getitem_no_base_info_raises(self) -> None:
+        cpl = CharmPathList([(None, "/a.charm")])
+        with pytest.raises(KeyError, match="no base information"):
+            cpl["ubuntu@24.04"]
+
+    def test_getitem_wrong_type_raises(self) -> None:
+        cpl = CharmPathList([("ubuntu@24.04", "/a.charm")])
+        with pytest.raises(TypeError, match="str"):
+            cpl[0]  # type: ignore[index]
+
+    def test_iter(self) -> None:
+        cpl = CharmPathList([("ubuntu@22.04", "/a.charm"), ("ubuntu@24.04", "/b.charm")])
+        assert list(cpl) == ["/a.charm", "/b.charm"]
+
+    def test_len(self) -> None:
+        cpl = CharmPathList([("ubuntu@22.04", "/a.charm"), ("ubuntu@24.04", "/b.charm")])
+        assert len(cpl) == len(["/a.charm", "/b.charm"])
+
+    def test_bases(self) -> None:
+        cpl = CharmPathList([("ubuntu@22.04", "/a.charm"), ("ubuntu@24.04", "/b.charm")])
+        assert cpl.bases == ["ubuntu@22.04", "ubuntu@24.04"]
+
+    def test_bases_none(self) -> None:
+        cpl = CharmPathList([(None, "/a.charm")])
+        assert cpl.bases == [None]
+
+    def test_eq(self) -> None:
+        a = CharmPathList([("ubuntu@24.04", "/a.charm")])
+        b = CharmPathList([("ubuntu@24.04", "/a.charm")])
+        assert a == b
+
+    def test_neq(self) -> None:
+        a = CharmPathList([("ubuntu@22.04", "/a.charm")])
+        b = CharmPathList([("ubuntu@24.04", "/a.charm")])
+        assert a != b
+
+    def test_repr(self) -> None:
+        cpl = CharmPathList([("ubuntu@24.04", "/a.charm")])
+        assert "CharmPathList" in repr(cpl)
+
+
+# ---------------------------------------------------------------------------
 # _build_charm_paths
 # ---------------------------------------------------------------------------
 
@@ -377,9 +448,11 @@ class TestBuildCharmPaths:
         )
         with patch(_ARCH, return_value="amd64"):
             result = _build_charm_paths(arts, _FAKE_ROOT)
-        assert result == {"mycharm": [str(_FAKE_ROOT / "a.charm")]}
+        assert result == {
+            "mycharm": CharmPathList([("ubuntu@22.04", str(_FAKE_ROOT / "a.charm"))])
+        }
 
-    def test_multi_base_returns_list(self) -> None:
+    def test_multi_base_returns_charm_path_list(self) -> None:
         arts = ArtifactsGenerated.model_validate(
             {
                 "version": 1,
@@ -397,9 +470,10 @@ class TestBuildCharmPaths:
         )
         with patch(_ARCH, return_value="amd64"):
             result = _build_charm_paths(arts, _FAKE_ROOT)
-        assert result == {
-            "mycharm": [str(_FAKE_ROOT / "a-22.charm"), str(_FAKE_ROOT / "a-24.charm")]
-        }
+        cpl = result["mycharm"]
+        assert cpl["ubuntu@22.04"] == str(_FAKE_ROOT / "a-22.charm")
+        assert cpl["ubuntu@24.04"] == str(_FAKE_ROOT / "a-24.charm")
+        assert list(cpl) == [str(_FAKE_ROOT / "a-22.charm"), str(_FAKE_ROOT / "a-24.charm")]
 
     def test_multi_charm(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -421,10 +495,8 @@ class TestBuildCharmPaths:
         )
         with patch(_ARCH, return_value="amd64"):
             result = _build_charm_paths(arts, _FAKE_ROOT)
-        assert result == {
-            "op": [str(_FAKE_ROOT / "op.charm")],
-            "agent": [str(_FAKE_ROOT / "agent.charm")],
-        }
+        assert result["op"].path == str(_FAKE_ROOT / "op.charm")
+        assert result["agent"].path == str(_FAKE_ROOT / "agent.charm")
 
     def test_skips_ci_artifacts(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -726,10 +798,8 @@ class TestCliMode:
         request = MagicMock()
         request.config = config
         result = _charm_paths_fixture.__wrapped__(request)  # type: ignore[attr-defined]
-        assert result == {
-            "charm-a": [str(a.resolve())],
-            "charm-b": [str(b.resolve())],
-        }
+        assert result["charm-a"].path == str(a.resolve())
+        assert result["charm-b"].path == str(b.resolve())
 
     def test_charm_paths_nonexistent_file_raises(self, tmp_path: Path) -> None:
         config = _mock_config(tmp_path, charm_files=["my-charm=/nonexistent/path.charm"])
