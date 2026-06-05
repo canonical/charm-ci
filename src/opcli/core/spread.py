@@ -70,7 +70,7 @@ _TASK_YAML_CONTENT_SUITE = (
     '    cd "${SPREAD_PATH}"\n'
     '    PYTEST_CMD=$(opcli pytest expand --suite "$OPCLI_SUITE"'
     ' --module "${MODULE}" -e "${TOX_ENV:-integration}") || exit 1\n'
-    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}/${OPCLI_CWD}' && OPCLI_PACKAGE='${OPCLI_PACKAGE:-opcli}' OPCLI_ARTIFACTS_BUILD_YAML='${OPCLI_ARTIFACTS_BUILD_YAML:-}' ${PYTEST_CMD}\"\n"
+    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && OPCLI_PACKAGE='${OPCLI_PACKAGE:-opcli}' OPCLI_ARTIFACTS_BUILD_YAML='${OPCLI_ARTIFACTS_BUILD_YAML:-}' ${PYTEST_CMD}\"\n"
 )
 
 
