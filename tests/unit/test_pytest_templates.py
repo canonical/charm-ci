@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
+from opcli.commands.pytest_cmd import _cd_prefix
 from opcli.commands.pytest_cmd import app as pytest_app
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.pytest_args import assemble_tox_argv, pytest_run
@@ -418,3 +419,122 @@ class TestSpreadExpandStripsTemplateKeys:
         expanded = spread_expand(tmp_path)
         assert "pytest-arguments-template" not in expanded
         assert "pytest-environment-template" not in expanded
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_SPREAD_YAML_WITH_WORKING_DIR = """\
+project: myproject
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  sub-charm/tests/integration/:
+    working-dir: sub-charm/
+    summary: integration tests
+"""
+
+_SPREAD_YAML_WITH_WORKING_DIR_AND_ENV_TEMPLATE = """\
+project: myproject
+path: /home/ubuntu/proj
+backends:
+  integration-test:
+    type: integration-test
+    systems:
+      - ubuntu-24.04
+integration-suites:
+  sub-charm/tests/integration/:
+    working-dir: sub-charm/
+    pytest-environment-template: |
+      CHARM_PATH={{ artifacts.charms[0].builds[0].path }}
+"""
+
+
+class TestCdPrefix:
+    """Unit tests for the _cd_prefix() helper."""
+
+    def test_same_dir_returns_empty(self, tmp_path: Path) -> None:
+        assert _cd_prefix(tmp_path, tmp_path) == ""
+
+    def test_same_dir_trailing_slash_ignored(self, tmp_path: Path) -> None:
+        sub = tmp_path / "./"
+        assert _cd_prefix(tmp_path, sub) == ""
+
+    def test_subdirectory_returns_relative_prefix(self, tmp_path: Path) -> None:
+        sub = tmp_path / "sub-charm"
+        assert _cd_prefix(tmp_path, sub) == "cd sub-charm && "
+
+    def test_nested_subdirectory(self, tmp_path: Path) -> None:
+        sub = tmp_path / "a" / "b"
+        assert _cd_prefix(tmp_path, sub) == "cd a/b && "
+
+    def test_outside_root_falls_back_to_absolute(self, tmp_path: Path) -> None:
+        other = tmp_path.parent / "other"
+        prefix = _cd_prefix(tmp_path, other)
+        assert prefix == f"cd {other} && "
+
+
+class TestExpandCdPrefix:
+    """Integration tests: pytest expand emits cd prefix when working-dir != root."""
+
+    def test_expand_no_cd_when_root_working_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
+            result = runner.invoke(pytest_app, ["expand"], catch_exceptions=False)
+
+        assert result.exit_code == 0, result.output
+        assert not result.output.startswith("cd ")
+
+    def test_expand_emits_cd_prefix_for_subdir_working_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "sub-charm").mkdir()
+        (tmp_path / "sub-charm" / "tests" / "integration").mkdir(parents=True)
+        (tmp_path / "sub-charm" / "tests" / "integration" / "test_charm.py").touch()
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(tmp_path / "spread.yaml", _SPREAD_YAML_WITH_WORKING_DIR)
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        with patch("opcli.core.pytest_args.current_arch", return_value="amd64"):
+            result = runner.invoke(
+                pytest_app,
+                ["expand", "--suite", "sub-charm/tests/integration/"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert result.output.startswith("cd sub-charm && ")
+        assert "tox" in result.output
+
+    def test_expand_env_template_includes_cd_prefix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "sub-charm").mkdir()
+        (tmp_path / "sub-charm" / "tests" / "integration").mkdir(parents=True)
+        (tmp_path / "sub-charm" / "tests" / "integration" / "test_charm.py").touch()
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(tmp_path / "spread.yaml", _SPREAD_YAML_WITH_WORKING_DIR_AND_ENV_TEMPLATE)
+        monkeypatch.chdir(tmp_path)
+
+        runner = CliRunner()
+        with patch("opcli.core.template.current_arch", return_value="amd64"):
+            result = runner.invoke(
+                pytest_app,
+                ["expand", "--suite", "sub-charm/tests/integration/"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert result.output.startswith("cd sub-charm && ")
+        assert "CHARM_PATH=" in result.output
