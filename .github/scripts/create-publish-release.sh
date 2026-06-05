@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Create a GitHub Release from opcli publish results.
+# Create one GitHub Release per charm per revision from opcli publish results.
+#
+# Tags follow the pattern: {charm-name}-rev{revision}  (e.g. haproxy-rev418)
+# One release is created for every entry in .releases[] of each published charm.
 #
 # Expected environment:
 #   GH_TOKEN        — GitHub token with contents:write
-#   INPUT_CHANNEL   — CharmHub channel (e.g. latest/edge)
 #
 # Expected file:
 #   publish-results.json — JSON output from `opcli artifacts publish --json`
@@ -21,7 +23,7 @@ if ! jq empty publish-results.json 2>/dev/null; then
   exit 1
 fi
 
-TAG="publish/$(date -u +%Y%m%dT%H%M%S)-$(git rev-parse --short HEAD)"
+: "${GH_TOKEN:?GH_TOKEN environment variable is required}"
 
 # Skip if no charms were published
 if [ "$(jq 'length' publish-results.json)" -eq 0 ]; then
@@ -29,18 +31,37 @@ if [ "$(jq 'length' publish-results.json)" -eq 0 ]; then
   exit 0
 fi
 
-BODY="## Published to ${INPUT_CHANNEL}"$'\n\n'
-while IFS= read -r line; do
-  charm_name=$(echo "$line" | jq -r '.charm_name')
-  resources=$(echo "$line" | jq -r '
+while IFS= read -r charm_entry; do
+  charm_name=$(echo "$charm_entry" | jq -r '.charm_name')
+  channel=$(echo "$charm_entry" | jq -r '.channel')
+  resources=$(echo "$charm_entry" | jq -r '
     if (.resources | length) > 0
-    then " — resources: " + ([.resources | to_entries[] | "\(.key):\(.value)"] | join(", "))
+    then "**Resources:** " + ([.resources | to_entries[] | "\(.key): rev \(.value)"] | join(", "))
     else "" end')
-  while IFS= read -r rel; do
-    BODY+="**${charm_name}** — ${rel}${resources}"$'\n'
-  done < <(echo "$line" | jq -r '.releases[] | "rev \(.revision) (\(.base // "unknown") \(.arch))"')
-done < <(jq -c '.[]' publish-results.json)
 
-git tag "$TAG"
-git push origin "$TAG"
-gh release create "$TAG" --title "$TAG" --notes "$BODY"
+  while IFS= read -r release_entry; do
+    revision=$(echo "$release_entry" | jq -r '.revision')
+    base=$(echo "$release_entry" | jq -r '.base // "unknown"')
+    arch=$(echo "$release_entry" | jq -r '.arch')
+
+    TAG="${charm_name}-rev${revision}"
+
+    # Skip releases that already exist (safe to rerun after partial failures)
+    if gh release view "${TAG}" > /dev/null 2>&1; then
+      echo "Release ${TAG} already exists — skipping."
+      continue
+    fi
+
+    TITLE="${charm_name} rev${revision}"
+    BODY="## ${charm_name} rev${revision} — published to \`${channel}\`"$'\n\n'
+    BODY+="**Base:** ${base}"$'\n'
+    BODY+="**Arch:** ${arch}"$'\n'
+    if [ -n "${resources}" ]; then
+      BODY+="${resources}"$'\n'
+    fi
+
+    git tag "${TAG}"
+    git push origin "${TAG}"
+    gh release create "${TAG}" --title "${TITLE}" --notes "${BODY}"
+  done < <(echo "$charm_entry" | jq -c '.releases[]')
+done < <(jq -c '.[]' publish-results.json)

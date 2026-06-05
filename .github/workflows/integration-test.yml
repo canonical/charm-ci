@@ -51,6 +51,10 @@ on:
         description: "Rock upload mode passed to build-artifacts (registry or artifact)"
         type: string
         default: ""
+      spread-jobs-include:
+        description: "fnmatch pattern to include only matching spread jobs (e.g. 'my-backend-ci:*'). When empty all jobs are included."
+        type: string
+        default: ""
 
 jobs:
   # ── Job 1: build all artifacts ──────────────────────────────────────────────
@@ -110,7 +114,11 @@ jobs:
       - name: Generate test matrix
         id: matrix
         run: |
-          matrix=$(opcli spread jobs)
+          args=()
+          if [ -n "${{ inputs.spread-jobs-include }}" ]; then
+            args+=(--include "${{ inputs.spread-jobs-include }}")
+          fi
+          matrix=$(opcli spread jobs "${args[@]}")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "Test matrix: $matrix"
 

@@ -17,7 +17,6 @@ that directory.  Spread discovers ``spread.yaml`` in the temp dir and
 uses ``reroot`` to locate the actual project tree one level up.
 """
 
-import collections.abc
 import fnmatch
 import json
 import logging
@@ -195,7 +194,7 @@ def spread_run(
 
 def spread_jobs(
     root: Path,
-    exclude: collections.abc.Sequence[str] = (),
+    include: str | None = None,
 ) -> list[dict[str, str]]:
     """Return all CI spread task selectors as a list of GitHub Actions matrix entries.
 
@@ -215,12 +214,13 @@ def spread_jobs(
 
     Args:
         root: Project root directory containing ``spread.yaml``.
-        exclude: Sequence of ``fnmatch`` glob patterns matched against the raw
-            spread selector strings (e.g. ``"my-docs-ci:*"``).  Any job whose
-            selector matches at least one pattern is omitted from the result.
-            Patterns use the same concrete backend names that appear in the
-            ``spread -list`` output (i.e. with the ``-ci`` suffix appended by
-            opcli during expansion).
+        include: Optional ``fnmatch`` glob pattern matched against the raw
+            spread selector strings (e.g. ``"my-docs-ci:*"``).  When given,
+            only jobs whose selector matches the pattern are returned.  When
+            ``None`` (the default) all jobs are returned.  Patterns use the
+            same concrete backend names that appear in the ``spread -list``
+            output (i.e. with the ``-ci`` suffix appended by opcli during
+            expansion).
 
     Raises:
         ConfigurationError: If ``spread.yaml`` is missing, malformed, or
@@ -253,7 +253,7 @@ def spread_jobs(
             _MIN_PARTS = 3  # noqa: N806
             if len(parts) < _MIN_PARTS:
                 continue
-            if exclude and any(fnmatch.fnmatchcase(line, pattern) for pattern in exclude):
+            if include is not None and not fnmatch.fnmatchcase(line, include):
                 continue
             system = parts[1]
             runner = runner_map.get(system, json.dumps(_DEFAULT_RUNNER))
