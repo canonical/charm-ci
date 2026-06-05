@@ -13,12 +13,12 @@ from opcli.pytest_plugin import (
     _build_charm_path,
     _build_charm_paths,
     _build_resource_images,
-    _build_rock_images,
     _discover_artifacts_build,
     _parse_kv_flags,
     _resolve_path,
     _select_arch_builds_charm,
     _select_arch_builds_rock,
+    build_rock_images,
 )
 from opcli.pytest_plugin import (
     charm_path as _charm_path_fixture,
@@ -439,9 +439,11 @@ class TestBuildCharmPaths:
                 ],
             }
         )
-        with patch(_ARCH, return_value="amd64"):
-            result = _build_charm_paths(arts, _FAKE_ROOT)
-        assert result == {"mycharm": []}
+        with (
+            patch(_ARCH, return_value="amd64"),
+            pytest.raises(pytest.fail.Exception, match="opcli artifacts localize"),
+        ):
+            _build_charm_paths(arts, _FAKE_ROOT)
 
     def test_fails_arch_mismatch(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -464,7 +466,7 @@ class TestBuildCharmPaths:
 
 
 # ---------------------------------------------------------------------------
-# _build_rock_images
+# build_rock_images
 # ---------------------------------------------------------------------------
 
 
@@ -483,7 +485,7 @@ class TestBuildRockImages:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            result = _build_rock_images(arts, _FAKE_ROOT)
+            result = build_rock_images(arts, _FAKE_ROOT)
         assert result == {"myrock": "ghcr.io/org/myrock:1.0"}
 
     def test_returns_file_when_no_image(self) -> None:
@@ -500,7 +502,7 @@ class TestBuildRockImages:
             }
         )
         with patch(_ARCH, return_value="amd64"):
-            result = _build_rock_images(arts, _FAKE_ROOT)
+            result = build_rock_images(arts, _FAKE_ROOT)
         assert result == {"myrock": str(_FAKE_ROOT / "myrock.rock")}
 
     def test_filters_by_arch(self) -> None:
@@ -520,7 +522,7 @@ class TestBuildRockImages:
             }
         )
         with patch(_ARCH, return_value="arm64"):
-            result = _build_rock_images(arts, _FAKE_ROOT)
+            result = build_rock_images(arts, _FAKE_ROOT)
         assert result == {"myrock": "img:arm64"}
 
     def test_fails_arch_mismatch(self) -> None:
@@ -540,7 +542,7 @@ class TestBuildRockImages:
             patch(_ARCH, return_value="amd64"),
             pytest.raises(pytest.fail.Exception, match=r"rock_images.*myrock.*amd64"),
         ):
-            _build_rock_images(arts, _FAKE_ROOT)
+            build_rock_images(arts, _FAKE_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +619,23 @@ class TestBuildResourceImages:
         with pytest.raises(pytest.fail.Exception, match="multiple charms"):
             _build_resource_images(arts, {})
 
+    def test_fails_unresolved_rock(self) -> None:
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "mycharm",
+                        "charmcraft-yaml": "c.yaml",
+                        "builds": [{"arch": "amd64", "path": "./mycharm.charm"}],
+                        "resources": {"oci-image": {"type": "oci-image", "rock": "missing-rock"}},
+                    }
+                ],
+            }
+        )
+        with pytest.raises(pytest.fail.Exception, match="missing-rock"):
+            _build_resource_images(arts, {})
+
 
 # ---------------------------------------------------------------------------
 # _parse_kv_flags
@@ -642,6 +661,14 @@ class TestParseKvFlags:
     def test_empty_name_raises(self) -> None:
         with pytest.raises(pytest.UsageError, match="NAME must not be empty"):
             _parse_kv_flags(["=value"], "--charm-file")
+
+    def test_empty_value_raises(self) -> None:
+        with pytest.raises(pytest.UsageError, match="VALUE must not be empty"):
+            _parse_kv_flags(["name="], "--charm-file")
+
+    def test_duplicate_name_raises(self) -> None:
+        with pytest.raises(pytest.UsageError, match="duplicate NAME"):
+            _parse_kv_flags(["foo=a", "foo=b"], "--charm-file")
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +705,13 @@ class TestCliMode:
         with pytest.raises(pytest.fail.Exception, match="use charm_paths"):
             _charm_path_fixture.__wrapped__(request)  # type: ignore[attr-defined]
 
+    def test_charm_path_nonexistent_file_raises(self, tmp_path: Path) -> None:
+        config = _mock_config(tmp_path, charm_files=["my-charm=/nonexistent/path.charm"])
+        request = MagicMock()
+        request.config = config
+        with pytest.raises(pytest.UsageError, match="does not exist"):
+            _charm_path_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+
     # ---------- charm_paths via --charm-file ----------
 
     def test_charm_paths_from_flags(self, tmp_path: Path) -> None:
@@ -696,6 +730,13 @@ class TestCliMode:
             "charm-a": [str(a.resolve())],
             "charm-b": [str(b.resolve())],
         }
+
+    def test_charm_paths_nonexistent_file_raises(self, tmp_path: Path) -> None:
+        config = _mock_config(tmp_path, charm_files=["my-charm=/nonexistent/path.charm"])
+        request = MagicMock()
+        request.config = config
+        with pytest.raises(pytest.UsageError, match="does not exist"):
+            _charm_paths_fixture.__wrapped__(request)  # type: ignore[attr-defined]
 
     # ---------- resource_images via --resource-image ----------
 

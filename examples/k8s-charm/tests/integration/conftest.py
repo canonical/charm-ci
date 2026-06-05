@@ -22,16 +22,16 @@ import jubilant
 import pytest
 
 from opcli.models.artifacts_build import ArtifactsGenerated
-from opcli.pytest_plugin import _build_rock_images
+from opcli.pytest_plugin import build_rock_images
 
 
 @pytest.fixture(scope="session")
 def rock_images(
     opcli_artifacts: ArtifactsGenerated,
-    _opcli_build_yaml_path: Path,
+    opcli_build_yaml_path: Path,
 ) -> dict[str, str]:
     """Rock name → image ref for the current arch (multi-charm repo pattern)."""
-    return _build_rock_images(opcli_artifacts, _opcli_build_yaml_path.parent)
+    return build_rock_images(opcli_artifacts, opcli_build_yaml_path.parent)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

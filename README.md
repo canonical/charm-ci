@@ -362,7 +362,7 @@ The `x-pytest-args` key at the top level is ignored by both spread and opcli —
 
 ## pytest-opcli plugin
 
-`opcli` ships a [pytest plugin](https://docs.pytest.org/en/stable/explanation/plugins.html) that auto-discovers `artifacts.build.yaml` and injects built artifacts as session-scoped fixtures. Integration tests stop needing manual `--charm-file` / `--rock-image` CLI flags in `conftest.py`.
+`opcli` ships a [pytest plugin](https://docs.pytest.org/en/stable/explanation/plugins.html) that auto-discovers `artifacts.build.yaml` and injects built artifacts as session-scoped fixtures. Integration tests stop needing manual `--charm-file` / `--resource-image` CLI flags in `conftest.py`.
 
 ### Installation
 
@@ -399,12 +399,14 @@ No further configuration is required. The `pytest11` entry point registers the p
 
 All fixtures are session-scoped and architecture-aware (they filter builds to the machine's current CPU architecture).
 
-| Fixture | Return type | Description |
+| Fixture / Helper | Return type | Description |
 |---|---|---|
-| `opcli_artifacts` | `ArtifactsGenerated` | Full model parsed from `artifacts.build.yaml`. Use this to inspect any field not covered by a dedicated fixture. Always requires yaml; not available in CLI-flag mode. |
-| `charm_path` | `str` | Path to the single built `.charm`. Fails if the repo contains more than one charm, or if the single charm has more than one build for the current arch (ambiguous base — use `charm_paths` instead). |
+| `opcli_build_yaml_path` | `Path` | Resolved path to `artifacts.build.yaml`. Use as a dependency in custom conftest fixtures. |
+| `opcli_artifacts` | `ArtifactsGenerated` | Full model parsed from `artifacts.build.yaml`. Always requires yaml; not available in CLI-flag mode. |
+| `charm_path` | `str` | Path to the single built `.charm`. Fails if the repo contains more than one charm, or if the single charm has more than one build for the current arch (use `charm_paths` instead). |
 | `charm_paths` | `dict[str, list[str]]` | All `.charm` paths per charm name, as a list to handle multi-base builds. |
 | `resource_images` | `dict[str, str]` | `{resource_name: image_ref}`. In yaml mode: resolves each OCI-image resource to its rock image for the single charm. In CLI-flag mode: uses `--resource-image` values directly. Fails if the repo contains zero or more than one charm (yaml mode only). |
+| `build_rock_images(artifacts, root)` | `dict[str, str]` | Helper function (not a fixture) — returns `{rock_name: image_ref}` for the current arch. Use in a conftest `rock_images` fixture for multi-charm repos. |
 
 ### Usage examples
 
@@ -430,12 +432,13 @@ def test_deploy(juju, charm_paths):
 ```python
 # conftest.py
 from pathlib import Path
+import pytest
 from opcli.models.artifacts_build import ArtifactsGenerated
-from opcli.pytest_plugin import _build_rock_images
+from opcli.pytest_plugin import build_rock_images
 
 @pytest.fixture(scope="session")
-def rock_images(opcli_artifacts: ArtifactsGenerated, _opcli_build_yaml_path: Path) -> dict[str, str]:
-    return _build_rock_images(opcli_artifacts, _opcli_build_yaml_path.parent)
+def rock_images(opcli_artifacts: ArtifactsGenerated, opcli_build_yaml_path: Path) -> dict[str, str]:
+    return build_rock_images(opcli_artifacts, opcli_build_yaml_path.parent)
 ```
 
 ```python
