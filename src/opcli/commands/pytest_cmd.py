@@ -80,13 +80,31 @@ def expand(
         root, tox_env=tox_env, extra_args=ctx.args or None, suite_config=suite_cfg, cwd=cwd
     )
 
+    cd_prefix = _cd_prefix(root, cwd)
+
     env_template = suite_cfg.get("pytest-environment-template")
     if isinstance(env_template, str):
         rendered_env = render_environment_template(root, env_template)
         prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in rendered_env.items())
+        cmd = shlex.join(argv)
         if prefix:
-            typer.echo(f"{prefix} {shlex.join(argv)}")
-        else:
-            typer.echo(shlex.join(argv))
+            cmd = f"{prefix} {cmd}"
+        typer.echo(f"{cd_prefix}{cmd}" if cd_prefix else cmd)
     else:
-        typer.echo(shlex.join(argv))
+        cmd = shlex.join(argv)
+        typer.echo(f"{cd_prefix}{cmd}" if cd_prefix else cmd)
+
+
+def _cd_prefix(root: Path, cwd: Path) -> str:
+    """Return ``'cd <dir> && '`` when *cwd* differs from *root*, else ``''``.
+
+    Uses a path relative to *root* when *cwd* is a descendant; falls back to
+    the absolute path otherwise.
+    """
+    if cwd.resolve() == root.resolve():
+        return ""
+    try:
+        rel = cwd.relative_to(root)
+        return f"cd {rel} && "
+    except ValueError:
+        return f"cd {cwd} && "
