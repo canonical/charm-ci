@@ -50,18 +50,19 @@ def expand() -> None:
 
 @app.command()
 def jobs(
-    exclude: Annotated[
-        list[str],
+    include: Annotated[
+        str | None,
         typer.Option(
-            "--exclude",
+            "--include",
             help=(
-                "Exclude jobs whose spread selector matches this fnmatch pattern. "
+                "Only include jobs whose spread selector matches this fnmatch pattern. "
                 "Selectors have the form 'backend-ci:system:suite/task:variant' "
-                "(e.g. 'my-docs-ci:*', '*:ubuntu-24.04:tests/docs/*'). May be repeated."
+                "(e.g. 'my-docs-ci:*', '*:ubuntu-24.04:tests/docs/*'). "
+                "When omitted all jobs are returned."
             ),
         ),
-    ] = [],  # noqa: B006
+    ] = None,
 ) -> None:
     """Print CI test job selectors as a GitHub Actions matrix object."""
-    entries = spread_jobs(Path.cwd(), exclude=exclude)
+    entries = spread_jobs(Path.cwd(), include=include)
     typer.echo(json.dumps({"include": entries}))

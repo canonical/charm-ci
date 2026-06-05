@@ -2312,12 +2312,12 @@ suites:
 
 
 # ---------------------------------------------------------------------------
-# spread_jobs --exclude filter tests
+# spread_jobs --include filter tests
 # ---------------------------------------------------------------------------
 
 
-class TestSpreadJobsExclude:
-    """Tests for the ``exclude`` parameter of ``spread_jobs``."""
+class TestSpreadJobsInclude:
+    """Tests for the ``include`` parameter of ``spread_jobs``."""
 
     _SPREAD_TWO_BACKENDS = """\
 project: test-project
@@ -2354,8 +2354,8 @@ suites:
     def _mock_list(self, stdout: str) -> SubprocessResult:
         return SubprocessResult(stdout=stdout, stderr="", returncode=0)
 
-    def test_no_exclude_returns_all(self, tmp_path: Path) -> None:
-        """Without --exclude all jobs are returned."""
+    def test_no_include_returns_all(self, tmp_path: Path) -> None:
+        """Without --include all jobs are returned."""
         write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
 
         with patch(
@@ -2368,65 +2368,57 @@ suites:
         assert any("integration-test-ci" in s for s in selectors)
         assert any("my-docs-ci" in s for s in selectors)
 
-    def test_exclude_pattern_removes_matching_jobs(self, tmp_path: Path) -> None:
-        """Jobs matching the exclude pattern are omitted."""
+    def test_include_pattern_keeps_only_matching_jobs(self, tmp_path: Path) -> None:
+        """Jobs not matching the include pattern are omitted."""
         write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
 
         with patch(
             "opcli.core.spread.run_command",
             return_value=self._mock_list(self._SPREAD_LIST_BOTH),
         ):
-            entries = spread_jobs(tmp_path, exclude=["my-docs-ci:*"])
+            entries = spread_jobs(tmp_path, include="my-docs-ci:*")
 
         selectors = [e["selector"] for e in entries]
-        assert all("my-docs-ci" not in s for s in selectors)
-        assert any("integration-test-ci" in s for s in selectors)
+        assert all("my-docs-ci" in s for s in selectors)
+        assert all("integration-test-ci" not in s for s in selectors)
 
-    def test_exclude_all_pattern(self, tmp_path: Path) -> None:
-        """A wildcard pattern that matches everything returns an empty list."""
+    def test_include_no_match_returns_empty(self, tmp_path: Path) -> None:
+        """A pattern that matches nothing returns an empty list."""
         write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
 
         with patch(
             "opcli.core.spread.run_command",
             return_value=self._mock_list(self._SPREAD_LIST_BOTH),
         ):
-            entries = spread_jobs(tmp_path, exclude=["*"])
+            entries = spread_jobs(tmp_path, include="nonexistent-backend:*")
 
         assert entries == []
 
-    def test_exclude_multiple_patterns(self, tmp_path: Path) -> None:
-        """Multiple exclude patterns are all applied."""
-        spread_list = (
-            "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm\n"
-            "integration-test-ci:ubuntu-24.04:tests/integration/run:test_other\n"
-            "my-docs-ci:ubuntu-24.04:tests/docs/run:test_tutorial\n"
-        )
+    def test_include_wildcard_keeps_all(self, tmp_path: Path) -> None:
+        """A wildcard pattern that matches everything returns all jobs."""
         write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
 
         with patch(
             "opcli.core.spread.run_command",
-            return_value=self._mock_list(spread_list),
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
+        ):
+            entries = spread_jobs(tmp_path, include="*")
+
+        assert len(entries) == 2  # noqa: PLR2004
+
+    def test_include_specific_selector_keeps_one(self, tmp_path: Path) -> None:
+        """An exact selector pattern keeps only that job."""
+        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
         ):
             entries = spread_jobs(
                 tmp_path,
-                exclude=[
-                    "my-docs-ci:*",
-                    "*:ubuntu-24.04:tests/integration/run:test_other",
-                ],
+                include="integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm",
             )
 
         selectors = [e["selector"] for e in entries]
         assert len(selectors) == 1
         assert selectors[0] == "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm"
-
-    def test_exclude_non_matching_pattern_keeps_all(self, tmp_path: Path) -> None:
-        """A pattern that matches nothing leaves all jobs intact."""
-        write_file(tmp_path / "spread.yaml", self._SPREAD_TWO_BACKENDS)
-
-        with patch(
-            "opcli.core.spread.run_command",
-            return_value=self._mock_list(self._SPREAD_LIST_BOTH),
-        ):
-            entries = spread_jobs(tmp_path, exclude=["nonexistent-backend:*"])
-
-        assert len(entries) == 2  # noqa: PLR2004
