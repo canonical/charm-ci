@@ -9,12 +9,29 @@ top-level tests/integration/.
 
 Artifact fixtures (charm_path, resource_images, etc.) are provided
 automatically by the pytest-opcli plugin — no flag plumbing needed.
+
+Because the root ``artifacts.build.yaml`` covers multiple charms,
+``resource_images`` is unavailable here. Instead we provide a local
+``rock_images`` fixture for the multi-charm pattern.
 """
 
 from collections.abc import Generator
+from pathlib import Path
 
 import jubilant
 import pytest
+
+from opcli.models.artifacts_build import ArtifactsGenerated
+from opcli.pytest_plugin import _build_rock_images
+
+
+@pytest.fixture(scope="session")
+def rock_images(
+    opcli_artifacts: ArtifactsGenerated,
+    _opcli_build_yaml_path: Path,
+) -> dict[str, str]:
+    """Rock name → image ref for the current arch (multi-charm repo pattern)."""
+    return _build_rock_images(opcli_artifacts, _opcli_build_yaml_path.parent)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

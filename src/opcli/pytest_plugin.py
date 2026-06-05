@@ -327,7 +327,8 @@ def _build_resource_images(
         names = [c.name for c in charms]
         pytest.fail(
             f"resource_images: multiple charms found ({names!r}); "
-            "for multi-charm repos, build the resource mapping manually from rock_images"
+            "for multi-charm repos, define a local rock_images fixture in conftest.py "
+            "using opcli.pytest_plugin._build_rock_images"
         )
     charm = charms[0]
     return {

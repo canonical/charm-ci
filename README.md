@@ -425,12 +425,23 @@ def test_deploy(juju, charm_paths):
         juju.wait(jubilant.all_active)
 ```
 
-**Multi-charm repo (build resource mapping manually from `opcli_artifacts`):**
+**Multi-charm repo (define `rock_images` in `conftest.py`):**
 
 ```python
-def test_deploy(juju, charm_paths, opcli_artifacts):
-    rock_imgs = {r.name: r.builds[0].image for r in opcli_artifacts.rocks}
-    juju.deploy(charm_paths["operator"][0], resources={"backend": rock_imgs["backend-rock"]})
+# conftest.py
+from pathlib import Path
+from opcli.models.artifacts_build import ArtifactsGenerated
+from opcli.pytest_plugin import _build_rock_images
+
+@pytest.fixture(scope="session")
+def rock_images(opcli_artifacts: ArtifactsGenerated, _opcli_build_yaml_path: Path) -> dict[str, str]:
+    return _build_rock_images(opcli_artifacts, _opcli_build_yaml_path.parent)
+```
+
+```python
+# test_deploy.py
+def test_deploy(juju, charm_paths, rock_images):
+    juju.deploy(charm_paths["operator"][0], resources={"backend": rock_images["backend-rock"]})
     juju.deploy(charm_paths["agent"][0])
     juju.wait(jubilant.all_active)
 ```
