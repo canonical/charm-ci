@@ -127,19 +127,19 @@ The virtual backend in `spread.yaml` accepts opcli-only keys that are stripped d
 
 **`opcli-minimal`**: Lightweight backend — installs only uv and opcli (no concierge, no Juju). Users write their own `task.yaml`. Suitable for tutorial runs, linting, or any test that only needs opcli. In CI, the prepare script installs uv and opcli from `${GITHUB_WORKSPACE}` (or from the canonical/charm-ci repo), mirroring the `integration-test` CI prepare but without concierge or provisioning.
 
-### opcli spread jobs --exclude
+### opcli spread jobs --include
 
-`opcli spread jobs` accepts `--exclude <pattern>` (repeatable) to filter out jobs from the output matrix. Patterns use `fnmatch` glob syntax and match against the **raw spread selector string** (format: `backend-ci:system:suite/variant`). Examples:
+`opcli spread jobs` accepts `--include <pattern>` (single pattern) to restrict the output matrix to matching jobs. Patterns use `fnmatch` glob syntax and match against the **raw spread selector string** (format: `backend-ci:system:suite/variant`). When omitted, all jobs are returned. Examples:
 
 ```bash
-# Exclude all jobs from the 'my-docs' backend
-opcli spread jobs --exclude "my-docs-ci:*"
+# Include only jobs from the 'my-docs' backend
+opcli spread jobs --include "my-docs-ci:*"
 
-# Exclude a specific suite across all systems
-opcli spread jobs --exclude "*:tests/docs/*"
+# Include only jobs for a specific suite across all systems
+opcli spread jobs --include "*:tests/docs/*"
 
-# Multiple patterns (OR semantics — any match = excluded)
-opcli spread jobs --exclude "my-docs-ci:*" --exclude "*:ubuntu-24.04-juju3:*:*"
+# Include a single exact job
+opcli spread jobs --include "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm"
 ```
 
 
