@@ -114,11 +114,11 @@ jobs:
       - name: Generate test matrix
         id: matrix
         run: |
-          include_arg=""
+          args=()
           if [ -n "${{ inputs.spread-jobs-include }}" ]; then
-            include_arg="--include ${{ inputs.spread-jobs-include }}"
+            args+=(--include "${{ inputs.spread-jobs-include }}")
           fi
-          matrix=$(opcli spread jobs $include_arg)
+          matrix=$(opcli spread jobs "${args[@]}")
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "Test matrix: $matrix"
 
