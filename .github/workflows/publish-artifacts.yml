@@ -165,5 +165,4 @@ jobs:
         if: inputs.dry-run != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUT_CHANNEL: ${{ inputs.channel }}
         run: ${GITHUB_WORKSPACE}/.charm-ci/.github/scripts/create-publish-release.sh
