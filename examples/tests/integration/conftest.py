@@ -3,7 +3,7 @@
 
 """Shared pytest fixtures and CLI options for examples integration tests.
 
-Artifact fixtures (charm_paths, charm_resource_images, etc.) are provided
+Artifact fixtures (charm_paths, rock_images, etc.) are provided
 automatically by the pytest-opcli plugin — no flag plumbing needed.
 """
 

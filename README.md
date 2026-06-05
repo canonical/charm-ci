@@ -405,8 +405,7 @@ All fixtures are session-scoped and architecture-aware (they filter builds to th
 | `charm_path` | `str` | Path to the single built `.charm`. Fails if the repo contains more than one charm, or if the single charm has more than one build for the current arch (ambiguous base — use `charm_paths` instead). |
 | `charm_paths` | `dict[str, list[str]]` | All `.charm` paths per charm name, as a list to handle multi-base builds. |
 | `rock_images` | `dict[str, str]` | Image reference or local `.rock` file path per rock name, for the current arch. |
-| `charm_resource_images` | `dict[str, dict[str, str]]` | `{charm_name: {resource_name: image_ref}}`. Resolves each OCI-image resource through the rock→image mapping. Use this in multi-charm repos. |
-| `resource_images` | `dict[str, str]` | `{resource_name: image_ref}`. Single-charm shortcut for `charm_resource_images`. Fails if the repo contains zero or more than one charm. |
+| `resource_images` | `dict[str, str]` | `{resource_name: image_ref}`. Resolves each OCI-image resource to its rock image for the single charm. Fails if the repo contains zero or more than one charm. |
 
 ### Usage examples
 
@@ -427,12 +426,12 @@ def test_deploy(juju, charm_paths):
         juju.wait(jubilant.all_active)
 ```
 
-**Multi-charm repo:**
+**Multi-charm repo (build resource mapping from `rock_images`):**
 
 ```python
-def test_deploy(juju, charm_paths, charm_resource_images):
-    juju.deploy(charm_paths["operator"][0], resources=charm_resource_images["operator"])
-    juju.deploy(charm_paths["agent"][0], resources=charm_resource_images["agent"])
+def test_deploy(juju, charm_paths, rock_images):
+    juju.deploy(charm_paths["operator"][0], resources={"backend": rock_images["backend-rock"]})
+    juju.deploy(charm_paths["agent"][0])
     juju.wait(jubilant.all_active)
 ```
 

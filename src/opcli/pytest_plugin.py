@@ -29,10 +29,6 @@ charm_paths
 rock_images
     ``{rock_name: image_or_file}`` -- image reference or local file path for
     the current architecture.
-charm_resource_images
-    ``{charm_name: {resource_name: image_ref}}`` -- resolves the OCI-image
-    resource -> rock -> image mapping for every charm.  Useful for multi-charm
-    repos.
 resource_images
     ``{resource_name: image_ref}`` -- single-charm shortcut that resolves
     resource -> rock -> image.  Designed for use with ``jubilant.Juju.deploy``:
@@ -128,27 +124,9 @@ def rock_images(
 
 
 @pytest.fixture(scope="session")
-def charm_resource_images(
-    opcli_artifacts: ArtifactsGenerated,
-    rock_images: dict[str, str],
-) -> dict[str, dict[str, str]]:
-    """OCI-image resources for every charm, keyed by charm name then resource name.
-
-    Returns ``{charm_name: {resource_name: image_ref}}``.
-
-    Example usage with ``pytest-jubilant`` in a multi-charm repo::
-
-        def test_deploy(juju, charm_paths, charm_resource_images):
-            for path in charm_paths["operator"]:
-                juju.deploy(path, resources=charm_resource_images["operator"])
-    """
-    return _build_charm_resource_images(opcli_artifacts, rock_images)
-
-
-@pytest.fixture(scope="session")
 def resource_images(
     opcli_artifacts: ArtifactsGenerated,
-    charm_resource_images: dict[str, dict[str, str]],
+    rock_images: dict[str, str],
 ) -> dict[str, str]:
     """OCI-image resources for the single charm, keyed by resource name.
 
@@ -159,9 +137,9 @@ def resource_images(
             juju.wait(jubilant.all_active)
 
     Fails (``pytest.fail``) if there are zero or more than one charm.
-    Use ``charm_resource_images`` for multi-charm repos.
+    For multi-charm repos, build the resource mapping manually from ``rock_images``.
     """
-    return _build_resource_images(opcli_artifacts, charm_resource_images)
+    return _build_resource_images(opcli_artifacts, rock_images)
 
 
 # ---------------------------------------------------------------------------
@@ -260,24 +238,9 @@ def _build_rock_images(artifacts: ArtifactsGenerated, artifacts_root: Path) -> d
     return result
 
 
-def _build_charm_resource_images(
-    artifacts: ArtifactsGenerated,
-    rock_imgs: dict[str, str],
-) -> dict[str, dict[str, str]]:
-    """Core logic for the ``charm_resource_images`` fixture."""
-    result: dict[str, dict[str, str]] = {}
-    for charm in artifacts.charms:
-        resources: dict[str, str] = {}
-        for res_name, res in (charm.resources or {}).items():
-            if res.rock and res.rock in rock_imgs:
-                resources[res_name] = rock_imgs[res.rock]
-        result[charm.name] = resources
-    return result
-
-
 def _build_resource_images(
     artifacts: ArtifactsGenerated,
-    charm_res_images: dict[str, dict[str, str]],
+    rock_imgs: dict[str, str],
 ) -> dict[str, str]:
     """Core logic for the ``resource_images`` fixture."""
     charms = artifacts.charms
@@ -287,9 +250,14 @@ def _build_resource_images(
         names = [c.name for c in charms]
         pytest.fail(
             f"resource_images: multiple charms found ({names!r}); "
-            "use charm_resource_images for multi-charm repos"
+            "for multi-charm repos, build the resource mapping manually from rock_images"
         )
-    return charm_res_images[charms[0].name]
+    charm = charms[0]
+    return {
+        res_name: rock_imgs[res.rock]
+        for res_name, res in (charm.resources or {}).items()
+        if res.rock and res.rock in rock_imgs
+    }
 
 
 def _select_arch_builds_charm(
@@ -361,7 +329,6 @@ def _discover_artifacts_build(config: pytest.Config) -> Path:
 __all__ = [
     "charm_path",
     "charm_paths",
-    "charm_resource_images",
     "opcli_artifacts",
     "resource_images",
     "rock_images",

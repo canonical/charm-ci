@@ -12,7 +12,6 @@ from opcli.models.artifacts_build import ArtifactsGenerated, CharmOutput, RockOu
 from opcli.pytest_plugin import (
     _build_charm_path,
     _build_charm_paths,
-    _build_charm_resource_images,
     _build_resource_images,
     _build_rock_images,
     _discover_artifacts_build,
@@ -526,12 +525,12 @@ class TestBuildRockImages:
 
 
 # ---------------------------------------------------------------------------
-# _build_charm_resource_images
+# _build_resource_images
 # ---------------------------------------------------------------------------
 
 
-class TestBuildCharmResourceImages:
-    def test_resolves_resource_to_rock_image(self) -> None:
+class TestBuildResourceImages:
+    def test_single_charm_returns_resource_dict(self) -> None:
         arts = ArtifactsGenerated.model_validate(
             {
                 "version": 1,
@@ -552,10 +551,9 @@ class TestBuildCharmResourceImages:
                 ],
             }
         )
-        with patch(_ARCH, return_value="amd64"):
-            ri = _build_rock_images(arts, _FAKE_ROOT)
-        result = _build_charm_resource_images(arts, ri)
-        assert result == {"mycharm": {"myrock-image": "ghcr.io/org/myrock:1.0"}}
+        rock_imgs = {"myrock": "ghcr.io/org/myrock:1.0"}
+        result = _build_resource_images(arts, rock_imgs)
+        assert result == {"myrock-image": "ghcr.io/org/myrock:1.0"}
 
     def test_skips_resource_without_rock_link(self) -> None:
         arts = ArtifactsGenerated.model_validate(
@@ -571,66 +569,8 @@ class TestBuildCharmResourceImages:
                 ],
             }
         )
-        result = _build_charm_resource_images(arts, {})
-        assert result == {"mycharm": {}}
-
-    def test_multi_charm(self) -> None:
-        arts = ArtifactsGenerated.model_validate(
-            {
-                "version": 1,
-                "rocks": [
-                    {
-                        "name": "backend-rock",
-                        "rockcraft-yaml": "r.yaml",
-                        "builds": [{"arch": "amd64", "image": "ghcr.io/org/backend:1.0"}],
-                    }
-                ],
-                "charms": [
-                    {
-                        "name": "operator",
-                        "charmcraft-yaml": "op.yaml",
-                        "builds": [{"arch": "amd64", "path": "./op.charm"}],
-                        "resources": {
-                            "backend-image": {"type": "oci-image", "rock": "backend-rock"}
-                        },
-                    },
-                    {
-                        "name": "agent",
-                        "charmcraft-yaml": "agent.yaml",
-                        "builds": [{"arch": "amd64", "path": "./agent.charm"}],
-                    },
-                ],
-            }
-        )
-        with patch(_ARCH, return_value="amd64"):
-            ri = _build_rock_images(arts, _FAKE_ROOT)
-        result = _build_charm_resource_images(arts, ri)
-        assert result["operator"] == {"backend-image": "ghcr.io/org/backend:1.0"}
-        assert result["agent"] == {}
-
-
-# ---------------------------------------------------------------------------
-# _build_resource_images
-# ---------------------------------------------------------------------------
-
-
-class TestBuildResourceImages:
-    def test_single_charm_returns_resource_dict(self) -> None:
-        arts = ArtifactsGenerated.model_validate(
-            {
-                "version": 1,
-                "charms": [
-                    {
-                        "name": "mycharm",
-                        "charmcraft-yaml": "c.yaml",
-                        "builds": [{"arch": "amd64", "path": "./mycharm.charm"}],
-                    }
-                ],
-            }
-        )
-        cri = {"mycharm": {"myrock-image": "ghcr.io/org/myrock:1.0"}}
-        result = _build_resource_images(arts, cri)
-        assert result == {"myrock-image": "ghcr.io/org/myrock:1.0"}
+        result = _build_resource_images(arts, {})
+        assert result == {}
 
     def test_fails_no_charms(self) -> None:
         arts = ArtifactsGenerated(version=1)
@@ -655,6 +595,5 @@ class TestBuildResourceImages:
                 ],
             }
         )
-        cri: dict[str, dict[str, str]] = {"charm-a": {}, "charm-b": {}}
         with pytest.raises(pytest.fail.Exception, match="multiple charms"):
-            _build_resource_images(arts, cri)
+            _build_resource_images(arts, {})
