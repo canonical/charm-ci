@@ -41,3 +41,4 @@ prime/
 
 # Generated artifacts
 artifacts.build.yaml
+examples/opcli-dist/

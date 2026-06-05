@@ -13,6 +13,7 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 - [`artifacts.yaml` schema](#artifactsyaml-schema)
 - [`spread.yaml` virtual backends](#spreadyaml-virtual-backends)
 - [`integration-suites` in `spread.yaml`](#integration-suites-in-spreadyaml)
+- [pytest-opcli plugin](#pytest-opcli-plugin)
 - [Tutorial testing](#tutorial-testing)
 - [CI vs local](#ci-vs-local)
 - [GitHub Actions reusable workflows](#github-actions-reusable-workflows)
@@ -142,20 +143,27 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 | `run` | Assemble and execute the tox integration test command. `-e` for env, `--suite` for suite, `--` forwards args. |
 | `expand` | Print full `tox -e integration -- <flags>` command. `-e` for env, `--suite` for suite, `--` forwards args. |
 
-By default, `opcli pytest` generates `--charm-file=` and `--rock-image=` flags from `artifacts.build.yaml` (pfe-style). To customize invocation, add Jinja2 templates to your `integration-suites` entry in `spread.yaml`:
+By default, `opcli pytest run/expand` invokes `tox -e integration` with no extra flags. Artifact fixtures are injected automatically by the pytest-opcli plugin — no CLI flag plumbing needed.
+
+To pass Juju-specific options or other pytest flags, use `pytest-arguments-template` on the suite entry in `spread.yaml`:
 
 ```yaml
 integration-suites:
   tests/integration/:
     pytest-arguments-template: |
-      {% for charm in artifacts.charms %}
-        {% for build in charm.builds if build.arch == arch %}
-          --charm-file={{ build.path }}
-        {% endfor %}
-      {% endfor %}
-    # Or use environment variables instead:
+      --model testing
+      --keep-models
+```
+
+To pass artifacts as environment variables instead of fixtures:
+
+```yaml
+integration-suites:
+  tests/integration/:
     pytest-environment-template: |
-      CHARM_PATH={{ artifacts.charms[0].builds[0].path }}
+      {% for build in artifacts.charms[0].builds if build.arch == arch %}
+      CHARM_PATH={{ build.path }}
+      {% endfor %}
 ```
 
 The `--suite` flag selects a specific integration suite (useful in monorepos with multiple test directories):
@@ -269,7 +277,7 @@ Instead of committing boilerplate `task.yaml` files, declare test suites declara
 ```yaml
 integration-suites:
   tests/integration/:
-    cwd: ./
+    working-dir: ./
     summary: top-level integration tests
     backends:
       - integration-test
@@ -278,14 +286,14 @@ integration-suites:
 
   # Monorepo pattern — sub-charm with its own tests
   k8s-charm/tests/integration/:
-    cwd: k8s-charm/
+    working-dir: k8s-charm/
     summary: k8s-charm sub-charm tests
     backends:
       - integration-test
 
   # Explicit variants (no auto-discovery)
   machine-charm/tests/integration/:
-    cwd: machine-charm/
+    working-dir: machine-charm/
     auto-discover: false
     summary: machine-charm tests
     backends:
@@ -296,7 +304,7 @@ integration-suites:
 
 At expand time, `integration-suites` entries are converted into native spread `suites:` entries with:
 - **Auto-discovery** (default): scans the suite directory for `test_*.py` files and generates `MODULE/<name>` spread variants.
-- **`cwd`**: tells `opcli pytest` which directory to scope artifact resolution to. Always explicit, default `./`.
+- **`working-dir`**: tells `opcli pytest` which directory to run pytest from. Defaults to `./` (project root).
 - **`task.yaml` generation**: written into the `build/` directory at runtime (e.g. `build/tests/integration/run/task.yaml`). Files persist for inspection and are overwritten on next run. Add `build/` to your `.gitignore`.
 - **`discover-pattern`**: customize the glob for auto-discovery (e.g., `discover-pattern: "test_*.py"` is the default; use `"*_test.py"` if your project uses that convention).
 
@@ -308,7 +316,7 @@ At expand time, `integration-suites` entries are converted into native spread `s
 
 | Key | Default | Description |
 |---|---|---|
-| `cwd` | `./` | Working directory for artifact resolution (opcli-only, stripped from spread output) |
+| `working-dir` | `./` | Working directory for pytest invocation (opcli-only, stripped from spread output) |
 | `auto-discover` | `true` | Scan for `test_*.py` and generate `MODULE/` variants |
 | `discover-pattern` | `test_*.py` | Glob pattern for auto-discovery |
 | `pytest-arguments-template` | — | Jinja2 template for pytest CLI args (opcli-only, stripped) |
@@ -319,25 +327,155 @@ At expand time, `integration-suites` entries are converted into native spread `s
 
 ### Pytest invocation templates
 
-Controls how `opcli pytest run` and `opcli pytest expand` pass built artifacts to the test framework. These keys are per-suite in `integration-suites`:
+Controls how `opcli pytest run` and `opcli pytest expand` pass extra flags to the test framework. These keys live **per-suite inside `integration-suites`** — they are opcli-only and stripped from the spread output:
 
 | Key | Effect |
 |---|---|
 | `pytest-arguments-template` | Jinja2 template rendered into CLI args passed to tox/pytest |
 | `pytest-environment-template` | Jinja2 template rendered into `KEY=VALUE` env vars |
 
-When no template is specified, the default behaviour generates `--charm-file=<path>` and `--<rock>-image=<ref>` flags (pfe-style), filtered to the current machine's architecture.
+When no template is specified, `opcli pytest` runs bare `tox -e integration` with no extra flags. Artifact fixtures are provided by the pytest-opcli plugin automatically. Use `pytest-arguments-template` to pass additional options (Juju model name, test selection flags, etc.):
 
 **Template context:** `artifacts` (full `ArtifactsGenerated` model) and `arch` (current architecture string).
 
+For projects with multiple suites, use a YAML anchor to avoid repetition:
+
 ```yaml
+x-pytest-args: &pytest-args
+  pytest-arguments-template: |
+    --model testing
+    --keep-models
+
 integration-suites:
   tests/integration/:
-    pytest-environment-template: |
-      {% for build in artifacts.charms[0].builds if build.arch == arch %}
-      CHARM_PATH={{ build.path }}
-      {% endfor %}
+    <<: *pytest-args
+    working-dir: ./
+  k8s-charm/tests/integration/:
+    <<: *pytest-args
+    working-dir: k8s-charm/
+    pytest-arguments-template: |   # override for this suite
+      --model testing-k8s
+      --keep-models
 ```
+
+The `x-pytest-args` key at the top level is ignored by both spread and opcli — it exists only for the YAML anchor.
+
+## pytest-opcli plugin
+
+`opcli` ships a [pytest plugin](https://docs.pytest.org/en/stable/explanation/plugins.html) that auto-discovers `artifacts.build.yaml` and injects built artifacts as session-scoped fixtures. Integration tests stop needing manual `--charm-file` / `--resource-image` CLI flags in `conftest.py`.
+
+### Installation
+
+The plugin is bundled inside `opcli` and activates automatically whenever `opcli` is installed in the same Python environment as pytest. Add it as a test dependency alongside pytest-jubilant and your other test packages.
+
+**With uv — add to your project:**
+
+```bash
+uv add --group integration "opcli @ git+https://github.com/canonical/charm-ci.git"
+```
+
+Or in `pyproject.toml` directly:
+
+```toml
+[dependency-groups]
+integration = [
+    "opcli @ git+https://github.com/canonical/charm-ci.git",
+    "pytest-jubilant",
+]
+```
+
+**With tox — add to the integration test env:**
+
+```ini
+[testenv:integration]
+deps =
+    opcli @ git+https://github.com/canonical/charm-ci.git
+    pytest-jubilant
+```
+
+No further configuration is required. The `pytest11` entry point registers the plugin as soon as the package is installed.
+
+### Fixtures
+
+All fixtures are session-scoped and architecture-aware (they filter builds to the machine's current CPU architecture).
+
+| Fixture / Helper | Return type | Description |
+|---|---|---|
+| `opcli_build_yaml_path` | `Path` | Resolved path to `artifacts.build.yaml`. Use as a dependency in custom conftest fixtures. |
+| `opcli_artifacts` | `ArtifactsGenerated` | Full model parsed from `artifacts.build.yaml`. Always requires yaml; not available in CLI-flag mode. |
+| `charm_path` | `str` | Path to the single built `.charm`. Fails if the repo contains more than one charm, or if the single charm has more than one build for the current arch (use `charm_paths` instead). |
+| `charm_paths` | `dict[str, list[str]]` | All `.charm` paths per charm name, as a list to handle multi-base builds. |
+| `resource_images` | `dict[str, str]` | `{resource_name: image_ref}`. In yaml mode: resolves each OCI-image resource to its rock image for the single charm. In CLI-flag mode: uses `--resource-image` values directly. Fails if the repo contains zero or more than one charm (yaml mode only). |
+| `build_rock_images(artifacts, root)` | `dict[str, str]` | Helper function (not a fixture) — returns `{rock_name: image_ref}` for the current arch. Use in a conftest `rock_images` fixture for multi-charm repos. |
+
+### Usage examples
+
+**Single charm with OCI resources (most common):**
+
+```python
+def test_deploy(juju, charm_path, resource_images):
+    juju.deploy(charm_path, resources=resource_images)
+    juju.wait(jubilant.all_active)
+```
+
+**Single charm built for multiple bases:**
+
+```python
+def test_deploy(juju, charm_paths):
+    for path in charm_paths["my-charm"]:
+        juju.deploy(path)
+        juju.wait(jubilant.all_active)
+```
+
+**Multi-charm repo (define `rock_images` in `conftest.py`):**
+
+```python
+# conftest.py
+from pathlib import Path
+import pytest
+from opcli.models.artifacts_build import ArtifactsGenerated
+from opcli.pytest_plugin import build_rock_images
+
+@pytest.fixture(scope="session")
+def rock_images(opcli_artifacts: ArtifactsGenerated, opcli_build_yaml_path: Path) -> dict[str, str]:
+    return build_rock_images(opcli_artifacts, opcli_build_yaml_path.parent)
+```
+
+```python
+# test_deploy.py
+def test_deploy(juju, charm_paths, rock_images):
+    juju.deploy(charm_paths["operator"][0], resources={"backend": rock_images["backend-rock"]})
+    juju.deploy(charm_paths["agent"][0])
+    juju.wait(jubilant.all_active)
+```
+
+### Discovery
+
+The plugin locates `artifacts.build.yaml` in this order:
+
+1. `--artifacts-build-yaml` pytest CLI option.
+2. `OPCLI_ARTIFACTS_BUILD_YAML` environment variable (absolute path).
+3. Walk up from pytest's rootdir until `artifacts.build.yaml` is found (stops at git root).
+4. `pytest.UsageError` if none of the above succeed — run `opcli artifacts build` first.
+
+### CLI-flag mode (no build step)
+
+If you already have charm files and OCI image references (for example, from a previous CI stage), you can pass them directly as pytest CLI flags without needing `artifacts.build.yaml`:
+
+```bash
+pytest \
+  --charm-file my-charm=./my-charm.charm \
+  --resource-image oci-image=ghcr.io/org/rock:sha256-abc
+```
+
+Both flags are repeatable. Use `NAME=VALUE` format where `NAME` is the charm name (for `--charm-file`) or the Juju resource name (for `--resource-image`).
+
+| Flag | Format | Maps to |
+|---|---|---|
+| `--charm-file` | `NAME=PATH` | `charm_path` / `charm_paths` |
+| `--resource-image` | `NAME=REF` | `resource_images` |
+
+Each fixture independently checks its own CLI flags first, then falls back to yaml discovery. Mixing modes per-fixture is supported (for example, pass `--charm-file` but let `resource_images` come from yaml).
 
 ## Tutorial testing
 

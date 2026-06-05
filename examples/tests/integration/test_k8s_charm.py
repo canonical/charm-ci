@@ -9,14 +9,14 @@ import jubilant
 
 def test_k8s_charm_active(
     juju: jubilant.Juju,
-    k8s_charm_file: str,
-    k8s_rock_image: str,
+    charm_paths: dict[str, list[str]],
+    rock_images: dict[str, str],
 ) -> None:
     """Deploy k8s-charm to a k8s model with its rock container and assert active/idle."""
     juju.deploy(
-        k8s_charm_file,
+        charm_paths["k8s-charm"][0],
         app="k8s-charm",
-        resources={"k8s-rock-image": k8s_rock_image},
+        resources={"k8s-rock-image": rock_images["k8s-rock"]},
     )
     status = juju.wait(jubilant.all_active, timeout=300)
     assert status.apps["k8s-charm"].units["k8s-charm/0"].workload_status.current == "active"

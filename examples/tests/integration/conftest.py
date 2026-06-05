@@ -3,12 +3,12 @@
 
 """Shared pytest fixtures and CLI options for examples integration tests.
 
-opcli pytest expand assembles flags of the form:
-  --charm-file=./machine-charm.charm
-  --charm-file=./k8s-charm.charm
-  --k8s-rock-image=localhost:32000/k8s-rock:latest
+Artifact fixtures (charm_paths, resource_images, etc.) are provided
+automatically by the pytest-opcli plugin — no flag plumbing needed.
 
-These fixtures parse those flags and expose per-charm fixtures.
+For multi-charm repos ``resource_images`` is unavailable (it only works for
+single-charm repos). Provide your own ``rock_images`` fixture that maps rock
+names to image references using the plugin's ``build_rock_images`` helper.
 """
 
 
@@ -18,21 +18,20 @@ from pathlib import Path
 import jubilant
 import pytest
 
+from opcli.models.artifacts_build import ArtifactsGenerated
+from opcli.pytest_plugin import build_rock_images
+
+
+@pytest.fixture(scope="session")
+def rock_images(
+    opcli_artifacts: ArtifactsGenerated,
+    opcli_build_yaml_path: Path,
+) -> dict[str, str]:
+    """Rock name → image ref for the current arch (multi-charm repo pattern)."""
+    return build_rock_images(opcli_artifacts, opcli_build_yaml_path.parent)
+
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    parser.addoption(
-        "--charm-file",
-        action="append",
-        default=[],
-        dest="charm_files",
-        help="Path to a built charm file (may be repeated for multiple charms).",
-    )
-    parser.addoption(
-        "--k8s-rock-image",
-        action="store",
-        default=None,
-        help="OCI image reference for the k8s-rock-image resource.",
-    )
     parser.addoption(
         "--model",
         action="store",
@@ -58,45 +57,3 @@ def juju(request: pytest.FixtureRequest) -> Generator[jubilant.Juju]:
     keep = request.config.getoption("--keep-models")
     with jubilant.temp_model(keep=keep) as j:
         yield j
-
-
-def _find_charm(request: pytest.FixtureRequest, name: str) -> str:
-    """Return the charm file whose path contains *name*, or fail the test."""
-    files: list[str] = request.config.getoption("charm_files")
-    matches = [f for f in files if name in Path(f).name]
-    if not matches:
-        pytest.fail(
-            f"No --charm-file matching '{name}' was provided. "
-            f"Received: {files or ['(none)']}"
-        )
-    if len(matches) > 1:
-        pytest.fail(
-            f"Multiple --charm-file values match '{name}': {matches}. "
-            "Provide exactly one charm file per charm."
-        )
-    return matches[0]
-
-
-@pytest.fixture(scope="module")
-def machine_charm_file(request: pytest.FixtureRequest) -> str:
-    """Absolute or relative path to the built machine-charm .charm file."""
-    return _find_charm(request, "machine-charm")
-
-
-@pytest.fixture(scope="module")
-def k8s_charm_file(request: pytest.FixtureRequest) -> str:
-    """Absolute or relative path to the built k8s-charm .charm file."""
-    return _find_charm(request, "k8s-charm")
-
-
-@pytest.fixture(scope="module")
-def k8s_rock_image(request: pytest.FixtureRequest) -> str:
-    """OCI image reference for the k8s-rock-image resource."""
-    image: str | None = request.config.getoption("--k8s-rock-image")
-    if not image:
-        pytest.fail(
-            "--k8s-rock-image was not provided. "
-            "Run 'opcli artifacts push-images' before running tests locally, "
-            "or ensure the build workflow has pushed the rock to GHCR."
-        )
-    return image

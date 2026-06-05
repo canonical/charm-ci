@@ -12,14 +12,24 @@ backends:
 environment:
   CONCIERGE: '$(HOST: echo "${CONCIERGE:-concierge.yaml}")'
   OPCLI_GIT_REF: '$(HOST: echo "${OPCLI_GIT_REF:-main}")'
+  OPCLI_PACKAGE: '$(HOST: rm -rf $PWD/../opcli-dist && uv build "$PWD/../.." --out-dir $PWD/../opcli-dist/ -q >/dev/null && wheel=`ls $PWD/../opcli-dist/opcli-*.whl | head -1 | xargs basename` && echo "/home/ubuntu/proj/opcli-dist/$wheel")'
 exclude:
 - .git
 - .tox
 - .venv
 - .*_cache
+# YAML anchor for shared pytest options — referenced by each suite below.
+# pytest-arguments-template and pytest-environment-template are per-suite keys
+# inside integration-suites. Use YAML anchors to avoid repetition.
+x-pytest-args: &pytest-args
+  pytest-arguments-template: |
+    --model testing
+    --keep-models
+
 integration-suites:
   # Top-level integration tests (multi-charm, working-dir is project root)
   tests/integration/:
+    <<: *pytest-args
     working-dir: ./
     summary: top-level integration tests
     backends:
@@ -28,6 +38,7 @@ integration-suites:
       CONCIERGE/test_k8s_charm: concierge-microk8s.yaml
   # Sub-charm tests (monorepo pattern — working-dir scopes artifacts to k8s-charm/)
   k8s-charm/tests/integration/:
+    <<: *pytest-args
     working-dir: k8s-charm/
     summary: k8s-charm sub-charm tests
     backends:
@@ -36,6 +47,7 @@ integration-suites:
       CONCIERGE: concierge-microk8s.yaml
   # Machine-charm tests with explicit variants (no auto-discover)
   machine-charm/tests/integration/:
+    <<: *pytest-args
     working-dir: machine-charm/
     auto-discover: false
     summary: machine-charm sub-charm tests
