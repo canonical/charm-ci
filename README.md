@@ -404,7 +404,7 @@ All fixtures are session-scoped and architecture-aware (they filter builds to th
 | `opcli_build_yaml_path` | `Path` | Resolved path to `artifacts.build.yaml`. Use as a dependency in custom conftest fixtures. |
 | `opcli_artifacts` | `ArtifactsGenerated` | Full model parsed from `artifacts.build.yaml`. Always requires yaml; not available in CLI-flag mode. |
 | `charm_path` | `str` | Path to the single built `.charm`. Fails if the repo contains more than one charm, or if the single charm has more than one build for the current arch (use `charm_paths` instead). |
-| `charm_paths` | `dict[str, list[str]]` | All `.charm` paths per charm name, as a list to handle multi-base builds. |
+| `charm_paths` | `dict[str, CharmPathList]` | All `.charm` paths per charm name. Use `.path` for the single-base shortcut, or `['ubuntu@X']` for base-keyed access. |
 | `resource_images` | `dict[str, str]` | `{resource_name: image_ref}`. In yaml mode: resolves each OCI-image resource to its rock image for the single charm. In CLI-flag mode: uses `--resource-image` values directly. Fails if the repo contains zero or more than one charm (yaml mode only). |
 | `build_rock_images(artifacts, root)` | `dict[str, str]` | Helper function (not a fixture) — returns `{rock_name: image_ref}` for the current arch. Use in a conftest `rock_images` fixture for multi-charm repos. |
 
@@ -422,9 +422,17 @@ def test_deploy(juju, charm_path, resource_images):
 
 ```python
 def test_deploy(juju, charm_paths):
-    for path in charm_paths["my-charm"]:
-        juju.deploy(path)
-        juju.wait(jubilant.all_active)
+    # single base — use .path shortcut
+    juju.deploy(charm_paths["my-charm"].path)
+    juju.wait(jubilant.all_active)
+```
+
+Or to target a specific base explicitly:
+
+```python
+def test_deploy(juju, charm_paths):
+    juju.deploy(charm_paths["my-charm"]["ubuntu@24.04"])
+    juju.wait(jubilant.all_active)
 ```
 
 **Multi-charm repo (define `rock_images` in `conftest.py`):**
@@ -444,8 +452,8 @@ def rock_images(opcli_artifacts: ArtifactsGenerated, opcli_build_yaml_path: Path
 ```python
 # test_deploy.py
 def test_deploy(juju, charm_paths, rock_images):
-    juju.deploy(charm_paths["operator"][0], resources={"backend": rock_images["backend-rock"]})
-    juju.deploy(charm_paths["agent"][0])
+    juju.deploy(charm_paths["operator"].path, resources={"backend": rock_images["backend-rock"]})
+    juju.deploy(charm_paths["agent"].path)
     juju.wait(jubilant.all_active)
 ```
 

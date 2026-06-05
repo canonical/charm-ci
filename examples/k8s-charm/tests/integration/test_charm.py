@@ -10,15 +10,17 @@ multi-charm fixtures charm_paths and rock_images, scoped by charm name.
 
 import jubilant
 
+from opcli.pytest_plugin import CharmPathList
+
 
 def test_deploy(
     juju: jubilant.Juju,
-    charm_paths: dict[str, list[str]],
+    charm_paths: dict[str, CharmPathList],
     rock_images: dict[str, str],
 ) -> None:
     """Deploy the k8s-charm and verify active/idle."""
     juju.deploy(
-        charm_paths["k8s-charm"][0],
+        charm_paths["k8s-charm"].path,
         app="k8s-charm",
         resources={"k8s-rock-image": rock_images["k8s-rock"]},
     )
