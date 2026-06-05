@@ -191,7 +191,7 @@ def spread_run(
         if extra_args:
             cmd.extend(extra_args)
         status(f"Running spread ({'CI' if is_ci else 'local'} mode)")
-        run_command(cmd, cwd=str(build_dir), interactive=True, env=secrets_env)
+        run_command(cmd, cwd=str(build_dir), interactive=not is_ci, env=secrets_env)
 
 
 def spread_jobs(
