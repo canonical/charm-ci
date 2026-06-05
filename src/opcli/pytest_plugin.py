@@ -1,13 +1,23 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-"""pytest-opcli: pytest plugin for automatic artifact injection.
+r"""pytest-opcli: pytest plugin for automatic artifact injection.
 
-Auto-discovers ``artifacts.build.yaml`` and exposes built artifacts as
-session-scoped fixtures, eliminating the need for CLI flag plumbing in
-``conftest.py``.
+Two input modes — use whichever fits your workflow:
 
-Discovery order:
+**CLI-flag mode** (pfe-compatible, no build step needed)::
+
+    pytest --charm-file k8s-charm=./k8s-charm.charm \
+           --resource-image oci-image=ghcr.io/org/rock:sha
+
+**yaml mode** (zero-config, auto-discovers ``artifacts.build.yaml``)::
+
+    pytest   # file discovered via --artifacts-build-yaml, env var, or walk-up
+
+Each fixture independently checks its own CLI flags first, then falls back
+to yaml discovery. Mixing modes per-fixture is supported.
+
+``artifacts.build.yaml`` discovery order (yaml mode):
 
 1. ``--artifacts-build-yaml`` pytest CLI option.
 2. ``OPCLI_ARTIFACTS_BUILD_YAML`` environment variable (absolute path).
@@ -19,27 +29,25 @@ Fixtures
 --------
 opcli_artifacts
     The full :class:`~opcli.models.artifacts_build.ArtifactsGenerated` model.
+    Always requires ``artifacts.build.yaml``; not available in CLI-flag mode.
 charm_path
-    Path string for a single charm with a single base.  Fails if there are
-    zero or more than one charm, or if the single charm has more than one
-    build for the current architecture (ambiguous base).
+    Path string for a single charm with a single base.
+    CLI: ``--charm-file name=path`` (single entry).
+    yaml: single charm from ``artifacts.build.yaml``.
 charm_paths
-    ``{charm_name: [path, ...]}`` -- list of paths per charm for the current
-    architecture.  Handles multi-base builds correctly.
-rock_images
-    ``{rock_name: image_or_file}`` -- image reference or local file path for
-    the current architecture.
+    ``{charm_name: [path, ...]}`` -- all charm paths for the current arch.
+    CLI: all ``--charm-file name=path`` entries.
+    yaml: all charms from ``artifacts.build.yaml``.
 resource_images
-    ``{resource_name: image_ref}`` -- single-charm shortcut that resolves
-    resource -> rock -> image.  Designed for use with ``jubilant.Juju.deploy``:
+    ``{resource_name: image_ref}`` -- OCI resource images for the single charm.
+    CLI: all ``--resource-image name=ref`` entries.
+    yaml: resolves resource -> rock -> image for the single charm.
 
-    .. code-block:: python
+    Example::
 
         def test_deploy(juju, charm_path, resource_images):
             juju.deploy(charm_path, resources=resource_images)
             juju.wait(jubilant.all_active)
-
-    Fails if there are zero or more than one charm.
 """
 
 from __future__ import annotations
@@ -63,7 +71,7 @@ logger = logging.getLogger(__name__)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:  # pragma: no cover
-    """Register the ``--artifacts-build-yaml`` option under the "opcli" group."""
+    """Register opcli options."""
     group = parser.getgroup("opcli")
     group.addoption(
         "--artifacts-build-yaml",
@@ -73,6 +81,26 @@ def pytest_addoption(parser: pytest.Parser) -> None:  # pragma: no cover
         help=(
             "Path to artifacts.build.yaml.  Overrides the OPCLI_ARTIFACTS_BUILD_YAML "
             "environment variable and automatic walk-up discovery."
+        ),
+    )
+    group.addoption(
+        "--charm-file",
+        action="append",
+        default=None,
+        metavar="NAME=FILE",
+        help=(
+            "Built charm file as NAME=PATH (repeatable).  "
+            "Bypasses artifacts.build.yaml for charm_path and charm_paths."
+        ),
+    )
+    group.addoption(
+        "--resource-image",
+        action="append",
+        default=None,
+        metavar="NAME=REF",
+        help=(
+            "OCI image reference as NAME=REF (repeatable).  "
+            "Bypasses artifacts.build.yaml for resource_images."
         ),
     )
 
@@ -97,54 +125,103 @@ def opcli_artifacts(_opcli_build_yaml_path: Path) -> ArtifactsGenerated:
 
 
 @pytest.fixture(scope="session")
-def charm_path(
-    opcli_artifacts: ArtifactsGenerated,
-    _opcli_build_yaml_path: Path,
-) -> str:
-    """Path to the single built charm for the current architecture."""
-    return _build_charm_path(opcli_artifacts, _opcli_build_yaml_path.parent)
+def charm_path(request: pytest.FixtureRequest) -> str:
+    """Path to the single built charm for the current architecture.
+
+    CLI mode: uses ``--charm-file name=path`` (exactly one entry required).
+    yaml mode: single charm from ``artifacts.build.yaml``.
+    """
+    charm_files = request.config.getoption("--charm-file", default=None)
+    if charm_files is not None:
+        pairs = _parse_kv_flags(charm_files, "--charm-file")
+        if len(pairs) > 1:
+            names = list(pairs)
+            pytest.fail(
+                f"charm_path: multiple --charm-file entries ({names!r}); "
+                "use charm_paths for multi-charm invocations"
+            )
+        return str(Path(next(iter(pairs.values()))).resolve())
+
+    yaml_path = _discover_artifacts_build(request.config)
+    from opcli.core.yaml_io import load_artifacts_build
+
+    return _build_charm_path(load_artifacts_build(yaml_path), yaml_path.parent)
 
 
 @pytest.fixture(scope="session")
-def charm_paths(
-    opcli_artifacts: ArtifactsGenerated,
-    _opcli_build_yaml_path: Path,
-) -> dict[str, list[str]]:
-    """Paths for every charm keyed by charm name, filtered to the current arch."""
-    return _build_charm_paths(opcli_artifacts, _opcli_build_yaml_path.parent)
+def charm_paths(request: pytest.FixtureRequest) -> dict[str, list[str]]:
+    """Paths for every charm keyed by charm name, filtered to the current arch.
+
+    CLI mode: all ``--charm-file name=path`` entries as ``{name: [path]}``.
+    yaml mode: all charms from ``artifacts.build.yaml``.
+    """
+    charm_files = request.config.getoption("--charm-file", default=None)
+    if charm_files is not None:
+        pairs = _parse_kv_flags(charm_files, "--charm-file")
+        return {name: [str(Path(path).resolve())] for name, path in pairs.items()}
+
+    yaml_path = _discover_artifacts_build(request.config)
+    from opcli.core.yaml_io import load_artifacts_build
+
+    return _build_charm_paths(load_artifacts_build(yaml_path), yaml_path.parent)
 
 
 @pytest.fixture(scope="session")
-def rock_images(
-    opcli_artifacts: ArtifactsGenerated,
-    _opcli_build_yaml_path: Path,
-) -> dict[str, str]:
-    """Image reference (or local file path) for each rock, keyed by rock name."""
-    return _build_rock_images(opcli_artifacts, _opcli_build_yaml_path.parent)
+def resource_images(request: pytest.FixtureRequest) -> dict[str, str]:
+    """OCI-image resources keyed by resource name.
 
+    CLI mode: all ``--resource-image name=ref`` entries as ``{name: ref}``.
+    yaml mode: resolves resource → rock → image for the single charm.
 
-@pytest.fixture(scope="session")
-def resource_images(
-    opcli_artifacts: ArtifactsGenerated,
-    rock_images: dict[str, str],
-) -> dict[str, str]:
-    """OCI-image resources for the single charm, keyed by resource name.
-
-    A convenience shortcut for single-charm repos::
+    Example::
 
         def test_deploy(juju, charm_path, resource_images):
             juju.deploy(charm_path, resources=resource_images)
             juju.wait(jubilant.all_active)
 
-    Fails (``pytest.fail``) if there are zero or more than one charm.
-    For multi-charm repos, build the resource mapping manually from ``rock_images``.
+    In yaml mode, fails if there are zero or more than one charm.
     """
-    return _build_resource_images(opcli_artifacts, rock_images)
+    resource_imgs = request.config.getoption("--resource-image", default=None)
+    if resource_imgs is not None:
+        return _parse_kv_flags(resource_imgs, "--resource-image")
+
+    charm_files = request.config.getoption("--charm-file", default=None)
+    yaml_path = _discover_artifacts_build(
+        request.config,
+        hint=(
+            "pass --resource-image NAME=REF for each OCI resource, "
+            "or run 'opcli artifacts build' to create artifacts.build.yaml"
+        )
+        if charm_files
+        else None,
+    )
+    from opcli.core.yaml_io import load_artifacts_build
+
+    artifacts = load_artifacts_build(yaml_path)
+    rock_imgs = _build_rock_images(artifacts, yaml_path.parent)
+    return _build_resource_images(artifacts, rock_imgs)
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers -- tested directly by unit tests
 # ---------------------------------------------------------------------------
+
+
+def _parse_kv_flags(values: list[str], flag: str) -> dict[str, str]:
+    """Parse a list of ``NAME=VALUE`` strings into a dict.
+
+    Splits on the first ``=`` only, so values containing ``=`` are preserved.
+    Raises ``pytest.UsageError`` on malformed entries.
+    """
+    result: dict[str, str] = {}
+    for entry in values:
+        if "=" not in entry:
+            raise pytest.UsageError(f"{flag}: expected NAME=VALUE, got {entry!r}")
+        name, _, value = entry.partition("=")
+        if not name:
+            raise pytest.UsageError(f"{flag}: NAME must not be empty, got {entry!r}")
+        result[name] = value
+    return result
 
 
 def _resolve_path(path: str, artifacts_root: Path) -> str:
@@ -276,7 +353,10 @@ def _select_arch_builds_rock(
     return [b for b in builds if b.arch == arch]
 
 
-def _discover_artifacts_build(config: pytest.Config) -> Path:
+def _discover_artifacts_build(
+    config: pytest.Config,
+    hint: str | None = None,
+) -> Path:
     """Resolve the path to ``artifacts.build.yaml``.
 
     Checks, in order:
@@ -284,6 +364,10 @@ def _discover_artifacts_build(config: pytest.Config) -> Path:
     1. ``--artifacts-build-yaml`` pytest CLI option.
     2. ``OPCLI_ARTIFACTS_BUILD_YAML`` environment variable.
     3. Walk up from ``config.rootpath`` until the file is found (stops at git root).
+
+    Args:
+        config: The pytest config object.
+        hint: Optional extra hint appended to the not-found error message.
 
     Raises:
         pytest.UsageError: If the file cannot be found.
@@ -320,9 +404,10 @@ def _discover_artifacts_build(config: pytest.Config) -> Path:
             break
         directory = parent
 
+    suffix = f"  {hint}" if hint else ""
     raise pytest.UsageError(
         f"{ARTIFACTS_BUILD_YAML!r} not found (searched up from {config.rootpath!r}). "
-        "Run 'opcli artifacts build' first, or set OPCLI_ARTIFACTS_BUILD_YAML."
+        f"Run 'opcli artifacts build' first, or set OPCLI_ARTIFACTS_BUILD_YAML.{suffix}"
     )
 
 
@@ -331,5 +416,4 @@ __all__ = [
     "charm_paths",
     "opcli_artifacts",
     "resource_images",
-    "rock_images",
 ]

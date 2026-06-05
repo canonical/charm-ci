@@ -401,11 +401,10 @@ All fixtures are session-scoped and architecture-aware (they filter builds to th
 
 | Fixture | Return type | Description |
 |---|---|---|
-| `opcli_artifacts` | `ArtifactsGenerated` | Full model parsed from `artifacts.build.yaml`. Use this to inspect any field not covered by a dedicated fixture. |
+| `opcli_artifacts` | `ArtifactsGenerated` | Full model parsed from `artifacts.build.yaml`. Use this to inspect any field not covered by a dedicated fixture. Always requires yaml; not available in CLI-flag mode. |
 | `charm_path` | `str` | Path to the single built `.charm`. Fails if the repo contains more than one charm, or if the single charm has more than one build for the current arch (ambiguous base — use `charm_paths` instead). |
 | `charm_paths` | `dict[str, list[str]]` | All `.charm` paths per charm name, as a list to handle multi-base builds. |
-| `rock_images` | `dict[str, str]` | Image reference or local `.rock` file path per rock name, for the current arch. |
-| `resource_images` | `dict[str, str]` | `{resource_name: image_ref}`. Resolves each OCI-image resource to its rock image for the single charm. Fails if the repo contains zero or more than one charm. |
+| `resource_images` | `dict[str, str]` | `{resource_name: image_ref}`. In yaml mode: resolves each OCI-image resource to its rock image for the single charm. In CLI-flag mode: uses `--resource-image` values directly. Fails if the repo contains zero or more than one charm (yaml mode only). |
 
 ### Usage examples
 
@@ -426,11 +425,12 @@ def test_deploy(juju, charm_paths):
         juju.wait(jubilant.all_active)
 ```
 
-**Multi-charm repo (build resource mapping from `rock_images`):**
+**Multi-charm repo (build resource mapping manually from `opcli_artifacts`):**
 
 ```python
-def test_deploy(juju, charm_paths, rock_images):
-    juju.deploy(charm_paths["operator"][0], resources={"backend": rock_images["backend-rock"]})
+def test_deploy(juju, charm_paths, opcli_artifacts):
+    rock_imgs = {r.name: r.builds[0].image for r in opcli_artifacts.rocks}
+    juju.deploy(charm_paths["operator"][0], resources={"backend": rock_imgs["backend-rock"]})
     juju.deploy(charm_paths["agent"][0])
     juju.wait(jubilant.all_active)
 ```
@@ -443,6 +443,25 @@ The plugin locates `artifacts.build.yaml` in this order:
 2. `OPCLI_ARTIFACTS_BUILD_YAML` environment variable (absolute path).
 3. Walk up from pytest's rootdir until `artifacts.build.yaml` is found (stops at git root).
 4. `pytest.UsageError` if none of the above succeed — run `opcli artifacts build` first.
+
+### CLI-flag mode (no build step)
+
+If you already have charm files and OCI image references (for example, from a previous CI stage), you can pass them directly as pytest CLI flags without needing `artifacts.build.yaml`:
+
+```bash
+pytest \
+  --charm-file my-charm=./my-charm.charm \
+  --resource-image oci-image=ghcr.io/org/rock:sha256-abc
+```
+
+Both flags are repeatable. Use `NAME=VALUE` format where `NAME` is the charm name (for `--charm-file`) or the Juju resource name (for `--resource-image`).
+
+| Flag | Format | Maps to |
+|---|---|---|
+| `--charm-file` | `NAME=PATH` | `charm_path` / `charm_paths` |
+| `--resource-image` | `NAME=REF` | `resource_images` |
+
+Each fixture independently checks its own CLI flags first, then falls back to yaml discovery. Mixing modes per-fixture is supported (for example, pass `--charm-file` but let `resource_images` come from yaml).
 
 ## Tutorial testing
 

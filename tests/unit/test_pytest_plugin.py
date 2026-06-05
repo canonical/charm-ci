@@ -15,9 +15,19 @@ from opcli.pytest_plugin import (
     _build_resource_images,
     _build_rock_images,
     _discover_artifacts_build,
+    _parse_kv_flags,
     _resolve_path,
     _select_arch_builds_charm,
     _select_arch_builds_rock,
+)
+from opcli.pytest_plugin import (
+    charm_path as _charm_path_fixture,
+)
+from opcli.pytest_plugin import (
+    charm_paths as _charm_paths_fixture,
+)
+from opcli.pytest_plugin import (
+    resource_images as _resource_images_fixture,
 )
 
 # Patch target: lazy-imported inside functions
@@ -32,7 +42,12 @@ _FAKE_ROOT = Path("/fake/root")
 # ---------------------------------------------------------------------------
 
 
-def _mock_config(rootdir: Path, cli_path: str | None = None) -> MagicMock:
+def _mock_config(
+    rootdir: Path,
+    cli_path: str | None = None,
+    charm_files: list[str] | None = None,
+    resource_images: list[str] | None = None,
+) -> MagicMock:
     """Build a minimal pytest.Config mock."""
     config = MagicMock(spec=pytest.Config)
     config.rootpath = rootdir
@@ -40,6 +55,10 @@ def _mock_config(rootdir: Path, cli_path: str | None = None) -> MagicMock:
     def _getoption(name: str, default: object = None) -> object:
         if name == "--artifacts-build-yaml":
             return cli_path
+        if name == "--charm-file":
+            return charm_files
+        if name == "--resource-image":
+            return resource_images
         return default
 
     config.getoption.side_effect = _getoption
@@ -597,3 +616,112 @@ class TestBuildResourceImages:
         )
         with pytest.raises(pytest.fail.Exception, match="multiple charms"):
             _build_resource_images(arts, {})
+
+
+# ---------------------------------------------------------------------------
+# _parse_kv_flags
+# ---------------------------------------------------------------------------
+
+
+class TestParseKvFlags:
+    def test_single_entry(self) -> None:
+        assert _parse_kv_flags(["foo=bar"], "--charm-file") == {"foo": "bar"}
+
+    def test_multiple_entries(self) -> None:
+        result = _parse_kv_flags(["a=1", "b=2"], "--charm-file")
+        assert result == {"a": "1", "b": "2"}
+
+    def test_value_contains_equals(self) -> None:
+        result = _parse_kv_flags(["img=ghcr.io/org/rock:sha=abc"], "--resource-image")
+        assert result == {"img": "ghcr.io/org/rock:sha=abc"}
+
+    def test_missing_equals_raises(self) -> None:
+        with pytest.raises(pytest.UsageError, match="NAME=VALUE"):
+            _parse_kv_flags(["noequalssign"], "--charm-file")
+
+    def test_empty_name_raises(self) -> None:
+        with pytest.raises(pytest.UsageError, match="NAME must not be empty"):
+            _parse_kv_flags(["=value"], "--charm-file")
+
+
+# ---------------------------------------------------------------------------
+# CLI-flag mode (charm_path, charm_paths, resource_images)
+# ---------------------------------------------------------------------------
+
+
+class TestCliMode:
+    """Tests for the CLI-flag input mode exercised via fixtures."""
+
+    # We call the underlying helpers directly via _parse_kv_flags and
+    # verify fixture behaviour using pytester for integration-style checks
+    # where needed, or via the _mock_config helper for unit-style checks.
+
+    # ---------- charm_path via --charm-file ----------
+
+    def test_charm_path_single_flag(self, tmp_path: Path) -> None:
+        charm = tmp_path / "my.charm"
+        charm.touch()
+        config = _mock_config(tmp_path, charm_files=[f"my-charm={charm}"])
+
+        request = MagicMock()
+        request.config = config
+        result = _charm_path_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+        assert result == str(charm.resolve())
+
+    def test_charm_path_multiple_flags_fails(self, tmp_path: Path) -> None:
+        config = _mock_config(
+            tmp_path,
+            charm_files=["charm-a=./a.charm", "charm-b=./b.charm"],
+        )
+        request = MagicMock()
+        request.config = config
+        with pytest.raises(pytest.fail.Exception, match="use charm_paths"):
+            _charm_path_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+
+    # ---------- charm_paths via --charm-file ----------
+
+    def test_charm_paths_from_flags(self, tmp_path: Path) -> None:
+        a = tmp_path / "a.charm"
+        b = tmp_path / "b.charm"
+        a.touch()
+        b.touch()
+        config = _mock_config(
+            tmp_path,
+            charm_files=[f"charm-a={a}", f"charm-b={b}"],
+        )
+        request = MagicMock()
+        request.config = config
+        result = _charm_paths_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+        assert result == {
+            "charm-a": [str(a.resolve())],
+            "charm-b": [str(b.resolve())],
+        }
+
+    # ---------- resource_images via --resource-image ----------
+
+    def test_resource_images_from_flags(self, tmp_path: Path) -> None:
+        config = _mock_config(
+            tmp_path,
+            resource_images=["oci-image=ghcr.io/org/rock:sha"],
+        )
+        request = MagicMock()
+        request.config = config
+        result = _resource_images_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+        assert result == {"oci-image": "ghcr.io/org/rock:sha"}
+
+    # ---------- resource_images missing both sources ----------
+
+    def test_resource_images_no_yaml_no_flags_raises(self, tmp_path: Path) -> None:
+        config = _mock_config(tmp_path)
+        request = MagicMock()
+        request.config = config
+        with pytest.raises(pytest.UsageError, match="opcli artifacts build"):
+            _resource_images_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+
+    def test_resource_images_missing_resource_image_flag_hints(self, tmp_path: Path) -> None:
+        """When --charm-file set but --resource-image absent and no yaml, hint."""
+        config = _mock_config(tmp_path, charm_files=["my-charm=./my.charm"])
+        request = MagicMock()
+        request.config = config
+        with pytest.raises(pytest.UsageError, match="--resource-image"):
+            _resource_images_fixture.__wrapped__(request)  # type: ignore[attr-defined]
