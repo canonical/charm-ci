@@ -6,15 +6,17 @@
 
 import jubilant
 
+from opcli.pytest_plugin import CharmPathList
+
 
 def test_k8s_charm_active(
     juju: jubilant.Juju,
-    charm_paths: dict[str, list[str]],
+    charm_paths: dict[str, CharmPathList],
     rock_images: dict[str, str],
 ) -> None:
     """Deploy k8s-charm to a k8s model with its rock container and assert active/idle."""
     juju.deploy(
-        charm_paths["k8s-charm"][0],
+        charm_paths["k8s-charm"].path,
         app="k8s-charm",
         resources={"k8s-rock-image": rock_images["k8s-rock"]},
     )

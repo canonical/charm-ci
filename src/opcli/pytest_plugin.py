@@ -38,9 +38,21 @@ charm_path
     CLI: ``--charm-file name=path`` (single entry, path validated to exist).
     yaml: single charm from ``artifacts.build.yaml``.
 charm_paths
-    ``{charm_name: [path, ...]}`` -- all charm paths for the current arch.
+    ``{charm_name: CharmPathList}`` -- all charm paths for the current arch,
+    keyed by charm name.  See :class:`CharmPathList` for the access API.
     CLI: all ``--charm-file name=path`` entries (paths validated to exist).
     yaml: all charms from ``artifacts.build.yaml``.
+
+    Example (single base)::
+
+        def test_deploy(juju, charm_paths):
+            juju.deploy(charm_paths['my-charm'].path)
+
+    Example (multi-base)::
+
+        def test_deploy(juju, charm_paths):
+            juju.deploy(charm_paths['my-charm']['ubuntu@24.04'])
+
 resource_images
     ``{resource_name: image_ref}`` -- OCI resource images for the single charm.
     CLI: all ``--resource-image name=ref`` entries.
@@ -64,7 +76,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterator
 
 import pytest
 
@@ -72,6 +84,107 @@ if TYPE_CHECKING:
     from opcli.models.artifacts_build import ArtifactsGenerated, CharmOutput, RockOutput
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# CharmPathList
+# ---------------------------------------------------------------------------
+
+
+class CharmPathList:
+    """Ordered list of charm paths for a single charm name, with optional base info.
+
+    Stores ``(base, path)`` pairs where *base* may be ``None`` when base
+    information is unavailable (e.g. CLI-flag mode).
+
+    Access patterns::
+
+        # Single-base shortcut
+        paths.path                  # str; fails if there is more than one build
+
+        # Base-keyed lookup (requires base info)
+        paths['ubuntu@22.04']       # str
+        paths['ubuntu@24.04']       # str
+
+        # Iterate all paths
+        for p in paths: ...         # yields str
+
+        # Introspection
+        len(paths)                  # int
+        paths.bases                 # list[str | None]
+
+    Raises ``KeyError`` when using string indexing on a list that has no base
+    information (CLI-flag mode), with a helpful message explaining why.
+    """
+
+    def __init__(self, entries: list[tuple[str | None, str]]) -> None:
+        self._entries = entries
+
+    # -- single-path shortcut ------------------------------------------------
+
+    @property
+    def path(self) -> str:
+        """Return the single charm path.
+
+        Raises ``pytest.fail`` when there is more than one build so the test
+        produces a clear, actionable message.
+        """
+        if len(self._entries) == 1:
+            return self._entries[0][1]
+        bases = [b for b, _ in self._entries]
+        pytest.fail(
+            f"charm_paths: .path is ambiguous — {len(self._entries)} builds available "
+            f"(bases: {bases!r}). Use ['<base>'] to select one."
+        )
+
+    # -- base-keyed lookup ---------------------------------------------------
+
+    def __getitem__(self, base: str) -> str:
+        """Return the path for the given *base* string."""
+        if not isinstance(base, str):
+            raise TypeError(f"CharmPathList indices must be str, not {type(base).__name__!r}")
+        # Check whether any entry has base info at all
+        if all(b is None for b, _ in self._entries):
+            raise KeyError(
+                f"{base!r}: no base information is available for this charm "
+                "(base info is only present in yaml mode, not CLI-flag mode)"
+            )
+        for b, p in self._entries:
+            if b == base:
+                return p
+        available = [b for b, _ in self._entries if b is not None]
+        raise KeyError(f"{base!r} not found; available bases: {available!r}")
+
+    # -- sequence interface --------------------------------------------------
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over all path strings."""
+        return (p for _, p in self._entries)
+
+    def __len__(self) -> int:
+        """Return the number of builds."""
+        return len(self._entries)
+
+    # -- introspection -------------------------------------------------------
+
+    @property
+    def bases(self) -> list[str | None]:
+        """Return the list of base strings (``None`` when unavailable)."""
+        return [b for b, _ in self._entries]
+
+    # -- repr ----------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        """Return a developer-friendly representation."""
+        return f"CharmPathList({self._entries!r})"
+
+    def __eq__(self, other: object) -> bool:
+        """Return True if *other* is a CharmPathList with the same entries."""
+        if isinstance(other, CharmPathList):
+            return self._entries == other._entries
+        return NotImplemented
+
+    __hash__ = None  # type: ignore[assignment]  # mutable; explicitly unhashable
 
 
 # ---------------------------------------------------------------------------
@@ -168,21 +281,21 @@ def charm_path(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="session")
-def charm_paths(request: pytest.FixtureRequest) -> dict[str, list[str]]:
+def charm_paths(request: pytest.FixtureRequest) -> dict[str, CharmPathList]:
     """Paths for every charm keyed by charm name, filtered to the current arch.
 
-    CLI mode: all ``--charm-file name=path`` entries as ``{name: [path]}``.
+    CLI mode: all ``--charm-file name=path`` entries as ``{name: CharmPathList}``.
     yaml mode: all charms from ``artifacts.build.yaml``.
     """
     charm_files = request.config.getoption("--charm-file", default=None)
     if charm_files is not None:
         pairs = _parse_kv_flags(charm_files, "--charm-file")
-        result: dict[str, list[str]] = {}
+        result: dict[str, CharmPathList] = {}
         for name, raw_path in pairs.items():
             path = Path(raw_path).resolve()
             if not path.is_file():
                 raise pytest.UsageError(f"charm_paths: --charm-file path does not exist: {path}")
-            result[name] = [str(path)]
+            result[name] = CharmPathList([(None, str(path))])
         return result
 
     yaml_path = _discover_artifacts_build(
@@ -308,12 +421,12 @@ def _build_charm_path(artifacts: ArtifactsGenerated, artifacts_root: Path) -> st
 
 def _build_charm_paths(
     artifacts: ArtifactsGenerated, artifacts_root: Path
-) -> dict[str, list[str]]:
+) -> dict[str, CharmPathList]:
     """Core logic for the ``charm_paths`` fixture."""
     from opcli.core.env import current_arch
 
     arch = current_arch()
-    result: dict[str, list[str]] = {}
+    result: dict[str, CharmPathList] = {}
     for charm in artifacts.charms:
         arch_builds = _select_arch_builds_charm(charm.builds, arch)
         if not arch_builds:
@@ -322,12 +435,13 @@ def _build_charm_paths(
                 f"charm_paths: no build for charm '{charm.name}' matches arch '{arch}'; "
                 f"available arches: {available!r}"
             )
-        result[charm.name] = [_resolve_path(b.path, artifacts_root) for b in arch_builds if b.path]
-        if not result[charm.name]:
+        entries = [(b.base, _resolve_path(b.path, artifacts_root)) for b in arch_builds if b.path]
+        if not entries:
             pytest.fail(
                 f"charm_paths: charm '{charm.name}' arch-{arch!r} builds have no local "
                 "path (CI artifacts). Run 'opcli artifacts localize' first."
             )
+        result[charm.name] = CharmPathList(entries)
     return result
 
 
@@ -474,6 +588,7 @@ def _discover_artifacts_build(
 
 
 __all__ = [
+    "CharmPathList",
     "build_rock_images",
     "charm_path",
     "charm_paths",

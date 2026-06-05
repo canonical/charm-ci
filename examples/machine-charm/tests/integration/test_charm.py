@@ -8,10 +8,12 @@ Demonstrates auto-discover: false — variants are listed explicitly.
 
 import jubilant
 
+from opcli.pytest_plugin import CharmPathList
 
-def test_deploy(juju: jubilant.Juju, charm_paths: dict[str, list[str]]) -> None:
+
+def test_deploy(juju: jubilant.Juju, charm_paths: dict[str, CharmPathList]) -> None:
     """Deploy the machine-charm and verify active/idle."""
-    juju.deploy(charm_paths["machine-charm"][0], app="machine-charm")
+    juju.deploy(charm_paths["machine-charm"].path, app="machine-charm")
     status = juju.wait(jubilant.all_active, timeout=300)
     assert status.apps["machine-charm"].units["machine-charm/0"].workload_status.current == "active"
 

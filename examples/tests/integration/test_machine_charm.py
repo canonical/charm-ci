@@ -6,12 +6,14 @@
 
 import jubilant
 
+from opcli.pytest_plugin import CharmPathList
+
 
 def test_machine_charm_active(
     juju: jubilant.Juju,
-    charm_paths: dict[str, list[str]],
+    charm_paths: dict[str, CharmPathList],
 ) -> None:
     """Deploy machine-charm and assert it reaches active/idle within 5 minutes."""
-    juju.deploy(charm_paths["machine-charm"][0], app="machine-charm")
+    juju.deploy(charm_paths["machine-charm"].path, app="machine-charm")
     status = juju.wait(jubilant.all_active, timeout=300)
     assert status.apps["machine-charm"].units["machine-charm/0"].workload_status.current == "active"
