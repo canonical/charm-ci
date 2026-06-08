@@ -84,6 +84,9 @@ opcli pytest run                                       # run all integration tes
 # After a successful build (local or CI):
 opcli artifacts publish --channel latest/edge
 
+# If every charm declares its own channel in artifacts.yaml, the flag can be omitted:
+opcli artifacts publish
+
 # Dry-run to preview what would be uploaded:
 opcli artifacts publish --channel latest/edge --dry-run
 
@@ -109,7 +112,7 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 | `fetch` | Download CI artifacts and rewrite to local paths. `--run-id` (required), `--repo`, `--wait`. |
 | `localize` | Rewrite CI artifact refs to local paths (after manual download). |
 | `push-images` | Load rock OCI images into a local registry. `-r` for registry (default: `localhost:32000`). `--missing-registry`: `skip` (default), `deploy` (auto-provision), or `fail`. |
-| `publish` | Upload charms and OCI resources to CharmHub. `--channel` (required), `--charm` (filter), `--dry-run`. |
+| `publish` | Upload charms and OCI resources to CharmHub. `--channel` (optional; per-charm channels supported), `--charm` (filter), `--dry-run`. |
 | `path` | Print absolute path(s) to built artifacts. Optional `NAME` arg, `--type`, `--arch`. |
 
 ### `opcli install`
@@ -565,6 +568,7 @@ Three reusable workflows are available for operator repositories:
 |---|---|
 | `build-artifacts.yml` | Build matrix generation, parallel artifact builds, merged `artifacts.build.yaml` |
 | `integration-test.yml` | Download artifacts, generate spread task matrix, run integration tests |
+| `publish-artifacts.yml` | Publish validated artifacts to CharmHub; `channel` is optional and falls back to per-charm channels in `artifacts.yaml` |
 | `doc-test.yml` | Generate spread task matrix, run documentation/tutorial tests (no artifact build) |
 
 Example usage for integration tests:
@@ -601,6 +605,22 @@ jobs:
     with:
       working-directory: .
       # spread-jobs-include: "docs-ci:*"  # optional: restrict to matching jobs
+```
+
+Example usage for publishing:
+
+```yaml
+jobs:
+  publish:
+    uses: canonical/charm-ci/.github/workflows/publish-artifacts.yml@main
+    permissions:
+      contents: write
+      actions: read
+    secrets:
+      CHARMHUB_TOKEN: ${{ secrets.CHARMHUB_TOKEN }}
+    with:
+      # channel: latest/edge  # optional
+      working-directory: .
 ```
 
 Pinning to a SHA or tag automatically installs the matching `opcli` version via `canonical/get-workflow-version-action`.
@@ -693,4 +713,3 @@ examples/      # Example project layout
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
-
