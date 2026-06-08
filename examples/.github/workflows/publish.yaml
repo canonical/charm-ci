@@ -13,8 +13,8 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: "CharmHub channel (e.g. latest/edge, 1.0/stable)"
-        required: true
+        description: "CharmHub channel (optional; e.g. latest/edge, 1.0/stable)"
+        required: false
         type: string
       dry-run:
         description: "Validate without uploading"

@@ -12,7 +12,7 @@ name: Publish Artifacts
 #     publish:
 #       uses: canonical/charm-ci/.github/workflows/publish-artifacts.yml@main
 #       with:
-#         channel: latest/edge
+#         channel: latest/edge  # optional; omit to use per-charm channels
 #       permissions:
 #         contents: write
 #         actions: read
@@ -26,9 +26,9 @@ on:
   workflow_call:
     inputs:
       channel:
-        description: "CharmHub channel to publish to (e.g. latest/edge, 2.0/stable)"
+        description: "CharmHub channel to publish to (optional; e.g. latest/edge, 2.0/stable)"
         type: string
-        required: true
+        required: false
       integration-workflow-name:
         description: "Filename of the integration-test workflow to search runs for"
         type: string
@@ -150,16 +150,20 @@ jobs:
             exit 1
           fi
 
-          DRY_RUN_FLAG=""
-          if [ "${INPUT_DRY_RUN}" = "true" ]; then
-            DRY_RUN_FLAG="--dry-run"
+          CHANNEL_ARGS=()
+          if [ -n "${INPUT_CHANNEL}" ]; then
+            CHANNEL_ARGS=(--channel "${INPUT_CHANNEL}")
           fi
 
-          # shellcheck disable=SC2086
+          DRY_RUN_ARGS=()
+          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+            DRY_RUN_ARGS=(--dry-run)
+          fi
+
           opcli artifacts publish \
-            --channel "${INPUT_CHANNEL}" \
+            "${CHANNEL_ARGS[@]}" \
             --json \
-            ${DRY_RUN_FLAG} > publish-results.json
+            "${DRY_RUN_ARGS[@]}" > publish-results.json
 
       - name: Create GitHub Release
         if: inputs.dry-run != true
