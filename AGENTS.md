@@ -129,7 +129,7 @@ The virtual backend in `spread.yaml` accepts opcli-only keys that are stripped d
 
 ### opcli spread jobs --include
 
-`opcli spread jobs` accepts `--include <pattern>` (single pattern) to restrict the output matrix to matching jobs. Patterns use `fnmatch` glob syntax and match against the **raw spread selector string** (format: `backend-ci:system:suite/variant`). When omitted, all jobs are returned. Examples:
+`opcli spread jobs` accepts `--include <pattern>` (single pattern) to restrict the output matrix to matching jobs. Patterns use `fnmatch` glob syntax and match against the **raw spread selector string** as returned by `spread -list` (for example `backend-ci:system:suite/task:variant`). When omitted, all jobs are returned. Examples:
 
 ```bash
 # Include only jobs from the 'my-docs' backend

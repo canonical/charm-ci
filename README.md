@@ -84,7 +84,7 @@ opcli pytest run                                       # run all integration tes
 # After a successful build (local or CI):
 opcli artifacts publish --channel latest/edge
 
-# If every charm declares its own channel in artifacts.yaml, the flag can be omitted:
+# If each charm declares its own channel in artifacts.yaml, the flag can be omitted:
 opcli artifacts publish
 
 # Dry-run to preview what would be uploaded:
@@ -95,6 +95,11 @@ opcli artifacts publish --channel latest/stable --charm my-charm
 ```
 
 Requires `charmcraft` credentials: run `charmcraft login` interactively or set `CHARMCRAFT_AUTH` in CI.
+Publish channel resolution is:
+1. `--channel`
+2. per-charm `channel` in `artifacts.yaml`
+3. error if neither is set for a charm
+
 The command reads `artifacts.build.yaml` to resolve charm files and resource→rock mappings, then:
 1. Uploads OCI-image resources (rocks from registry or local file, external images from `upstream-source`)
 2. Uploads each `.charm` file and releases it to the channel with bound resource revisions
@@ -137,7 +142,7 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 | `init` | Generate `spread.yaml` with `integration-suites`. `--force` to overwrite. |
 | `expand` | Print fully expanded `spread.yaml` to stdout. |
 | `run` | Expand virtual backend and run spread. Args after `--` forwarded verbatim. |
-| `jobs` | Print CI test matrix JSON (one entry per spread task/variant). `--exclude <pattern>` to filter by selector (repeatable, fnmatch glob, e.g. `--exclude 'my-docs-ci:*'`). |
+| `jobs` | Print CI test matrix JSON (one entry per spread task/variant). `--include <pattern>` filters by raw `spread -list` selector (fnmatch glob, e.g. `--include 'my-docs-ci:*'`). |
 
 ### `opcli pytest`
 
@@ -213,6 +218,7 @@ rocks:
 charms:
   - name: my-charm
     charmcraft-yaml: charmcraft.yaml
+    channel: latest/edge
     resources:
       my-rock-image:
         type: oci-image
@@ -227,6 +233,7 @@ Key fields:
 - **`*-yaml`**: explicit path to the craft YAML file (not a directory).
 - **`pack-dir`**: working directory for the build tool (defaults to the YAML's parent dir).
 - **`platforms[].runner`**: GitHub Actions runner labels (used by `opcli artifacts matrix`; defaults to `["ubuntu-latest"]` at matrix generation time when omitted).
+- **`channel`**: optional CharmHub channel for `opcli artifacts publish`; used when `--channel` is not passed.
 
 ## `spread.yaml` virtual backends
 
@@ -525,10 +532,10 @@ execute: |
     _ "${SPREAD_PATH}${TUTORIAL}"
 ```
 
-3. **Exclude tutorial jobs from the integration-test matrix** (they run in a separate job):
+3. **Select only the integration-test jobs for the main matrix** (the tutorial docs run in a separate job):
 
 ```bash
-opcli spread jobs --exclude 'docs-ci:*'
+opcli spread jobs --include 'integration-test-ci:*'
 ```
 
 ### Marker syntax
