@@ -566,7 +566,7 @@ Three reusable workflows are available for operator repositories:
 
 | Workflow | Purpose |
 |---|---|
-| `build-artifacts.yml` | Build matrix generation, parallel artifact builds, merged `artifacts.build.yaml`; debug builds open a detached tmate session when `runner.debug == 1` |
+| `build-artifacts.yml` | Build matrix generation, parallel artifact builds, merged `artifacts.build.yaml`; debug builds open a detached tmate session, using the self-hosted or GitHub-hosted action as appropriate |
 | `integration-test.yml` | Download artifacts, generate spread task matrix, run integration tests |
 | `publish-artifacts.yml` | Publish validated artifacts to CharmHub; `channel` is optional and falls back to per-charm channels in `artifacts.yaml` |
 | `doc-test.yml` | Generate spread task matrix, run documentation/tutorial tests (no artifact build) |
@@ -632,7 +632,7 @@ When a pull request comes from a fork, the `GITHUB_TOKEN` is read-only and canno
 1. **Fork detection** — checks `github.event.pull_request.head.repo.fork` and sets `OPCLI_ROCK_UPLOAD=artifact`.
 2. **Artifact mode** — the `.rock` file is uploaded as a GitHub Actions artifact instead of being pushed to GHCR.
 3. **Test phase** — `opcli artifacts fetch` downloads the `.rock` artifact, `opcli artifacts localize` rewrites paths, and `opcli artifacts push-images --missing-registry deploy` provisions a local registry and pushes the rock there.
-4. **Debugging** — when GitHub Actions debug logging is enabled, the build job opens a detached tmate session before installing build tools.
+4. **Debugging** — when GitHub Actions debug logging is enabled, the build job opens a detached tmate session; self-hosted runners use `canonical/action-tmate`, GitHub-hosted runners use `mxschmitt/action-tmate`.
 
 To manually test the fork path, pass `upload-image: artifact` to `build-artifacts.yml` (or use `workflow_dispatch` if configured).
 

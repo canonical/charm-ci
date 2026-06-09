@@ -48,8 +48,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup tmate session
-        if: runner.debug == 1
+      - name: Setup tmate session (self-hosted)
+        if: runner.debug == 1 && runner.environment == 'self-hosted'
+        uses: canonical/action-tmate@main
+        with:
+          timeout-minutes: 60
+
+      - name: Setup tmate session (GitHub-hosted)
+        if: runner.debug == 1 && runner.environment == 'github-hosted'
         uses: mxschmitt/action-tmate@v3
         with:
           detached: true
@@ -132,4 +138,3 @@ jobs:
               exit 1
             fi
           done
-
