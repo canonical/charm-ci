@@ -110,6 +110,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up tmate session
+        if: runner.debug == 1
+        uses: mxschmitt/action-tmate@v3
+        with:
+          detached: true
+          timeout-minutes: 60
+
       - name: Install uv
         run: sudo snap install astral-uv --classic
 
