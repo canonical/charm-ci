@@ -51,6 +51,8 @@ jobs:
       - name: Setup tmate session (self-hosted)
         if: runner.debug == 1 && runner.environment == 'self-hosted'
         uses: canonical/action-tmate@main
+        with:
+          detached: true
 
       - name: Setup tmate session (GitHub-hosted)
         if: runner.debug == 1 && runner.environment == 'github-hosted'
