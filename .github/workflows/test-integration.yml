@@ -51,15 +51,12 @@ jobs:
       - name: Setup tmate session (self-hosted)
         if: runner.debug == 1 && runner.environment == 'self-hosted'
         uses: canonical/action-tmate@main
-        with:
-          timeout-minutes: 60
 
       - name: Setup tmate session (GitHub-hosted)
         if: runner.debug == 1 && runner.environment == 'github-hosted'
         uses: mxschmitt/action-tmate@v3
         with:
           detached: true
-          timeout-minutes: 60
 
       - name: Install uv
         run: sudo snap install astral-uv --classic
