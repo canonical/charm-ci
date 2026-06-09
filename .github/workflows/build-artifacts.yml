@@ -110,6 +110,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up tmate session (self-hosted)
+        if: runner.debug == 1 && runner.environment == 'self-hosted'
+        uses: canonical/action-tmate@main
+
+      - name: Set up tmate session (GitHub-hosted)
+        if: runner.debug == 1 && runner.environment == 'github-hosted'
+        uses: mxschmitt/action-tmate@v3
+        with:
+          detached: true
+
       - name: Install uv
         run: sudo snap install astral-uv --classic
 
@@ -217,16 +227,6 @@ jobs:
           name: artifacts-build-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
           path: ${{ inputs.working-directory }}/artifacts.build.yaml
           if-no-files-found: error
-
-      - name: Set up tmate session (self-hosted)
-        if: runner.debug == 1 && runner.environment == 'self-hosted'
-        uses: canonical/action-tmate@main
-
-      - name: Set up tmate session (GitHub-hosted)
-        if: runner.debug == 1 && runner.environment == 'github-hosted'
-        uses: mxschmitt/action-tmate@v3
-        with:
-          detached: true
 
   # ── Job 3: merge all partials into the final artifacts.build.yaml ───────
   collect:
