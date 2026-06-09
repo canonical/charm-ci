@@ -148,6 +148,7 @@ jobs:
         uses: canonical/action-tmate@main
         with:
           detached: true
+          timeout-minutes: 60
 
       - name: Set up tmate session (GitHub-hosted)
         if: runner.debug == 1 && runner.environment == 'github-hosted'
