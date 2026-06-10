@@ -267,3 +267,71 @@ class TestSpreadIntegrationSuites:
             'summary: basic test\n\nexecute: |\n    echo "integration-suites test passed"\n'
         )
         spread_run(integration_suites_project, ci=False)
+
+
+# ---------------------------------------------------------------------------
+# env template integration test
+# ---------------------------------------------------------------------------
+
+_ENV_TEMPLATE_SPREAD_YAML = """\
+project: env-template-test
+
+path: /home/ubuntu/proj
+
+kill-timeout: 30m
+
+backends:
+  integration-test:
+    systems:
+      - ubuntu-24.04
+
+exclude:
+  - .git
+  - .build
+
+integration-suites:
+  tests/integration/:
+    summary: env template tests
+    backends:
+      - integration-test
+    pytest-environment-template: |
+      SPREAD_JOB_VALUE={{ env.get("SPREAD_JOB", "") }}
+"""
+
+_ENV_TEMPLATE_TASK_YAML = """\
+summary: verify env template exposes SPREAD_JOB
+
+execute: |
+    PYTEST_CMD=$(opcli pytest expand --suite tests/integration/ --module "${MODULE}")
+    echo "PYTEST_CMD: ${PYTEST_CMD}"
+    echo "${PYTEST_CMD}" | grep -q "SPREAD_JOB_VALUE=" || {
+        echo "ERROR: SPREAD_JOB_VALUE not found in PYTEST_CMD"
+        exit 1
+    }
+    echo "env template test passed"
+"""
+
+
+class TestEnvTemplateIntegration:
+    """Integration test verifying that env exposes spread env vars to pytest-environment-template.
+
+    Spread sets SPREAD_JOB automatically for every task execution.  The template
+    references it via ``env.get("SPREAD_JOB", "")``.  The task asserts the rendered
+    variable appears in the ``opcli pytest expand`` output.
+    """
+
+    @pytest.fixture()
+    def env_template_project(self, tmp_path: Path) -> Path:
+        """Create a minimal spread project with an env-template suite."""
+        (tmp_path / "spread.yaml").write_text(_ENV_TEMPLATE_SPREAD_YAML)
+        test_dir = tmp_path / "tests" / "integration"
+        test_dir.mkdir(parents=True)
+        (test_dir / "test_env.py").write_text("# placeholder\n")
+        task_dir = test_dir / "run"
+        task_dir.mkdir(parents=True)
+        (task_dir / "task.yaml").write_text(_ENV_TEMPLATE_TASK_YAML)
+        return tmp_path
+
+    def test_spread_job_forwarded_via_env_template(self, env_template_project: Path) -> None:
+        """SPREAD_JOB set by spread is visible in opcli pytest expand output via env template."""
+        spread_run(env_template_project, ci=False)

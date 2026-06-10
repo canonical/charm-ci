@@ -12,12 +12,19 @@ Template context:
         with all builds across all architectures and bases).
     arch: The current machine architecture (e.g. "amd64", "arm64") — a
         convenience variable for filtering builds in Jinja2 expressions.
+    env: A snapshot of the current process environment (``dict(os.environ)``)
+        at the time the template is rendered.  Use ``env.get("VAR", "")`` to
+        safely reference optional variables.  Because ``opcli pytest expand``
+        runs as root inside a spread task, root's environment is captured here
+        and the rendered values are baked into the ``$PYTEST_CMD`` string that
+        is later passed to ``runuser``, making the variables available to tox.
 
 The rendered output is parsed into:
     - CLI arguments (whitespace-split tokens) for ``pytest-arguments-template``
     - Environment variables (KEY=VALUE lines) for ``pytest-environment-template``
 """
 
+import os
 import shlex
 from pathlib import Path
 
@@ -139,8 +146,15 @@ def _load_artifacts(root: Path) -> ArtifactsGenerated:
 
 
 def _build_context(artifacts: ArtifactsGenerated) -> dict[str, object]:
-    """Build the Jinja2 template context dictionary."""
+    """Build the Jinja2 template context dictionary.
+
+    Returns a dict with:
+        artifacts: Full ``ArtifactsGenerated`` model.
+        arch: Current machine architecture string.
+        env: Snapshot of the current process environment.
+    """
     return {
         "artifacts": artifacts,
         "arch": current_arch(),
+        "env": dict(os.environ),
     }

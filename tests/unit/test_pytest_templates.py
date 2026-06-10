@@ -248,6 +248,38 @@ class TestRenderEnvironmentTemplate:
 
         assert result == {"IMAGE": "ghcr.io/org/img:tag=latest"}
 
+    def test_env_context_renders_existing_var(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = "MY_VAR={{ env.MY_TEST_VAR_OPCLI }}"
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            patch.dict("os.environ", {"MY_TEST_VAR_OPCLI": "hello-world"}),
+        ):
+            result = render_environment_template(tmp_path, template)
+
+        assert result == {"MY_VAR": "hello-world"}
+
+    def test_env_context_get_with_default(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = 'OPTIONAL={{ env.get("SURELY_ABSENT_OPCLI_VAR", "fallback") }}'
+        with patch("opcli.core.template.current_arch", return_value="amd64"):
+            result = render_environment_template(tmp_path, template)
+
+        assert result == {"OPTIONAL": "fallback"}
+
+    def test_env_context_missing_var_strict_raises(self, tmp_path: Path) -> None:
+        """Accessing a missing env key via attribute notation raises ConfigurationError."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = "BAD={{ env.SURELY_ABSENT_OPCLI_VAR }}"
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            pytest.raises(ConfigurationError, match="Undefined variable"),
+        ):
+            render_environment_template(tmp_path, template)
+
 
 class TestAssembleToxArgvWithTemplate:
     """Tests for assemble_tox_argv with suite_config templates."""

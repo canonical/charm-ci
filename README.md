@@ -174,6 +174,16 @@ integration-suites:
       {% endfor %}
 ```
 
+To forward environment variables from the root spread shell into tox/pytest (e.g. CI tokens or job metadata), reference `env` in the template. Spread sets `SPREAD_JOB` automatically for every task:
+
+```yaml
+integration-suites:
+  tests/integration/:
+    pytest-environment-template: |
+      SPREAD_JOB={{ env.get("SPREAD_JOB", "") }}
+      GITHUB_TOKEN={{ env.get("GITHUB_TOKEN", "") }}
+```
+
 The `--suite` flag selects a specific integration suite (useful in monorepos with multiple test directories):
 
 ```bash
@@ -349,7 +359,7 @@ Controls how `opcli pytest run` and `opcli pytest expand` pass extra flags to th
 
 When no template is specified, `opcli pytest` runs bare `tox -e integration` with no extra flags. Artifact fixtures are provided by the pytest-opcli plugin automatically. Use `pytest-arguments-template` to pass additional options (Juju model name, test selection flags, etc.):
 
-**Template context:** `artifacts` (full `ArtifactsGenerated` model) and `arch` (current architecture string).
+**Template context:** `artifacts` (full `ArtifactsGenerated` model), `arch` (current architecture string), and `env` (snapshot of the current process environment). Because `opcli pytest expand` runs as root inside the spread task, `env` captures root's environment. Use `env.get("VAR", "")` for optional variables.
 
 For projects with multiple suites, use a YAML anchor to avoid repetition:
 
