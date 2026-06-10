@@ -13,11 +13,21 @@ Template context:
     arch: The current machine architecture (e.g. "amd64", "arm64") — a
         convenience variable for filtering builds in Jinja2 expressions.
     env: A snapshot of the current process environment (``dict(os.environ)``)
-        at the time the template is rendered.  Use ``env.get("VAR", "")`` to
-        safely reference optional variables.  Because ``opcli pytest expand``
+        at the time the template is rendered.  Because ``opcli pytest expand``
         runs as root inside a spread task, root's environment is captured here
         and the rendered values are baked into the ``$PYTEST_CMD`` string that
         is later passed to ``runuser``, making the variables available to tox.
+
+        Access patterns:
+        - ``env.get("VAR", "")`` — returns the default when the variable is
+          absent; recommended for optional variables.
+        - ``{{ env.VAR }}`` or ``{{ env["VAR"] }}`` — raises ``ConfigurationError``
+          if the variable is not set; use as a self-documenting assertion that a
+          variable must be present.
+
+        Note: variables forwarded via ``pytest-environment-template`` only reach
+        pytest if tox also passes them through.  Add them to ``passenv`` in
+        ``tox.ini``.
 
 The rendered output is parsed into:
     - CLI arguments (whitespace-split tokens) for ``pytest-arguments-template``
