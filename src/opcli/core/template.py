@@ -122,7 +122,10 @@ def _render_template(root: Path, template_str: str, template_name: str) -> str:
     try:
         return template.render(context)
     except UndefinedError as exc:
-        msg = f"Undefined variable in {template_name}: {exc}"
+        hint = ""
+        if "dict object" in str(exc):
+            hint = ' Tip: use env.get("VAR", "") to safely reference optional variables.'
+        msg = f"Undefined variable in {template_name}: {exc}.{hint}"
         raise ConfigurationError(msg) from exc
     except SecurityError as exc:
         msg = f"Unsafe operation in {template_name}: {exc}"

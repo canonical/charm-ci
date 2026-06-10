@@ -194,6 +194,18 @@ integration-suites:
       GITHUB_TOKEN={{ env.get("GITHUB_TOKEN", "") }}
 ```
 
+> **Important:** variables forwarded via the template are only available to pytest if tox also passes them through. Add them to `passenv` in your `tox.ini`:
+> ```ini
+> [testenv:integration]
+> passenv =
+>     SPREAD_JOB
+>     GITHUB_TOKEN
+> ```
+
+**`env` access patterns:**
+- `env.get("VAR", "")` — safe, returns the default if the variable is absent (recommended for optional vars)
+- `env.VAR` or `env["VAR"]` — strict, raises `ConfigurationError` if the variable is not set (useful as a self-documenting "this must be set" assertion)
+
 The `--suite` flag selects a specific integration suite (useful in monorepos with multiple test directories):
 
 ```bash

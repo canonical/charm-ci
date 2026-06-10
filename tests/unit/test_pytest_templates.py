@@ -294,6 +294,17 @@ class TestRenderEnvironmentTemplate:
         ):
             render_environment_template(tmp_path, template)
 
+    def test_env_missing_var_error_includes_get_hint(self, tmp_path: Path) -> None:
+        """Error message for a missing env key hints at env.get()."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = "BAD={{ env.SURELY_ABSENT_OPCLI_VAR }}"
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            pytest.raises(ConfigurationError, match=r"env\.get"),
+        ):
+            render_environment_template(tmp_path, template)
+
 
 class TestAssembleToxArgvWithTemplate:
     """Tests for assemble_tox_argv with suite_config templates."""
