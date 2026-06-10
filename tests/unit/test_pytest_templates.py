@@ -204,6 +204,19 @@ class TestRenderArgumentsTemplate:
         ):
             render_arguments_template(tmp_path, malicious)
 
+    def test_env_context_in_arguments_template(self, tmp_path: Path) -> None:
+        """``env`` is available in pytest-arguments-template, not just environment-template."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = '--model={{ env.get("MY_JUJU_MODEL_OPCLI", "default") }}'
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            patch.dict("os.environ", {"MY_JUJU_MODEL_OPCLI": "testing"}),
+        ):
+            result = render_arguments_template(tmp_path, template)
+
+        assert result == ["--model=testing"]
+
 
 class TestRenderEnvironmentTemplate:
     """Tests for render_environment_template()."""

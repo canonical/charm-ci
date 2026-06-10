@@ -163,6 +163,16 @@ integration-suites:
       --keep-models
 ```
 
+`env` is available in both templates. Use it in `pytest-arguments-template` to inject dynamic values — for example reading the Juju model name from an environment variable:
+
+```yaml
+integration-suites:
+  tests/integration/:
+    pytest-arguments-template: |
+      --model={{ env.get("JUJU_MODEL", "testing") }}
+      --keep-models
+```
+
 To pass artifacts as environment variables instead of fixtures:
 
 ```yaml
