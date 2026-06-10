@@ -163,6 +163,16 @@ integration-suites:
       --keep-models
 ```
 
+`env` is available in both templates. Use it in `pytest-arguments-template` to inject dynamic values — for example reading the Juju model name from an environment variable:
+
+```yaml
+integration-suites:
+  tests/integration/:
+    pytest-arguments-template: |
+      --model={{ env.get("JUJU_MODEL", "testing") }}
+      --keep-models
+```
+
 To pass artifacts as environment variables instead of fixtures:
 
 ```yaml
@@ -173,6 +183,28 @@ integration-suites:
       CHARM_PATH={{ build.path }}
       {% endfor %}
 ```
+
+To forward environment variables from the root spread shell into tox/pytest (e.g. CI tokens or job metadata), reference `env` in the template. Spread sets `SPREAD_JOB` automatically for every task:
+
+```yaml
+integration-suites:
+  tests/integration/:
+    pytest-environment-template: |
+      SPREAD_JOB={{ env.get("SPREAD_JOB", "") }}
+      GITHUB_TOKEN={{ env.get("GITHUB_TOKEN", "") }}
+```
+
+> **Important:** variables forwarded via the template are only available to pytest if tox also passes them through. Add them to `passenv` in your `tox.ini`:
+> ```ini
+> [testenv:integration]
+> passenv =
+>     SPREAD_JOB
+>     GITHUB_TOKEN
+> ```
+
+**`env` access patterns:**
+- `env.get("VAR", "")` — safe, returns the default if the variable is absent (recommended for optional vars)
+- `env.VAR` or `env["VAR"]` — strict, raises `ConfigurationError` if the variable is not set (useful as a self-documenting "this must be set" assertion)
 
 The `--suite` flag selects a specific integration suite (useful in monorepos with multiple test directories):
 
@@ -349,7 +381,7 @@ Controls how `opcli pytest run` and `opcli pytest expand` pass extra flags to th
 
 When no template is specified, `opcli pytest` runs bare `tox -e integration` with no extra flags. Artifact fixtures are provided by the pytest-opcli plugin automatically. Use `pytest-arguments-template` to pass additional options (Juju model name, test selection flags, etc.):
 
-**Template context:** `artifacts` (full `ArtifactsGenerated` model) and `arch` (current architecture string).
+**Template context:** `artifacts` (full `ArtifactsGenerated` model), `arch` (current architecture string), and `env` (snapshot of the current process environment). Because `opcli pytest expand` runs as root inside the spread task, `env` captures root's environment. Use `env.get("VAR", "")` for optional variables.
 
 For projects with multiple suites, use a YAML anchor to avoid repetition:
 

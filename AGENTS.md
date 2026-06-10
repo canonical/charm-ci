@@ -169,10 +169,32 @@ These keys control how `opcli pytest run/expand` passes artifacts to the test fr
 **Template context variables:**
 - `artifacts` — full `ArtifactsGenerated` model from `artifacts.build.yaml` (all charms, rocks, snaps with all builds across all architectures and bases)
 - `arch` — current machine architecture (e.g. `amd64`, `arm64`)
+- `env` — snapshot of the current process environment (`dict(os.environ)`). Available in **both** `pytest-arguments-template` and `pytest-environment-template`. Because `opcli pytest expand` runs as root inside the spread task, root's environment variables are captured here and baked into the rendered `$PYTEST_CMD` string, which is then passed to `runuser`.
+
+**`env` access patterns:**
+- `env.get("VAR", "")` — safe, returns the default if absent (recommended for optional vars)
+- `env.VAR` or `env["VAR"]` — strict, raises `ConfigurationError` if not set
+
+**`passenv` requirement:** variables forwarded via `pytest-environment-template` only reach pytest if tox also passes them through. Add forwarded vars to `passenv` in `tox.ini`:
+```ini
+[testenv:integration]
+passenv =
+    SPREAD_JOB
+    GITHUB_TOKEN
+```
 
 **Default behavior (no template):** Generates `--charm-file=<path>` and `--<rock>-image=<ref>` CLI flags (pfe-style), filtered to the current machine's architecture.
 
-**Example:**
+**Example — env in pytest-arguments-template:**
+```yaml
+integration-suites:
+  tests/integration/:
+    pytest-arguments-template: |
+      --model={{ env.get("JUJU_MODEL", "testing") }}
+      --keep-models
+```
+
+**Example — env in pytest-environment-template:**
 ```yaml
 integration-suites:
   tests/integration/:
@@ -180,6 +202,7 @@ integration-suites:
       {% for build in artifacts.charms[0].builds if build.arch == arch %}
       CHARM_PATH={{ build.path }}
       {% endfor %}
+      SPREAD_JOB={{ env.get("SPREAD_JOB", "") }}
 ```
 
 ---

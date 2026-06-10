@@ -2,6 +2,7 @@
 # See LICENSE file for licensing details.
 """Tests for pytest Jinja2 template rendering and integration."""
 
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -203,6 +204,19 @@ class TestRenderArgumentsTemplate:
         ):
             render_arguments_template(tmp_path, malicious)
 
+    def test_env_context_in_arguments_template(self, tmp_path: Path) -> None:
+        """``env`` is available in pytest-arguments-template, not just environment-template."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = '--model={{ env.get("MY_JUJU_MODEL_OPCLI", "default") }}'
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            patch.dict("os.environ", {"MY_JUJU_MODEL_OPCLI": "testing"}),
+        ):
+            result = render_arguments_template(tmp_path, template)
+
+        assert result == ["--model=testing"]
+
 
 class TestRenderEnvironmentTemplate:
     """Tests for render_environment_template()."""
@@ -247,6 +261,49 @@ class TestRenderEnvironmentTemplate:
             result = render_environment_template(tmp_path, template)
 
         assert result == {"IMAGE": "ghcr.io/org/img:tag=latest"}
+
+    def test_env_context_renders_existing_var(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = "MY_VAR={{ env.MY_TEST_VAR_OPCLI }}"
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            patch.dict("os.environ", {"MY_TEST_VAR_OPCLI": "hello-world"}),
+        ):
+            result = render_environment_template(tmp_path, template)
+
+        assert result == {"MY_VAR": "hello-world"}
+
+    def test_env_context_get_with_default(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = 'OPTIONAL={{ env.get("SURELY_ABSENT_OPCLI_VAR", "fallback") }}'
+        with patch("opcli.core.template.current_arch", return_value="amd64"):
+            result = render_environment_template(tmp_path, template)
+
+        assert result == {"OPTIONAL": "fallback"}
+
+    def test_env_context_missing_var_strict_raises(self, tmp_path: Path) -> None:
+        """Accessing a missing env key via attribute notation raises ConfigurationError."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = "BAD={{ env.SURELY_ABSENT_OPCLI_VAR }}"
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            pytest.raises(ConfigurationError, match="Undefined variable"),
+        ):
+            render_environment_template(tmp_path, template)
+
+    def test_env_missing_var_error_includes_get_hint(self, tmp_path: Path) -> None:
+        """Error message for a missing env key hints at env.get()."""
+        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+
+        template = "BAD={{ env.SURELY_ABSENT_OPCLI_VAR }}"
+        with (
+            patch("opcli.core.template.current_arch", return_value="amd64"),
+            pytest.raises(ConfigurationError, match=r"env\.get"),
+        ):
+            render_environment_template(tmp_path, template)
 
 
 class TestAssembleToxArgvWithTemplate:
@@ -536,3 +593,67 @@ class TestExpandCdPrefix:
         assert result.exit_code == 0, result.output
         assert result.output.startswith("cd sub-charm && ")
         assert "CHARM_PATH=" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Examples project — smoke test the real examples/spread.yaml env template
+# ---------------------------------------------------------------------------
+
+_EXAMPLES_DIR = Path(__file__).parent.parent.parent / "examples"
+
+_EXAMPLES_ARTIFACTS_BUILD = """\
+version: 1
+rocks:
+- name: k8s-rock
+  rockcraft-yaml: k8s-rock/rockcraft.yaml
+  builds:
+  - arch: amd64
+    file: k8s-rock_amd64.rock
+    image: ghcr.io/canonical/k8s-rock:latest
+charms:
+- name: machine-charm
+  charmcraft-yaml: machine-charm/charmcraft.yaml
+  builds:
+  - arch: amd64
+    path: machine-charm_ubuntu-24.04-amd64.charm
+- name: k8s-charm
+  charmcraft-yaml: k8s-charm/charmcraft.yaml
+  builds:
+  - arch: amd64
+    path: k8s-charm_ubuntu-24.04-amd64.charm
+snaps: []
+"""
+
+
+class TestExamplesEnvTemplate:
+    """Verify that examples/spread.yaml's pytest-environment-template actually renders env vars.
+
+    Uses the real examples/spread.yaml so that any change to the examples file
+    is reflected here without having to update a separate test fixture.
+    """
+
+    def test_spread_job_rendered_from_examples_spread_yaml(self, tmp_path: Path) -> None:
+        """SPREAD_JOB from env is rendered into KEY=VALUE by the examples template."""
+        shutil.copy(_EXAMPLES_DIR / "spread.yaml", tmp_path / "spread.yaml")
+        write_file(tmp_path / "artifacts.build.yaml", _EXAMPLES_ARTIFACTS_BUILD)
+        (tmp_path / "tests" / "integration").mkdir(parents=True)
+        (tmp_path / "tests" / "integration" / "test_k8s_charm.py").touch()
+        (tmp_path / "tests" / "integration" / "test_machine_charm.py").touch()
+
+        suite_cfg = get_suite_config(tmp_path, suite="tests/integration/")
+        env_template = suite_cfg.get("pytest-environment-template")
+        assert isinstance(env_template, str), (
+            "examples/spread.yaml missing pytest-environment-template"
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"SPREAD_JOB": "integration-test:ubuntu-24.04:tests/integration/run:test_k8s_charm"},
+        ):
+            result = render_environment_template(tmp_path, env_template)
+
+        assert "SPREAD_JOB" in result
+        assert (
+            result["SPREAD_JOB"]
+            == "integration-test:ubuntu-24.04:tests/integration/run:test_k8s_charm"
+        )

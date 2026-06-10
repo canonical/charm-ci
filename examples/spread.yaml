@@ -25,6 +25,11 @@ x-pytest-args: &pytest-args
   pytest-arguments-template: |
     --model testing
     --keep-models
+  # env exposes the current process environment to the template.
+  # SPREAD_JOB is set automatically by spread for every task execution.
+  # Use env.get("VAR", "") to safely reference optional variables.
+  pytest-environment-template: |
+    SPREAD_JOB={{ env.get("SPREAD_JOB", "") }}
 
 integration-suites:
   # Top-level integration tests (multi-charm, working-dir is project root)

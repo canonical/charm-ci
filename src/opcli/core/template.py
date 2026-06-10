@@ -12,12 +12,29 @@ Template context:
         with all builds across all architectures and bases).
     arch: The current machine architecture (e.g. "amd64", "arm64") — a
         convenience variable for filtering builds in Jinja2 expressions.
+    env: A snapshot of the current process environment (``dict(os.environ)``)
+        at the time the template is rendered.  Because ``opcli pytest expand``
+        runs as root inside a spread task, root's environment is captured here
+        and the rendered values are baked into the ``$PYTEST_CMD`` string that
+        is later passed to ``runuser``, making the variables available to tox.
+
+        Access patterns:
+        - ``env.get("VAR", "")`` — returns the default when the variable is
+          absent; recommended for optional variables.
+        - ``{{ env.VAR }}`` or ``{{ env["VAR"] }}`` — raises ``ConfigurationError``
+          if the variable is not set; use as a self-documenting assertion that a
+          variable must be present.
+
+        Note: variables forwarded via ``pytest-environment-template`` only reach
+        pytest if tox also passes them through.  Add them to ``passenv`` in
+        ``tox.ini``.
 
 The rendered output is parsed into:
     - CLI arguments (whitespace-split tokens) for ``pytest-arguments-template``
     - Environment variables (KEY=VALUE lines) for ``pytest-environment-template``
 """
 
+import os
 import shlex
 from pathlib import Path
 
@@ -115,7 +132,10 @@ def _render_template(root: Path, template_str: str, template_name: str) -> str:
     try:
         return template.render(context)
     except UndefinedError as exc:
-        msg = f"Undefined variable in {template_name}: {exc}"
+        hint = ""
+        if "dict object" in str(exc):
+            hint = ' Tip: use env.get("VAR", "") to safely reference optional variables.'
+        msg = f"Undefined variable in {template_name}: {exc}.{hint}"
         raise ConfigurationError(msg) from exc
     except SecurityError as exc:
         msg = f"Unsafe operation in {template_name}: {exc}"
@@ -139,8 +159,15 @@ def _load_artifacts(root: Path) -> ArtifactsGenerated:
 
 
 def _build_context(artifacts: ArtifactsGenerated) -> dict[str, object]:
-    """Build the Jinja2 template context dictionary."""
+    """Build the Jinja2 template context dictionary.
+
+    Returns a dict with:
+        artifacts: Full ``ArtifactsGenerated`` model.
+        arch: Current machine architecture string.
+        env: Snapshot of the current process environment.
+    """
     return {
         "artifacts": artifacts,
         "arch": current_arch(),
+        "env": dict(os.environ),
     }
