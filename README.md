@@ -297,6 +297,7 @@ integration-suites:
   # Monorepo pattern — sub-charm with its own tests
   k8s-charm/tests/integration/:
     working-dir: k8s-charm/
+    discover-path: k8s-charm/tests/integration/
     summary: k8s-charm sub-charm tests
     backends:
       - integration-test
@@ -315,6 +316,7 @@ integration-suites:
 At expand time, `integration-suites` entries are converted into native spread `suites:` entries with:
 - **Auto-discovery** (default): scans the suite directory for `test_*.py` files and generates `MODULE/<name>` spread variants.
 - **`working-dir`**: tells `opcli pytest` which directory to run pytest from. Defaults to `./` (project root).
+- **`discover-path`**: overrides the directory scanned for auto-discovery. When omitted, opcli uses the suite key path.
 - **`task.yaml` generation**: written into the `build/` directory at runtime (e.g. `build/tests/integration/run/task.yaml`). Files persist for inspection and are overwritten on next run. Add `build/` to your `.gitignore`.
 - **`discover-pattern`**: customize the glob for auto-discovery (e.g., `discover-pattern: "test_*.py"` is the default; use `"*_test.py"` if your project uses that convention).
 
@@ -327,6 +329,7 @@ At expand time, `integration-suites` entries are converted into native spread `s
 | Key | Default | Description |
 |---|---|---|
 | `working-dir` | `./` | Working directory for pytest invocation (opcli-only, stripped from spread output) |
+| `discover-path` | (suite key) | Directory scanned for auto-discovery; overrides the suite key path when set |
 | `auto-discover` | `true` | Scan for `test_*.py` and generate `MODULE/` variants |
 | `discover-pattern` | `test_*.py` | Glob pattern for auto-discovery |
 | `pytest-arguments-template` | — | Jinja2 template for pytest CLI args (opcli-only, stripped) |
