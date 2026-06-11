@@ -64,6 +64,18 @@ resource_images
             juju.deploy(charm_path, resources=resource_images)
             juju.wait(jubilant.all_active)
 
+charm_resource_images
+    ``{charm_name: {resource_name: image_ref}}`` -- OCI resource images for every
+    charm, keyed first by charm name then by resource name.
+    yaml mode only (no CLI-flag equivalent); requires ``artifacts.build.yaml``.
+
+    Example::
+
+        def test_deploy(juju, charm_paths, charm_resource_images):
+            juju.deploy(charm_paths['my-charm'].path,
+                        resources=charm_resource_images['my-charm'])
+            juju.wait(jubilant.all_active)
+
 Helpers (for multi-charm conftest patterns)
 -------------------------------------------
 build_rock_images
@@ -314,6 +326,8 @@ def resource_images(request: pytest.FixtureRequest) -> dict[str, str]:
     CLI mode: all ``--resource-image name=ref`` entries as ``{name: ref}``.
     yaml mode: resolves resource → rock → image for the single charm.
 
+    Single-charm only; for multi-charm repos use :func:`charm_resource_images`.
+
     Example::
 
         def test_deploy(juju, charm_path, resource_images):
@@ -341,6 +355,32 @@ def resource_images(request: pytest.FixtureRequest) -> dict[str, str]:
     artifacts = load_artifacts_build(yaml_path)
     rock_imgs = build_rock_images(artifacts, yaml_path.parent)
     return _build_resource_images(artifacts, rock_imgs)
+
+
+@pytest.fixture(scope="session")
+def charm_resource_images(request: pytest.FixtureRequest) -> dict[str, dict[str, str]]:
+    """OCI-image resources keyed by charm name, then by resource name.
+
+    yaml mode only — always requires ``artifacts.build.yaml``.
+    No CLI-flag equivalent; use :func:`resource_images` for single-charm CLI workflows.
+    Returns ``{charm_name: {resource_name: image_ref}}`` for every charm.
+
+    Example::
+
+        def test_deploy(juju, charm_paths, charm_resource_images):
+            juju.deploy(charm_paths['my-charm'].path,
+                        resources=charm_resource_images['my-charm'])
+            juju.wait(jubilant.all_active)
+    """
+    yaml_path = _discover_artifacts_build(
+        request.config,
+        hint="run 'opcli artifacts build' to create artifacts.build.yaml",
+    )
+    from opcli.core.yaml_io import load_artifacts_build
+
+    artifacts = load_artifacts_build(yaml_path)
+    rock_imgs = build_rock_images(artifacts, yaml_path.parent)
+    return _build_charm_resource_images(artifacts, rock_imgs)
 
 
 # ---------------------------------------------------------------------------
@@ -495,8 +535,7 @@ def _build_resource_images(
         names = [c.name for c in charms]
         pytest.fail(
             f"resource_images: multiple charms found ({names!r}); "
-            "for multi-charm repos, define a local rock_images fixture in conftest.py "
-            "using opcli.pytest_plugin.build_rock_images"
+            "use the charm_resource_images fixture for multi-charm repos"
         )
     charm = charms[0]
     result: dict[str, str] = {}
@@ -510,6 +549,32 @@ def _build_resource_images(
                 f"which is not in rock_imgs (available: {available!r})"
             )
         result[res_name] = rock_imgs[res.rock]
+    return result
+
+
+def _build_charm_resource_images(
+    artifacts: ArtifactsGenerated,
+    rock_imgs: dict[str, str],
+) -> dict[str, dict[str, str]]:
+    """Core logic for the ``charm_resource_images`` fixture."""
+    charms = artifacts.charms
+    if not charms:
+        pytest.fail("charm_resource_images: no charms found in artifacts.build.yaml")
+    result: dict[str, dict[str, str]] = {}
+    for charm in charms:
+        charm_result: dict[str, str] = {}
+        for res_name, res in (charm.resources or {}).items():
+            if not res.rock:
+                continue
+            if res.rock not in rock_imgs:
+                available = sorted(rock_imgs)
+                pytest.fail(
+                    f"charm_resource_images: charm '{charm.name}' resource '{res_name}' "
+                    f"references rock '{res.rock}' "
+                    f"which is not in rock_imgs (available: {available!r})"
+                )
+            charm_result[res_name] = rock_imgs[res.rock]
+        result[charm.name] = charm_result
     return result
 
 
@@ -592,6 +657,7 @@ __all__ = [
     "build_rock_images",
     "charm_path",
     "charm_paths",
+    "charm_resource_images",
     "opcli_artifacts",
     "opcli_build_yaml_path",
     "resource_images",

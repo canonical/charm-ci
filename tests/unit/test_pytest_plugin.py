@@ -13,6 +13,7 @@ from opcli.pytest_plugin import (
     CharmPathList,
     _build_charm_path,
     _build_charm_paths,
+    _build_charm_resource_images,
     _build_resource_images,
     _discover_artifacts_build,
     _parse_kv_flags,
@@ -26,6 +27,9 @@ from opcli.pytest_plugin import (
 )
 from opcli.pytest_plugin import (
     charm_paths as _charm_paths_fixture,
+)
+from opcli.pytest_plugin import (
+    charm_resource_images as _charm_resource_images_fixture,
 )
 from opcli.pytest_plugin import (
     resource_images as _resource_images_fixture,
@@ -710,6 +714,115 @@ class TestBuildResourceImages:
 
 
 # ---------------------------------------------------------------------------
+# _build_charm_resource_images
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCharmResourceImages:
+    def _arts_two_charms(self) -> ArtifactsGenerated:
+        return ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "rocks": [
+                    {
+                        "name": "rock-a",
+                        "rockcraft-yaml": "ra.yaml",
+                        "builds": [{"arch": "amd64", "image": "ghcr.io/org/rock-a:1.0"}],
+                    },
+                    {
+                        "name": "rock-b",
+                        "rockcraft-yaml": "rb.yaml",
+                        "builds": [{"arch": "amd64", "image": "ghcr.io/org/rock-b:1.0"}],
+                    },
+                ],
+                "charms": [
+                    {
+                        "name": "charm-a",
+                        "charmcraft-yaml": "a.yaml",
+                        "builds": [{"arch": "amd64", "path": "./a.charm"}],
+                        "resources": {"oci-image": {"type": "oci-image", "rock": "rock-a"}},
+                    },
+                    {
+                        "name": "charm-b",
+                        "charmcraft-yaml": "b.yaml",
+                        "builds": [{"arch": "amd64", "path": "./b.charm"}],
+                        "resources": {"oci-image": {"type": "oci-image", "rock": "rock-b"}},
+                    },
+                ],
+            }
+        )
+
+    def test_multi_charm_returns_nested_dict(self) -> None:
+        arts = self._arts_two_charms()
+        rock_imgs = {"rock-a": "ghcr.io/org/rock-a:1.0", "rock-b": "ghcr.io/org/rock-b:1.0"}
+        result = _build_charm_resource_images(arts, rock_imgs)
+        assert result == {
+            "charm-a": {"oci-image": "ghcr.io/org/rock-a:1.0"},
+            "charm-b": {"oci-image": "ghcr.io/org/rock-b:1.0"},
+        }
+
+    def test_single_charm_returns_single_entry_dict(self) -> None:
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "mycharm",
+                        "charmcraft-yaml": "c.yaml",
+                        "builds": [{"arch": "amd64", "path": "./mycharm.charm"}],
+                        "resources": {"myrock-image": {"type": "oci-image", "rock": "myrock"}},
+                    }
+                ],
+            }
+        )
+        result = _build_charm_resource_images(arts, {"myrock": "ghcr.io/org/myrock:1.0"})
+        assert result == {"mycharm": {"myrock-image": "ghcr.io/org/myrock:1.0"}}
+
+    def test_charm_with_no_rock_resources_gets_empty_dict(self) -> None:
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "mycharm",
+                        "charmcraft-yaml": "c.yaml",
+                        "builds": [{"arch": "amd64", "path": "./mycharm.charm"}],
+                        "resources": {"standalone-image": {"type": "oci-image"}},
+                    }
+                ],
+            }
+        )
+        result = _build_charm_resource_images(arts, {})
+        assert result == {"mycharm": {}}
+
+    def test_fails_no_charms(self) -> None:
+        arts = ArtifactsGenerated(version=1)
+        with pytest.raises(pytest.fail.Exception, match="no charms"):
+            _build_charm_resource_images(arts, {})
+
+    def test_fails_unresolved_rock(self) -> None:
+        with pytest.raises(pytest.fail.Exception, match="missing-rock"):
+            _build_charm_resource_images(
+                ArtifactsGenerated.model_validate(
+                    {
+                        "version": 1,
+                        "charms": [
+                            {
+                                "name": "mycharm",
+                                "charmcraft-yaml": "c.yaml",
+                                "builds": [{"arch": "amd64", "path": "./mycharm.charm"}],
+                                "resources": {
+                                    "oci-image": {"type": "oci-image", "rock": "missing-rock"}
+                                },
+                            }
+                        ],
+                    }
+                ),
+                {},
+            )
+
+
+# ---------------------------------------------------------------------------
 # _parse_kv_flags
 # ---------------------------------------------------------------------------
 
@@ -836,3 +949,80 @@ class TestCliMode:
         request.config = config
         with pytest.raises(pytest.UsageError, match="--resource-image"):
             _resource_images_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+
+    # ---------- resource_images multi-charm failure message ----------
+
+    def test_resource_images_multi_charm_points_to_charm_resource_images(
+        self, tmp_path: Path
+    ) -> None:
+        """Multi-charm fail message should guide users to charm_resource_images."""
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "charm-a",
+                        "charmcraft-yaml": "a.yaml",
+                        "builds": [{"arch": "amd64", "path": "./a.charm"}],
+                    },
+                    {
+                        "name": "charm-b",
+                        "charmcraft-yaml": "b.yaml",
+                        "builds": [{"arch": "amd64", "path": "./b.charm"}],
+                    },
+                ],
+            }
+        )
+        with pytest.raises(pytest.fail.Exception, match="charm_resource_images"):
+            _build_resource_images(arts, {})
+
+
+# ---------------------------------------------------------------------------
+# charm_resource_images fixture (public contract)
+# ---------------------------------------------------------------------------
+
+
+class TestCharmResourceImagesFixture:
+    """Fixture-level tests for charm_resource_images."""
+
+    def test_no_yaml_raises_usage_error(self, tmp_path: Path) -> None:
+        """Missing artifacts.build.yaml raises UsageError with helpful hint."""
+        config = _mock_config(tmp_path)
+        request = MagicMock()
+        request.config = config
+        with pytest.raises(pytest.UsageError, match="opcli artifacts build"):
+            _charm_resource_images_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+
+    def test_yaml_mode_returns_nested_dict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fixture resolves resources from artifacts.build.yaml correctly."""
+        monkeypatch.setenv(_ARCH.replace("opcli.core.env.", ""), "amd64")
+        yaml_file = tmp_path / "artifacts.build.yaml"
+        yaml_file.write_text(
+            "version: 1\n"
+            "rocks:\n"
+            "  - name: myrock\n"
+            "    rockcraft-yaml: r.yaml\n"
+            "    builds:\n"
+            "      - arch: amd64\n"
+            "        image: ghcr.io/org/myrock:1.0\n"
+            "charms:\n"
+            "  - name: mycharm\n"
+            "    charmcraft-yaml: c.yaml\n"
+            "    builds:\n"
+            "      - arch: amd64\n"
+            "        path: ./mycharm.charm\n"
+            "    resources:\n"
+            "      oci-image:\n"
+            "        type: oci-image\n"
+            "        rock: myrock\n"
+        )
+        config = _mock_config(str(tmp_path))
+        request = MagicMock()
+        request.config = config
+
+        with patch(_ARCH, return_value="amd64"):
+            result = _charm_resource_images_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+
+        assert result == {"mycharm": {"oci-image": "ghcr.io/org/myrock:1.0"}}
