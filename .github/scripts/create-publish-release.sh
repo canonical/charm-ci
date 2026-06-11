@@ -12,6 +12,35 @@
 
 set -euo pipefail
 
+find_previous_release_tag() {
+  local charm_name="$1"
+  local revision="$2"
+  local tag_prefix="${charm_name}-rev"
+  local previous_tag
+
+  while IFS= read -r previous_tag; do
+    if gh release view "${previous_tag}" > /dev/null 2>&1; then
+      echo "${previous_tag}"
+      return 0
+    fi
+  done < <(
+    git ls-remote --tags --refs origin "${tag_prefix}*" \
+      | awk -v prefix="refs/tags/${tag_prefix}" -v current="${revision}" '
+      {
+        ref = $2
+        if (index(ref, prefix) == 1) {
+          rev = substr(ref, length(prefix) + 1)
+          if (rev ~ /^[0-9]+$/ && rev + 0 < current + 0) {
+            print rev
+          }
+        }
+      }
+    ' \
+      | sort -nr \
+      | awk -v prefix="${tag_prefix}" '{ print prefix $1 }'
+  )
+}
+
 if [ ! -f publish-results.json ]; then
   echo "::error::publish-results.json not found"
   exit 1
@@ -60,8 +89,23 @@ while IFS= read -r charm_entry; do
       BODY+="${resources}"$'\n'
     fi
 
-    git tag "${TAG}"
-    git push origin "${TAG}"
-    gh release create "${TAG}" --title "${TITLE}" --notes "${BODY}"
+    notes_file="$(mktemp)"
+    printf "%s" "${BODY}" > "${notes_file}"
+
+    release_args=(
+      release create "${TAG}"
+      --title "${TITLE}"
+      --notes-file "${notes_file}"
+      --generate-notes
+    )
+    previous_tag="$(find_previous_release_tag "${charm_name}" "${revision}")"
+    if [ -n "${previous_tag}" ]; then
+      release_args+=(--notes-start-tag "${previous_tag}")
+    fi
+
+    git tag "${TAG}" "${GITHUB_SHA:-HEAD}"
+    git push origin "refs/tags/${TAG}"
+    gh "${release_args[@]}"
+    rm -f "${notes_file}"
   done < <(echo "$charm_entry" | jq -c '.releases[]')
 done < <(jq -c '.[]' publish-results.json)
