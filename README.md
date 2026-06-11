@@ -451,6 +451,7 @@ All fixtures are session-scoped and architecture-aware (they filter builds to th
 | `charm_path` | `str` | Path to the single built `.charm`. Fails if the repo contains more than one charm, or if the single charm has more than one build for the current arch (use `charm_paths` instead). |
 | `charm_paths` | `dict[str, CharmPathList]` | All `.charm` paths per charm name. Use `.path` for the single-base shortcut, or `['ubuntu@X']` for base-keyed access. |
 | `resource_images` | `dict[str, str]` | `{resource_name: image_ref}`. In yaml mode: resolves each OCI-image resource to its rock image for the single charm. In CLI-flag mode: uses `--resource-image` values directly. Fails if the repo contains zero or more than one charm (yaml mode only). |
+| `charm_resource_images` | `dict[str, dict[str, str]]` | `{charm_name: {resource_name: image_ref}}`. yaml mode only. Resolves OCI-image resources for every charm. Use this instead of `resource_images` in multi-charm repos (e.g. 12-factor charms). |
 | `build_rock_images(artifacts, root)` | `dict[str, str]` | Helper function (not a fixture) — returns `{rock_name: image_ref}` for the current arch. Use in a conftest `rock_images` fixture for multi-charm repos. |
 
 ### Usage examples
@@ -480,7 +481,18 @@ def test_deploy(juju, charm_paths):
     juju.wait(jubilant.all_active)
 ```
 
-**Multi-charm repo (define `rock_images` in `conftest.py`):**
+**Multi-charm repo (e.g. 12-factor charms):**
+
+```python
+def test_deploy(juju, charm_paths, charm_resource_images):
+    juju.deploy(charm_paths["operator"].path,
+                resources=charm_resource_images["operator"])
+    juju.deploy(charm_paths["agent"].path,
+                resources=charm_resource_images["agent"])
+    juju.wait(jubilant.all_active)
+```
+
+**Multi-charm repo (custom `rock_images` in `conftest.py`, advanced):**
 
 ```python
 # conftest.py

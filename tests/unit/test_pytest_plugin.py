@@ -13,6 +13,7 @@ from opcli.pytest_plugin import (
     CharmPathList,
     _build_charm_path,
     _build_charm_paths,
+    _build_charm_resource_images,
     _build_resource_images,
     _discover_artifacts_build,
     _parse_kv_flags,
@@ -707,6 +708,115 @@ class TestBuildResourceImages:
         )
         with pytest.raises(pytest.fail.Exception, match="missing-rock"):
             _build_resource_images(arts, {})
+
+
+# ---------------------------------------------------------------------------
+# _build_charm_resource_images
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCharmResourceImages:
+    def _arts_two_charms(self) -> ArtifactsGenerated:
+        return ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "rocks": [
+                    {
+                        "name": "rock-a",
+                        "rockcraft-yaml": "ra.yaml",
+                        "builds": [{"arch": "amd64", "image": "ghcr.io/org/rock-a:1.0"}],
+                    },
+                    {
+                        "name": "rock-b",
+                        "rockcraft-yaml": "rb.yaml",
+                        "builds": [{"arch": "amd64", "image": "ghcr.io/org/rock-b:1.0"}],
+                    },
+                ],
+                "charms": [
+                    {
+                        "name": "charm-a",
+                        "charmcraft-yaml": "a.yaml",
+                        "builds": [{"arch": "amd64", "path": "./a.charm"}],
+                        "resources": {"oci-image": {"type": "oci-image", "rock": "rock-a"}},
+                    },
+                    {
+                        "name": "charm-b",
+                        "charmcraft-yaml": "b.yaml",
+                        "builds": [{"arch": "amd64", "path": "./b.charm"}],
+                        "resources": {"oci-image": {"type": "oci-image", "rock": "rock-b"}},
+                    },
+                ],
+            }
+        )
+
+    def test_multi_charm_returns_nested_dict(self) -> None:
+        arts = self._arts_two_charms()
+        rock_imgs = {"rock-a": "ghcr.io/org/rock-a:1.0", "rock-b": "ghcr.io/org/rock-b:1.0"}
+        result = _build_charm_resource_images(arts, rock_imgs)
+        assert result == {
+            "charm-a": {"oci-image": "ghcr.io/org/rock-a:1.0"},
+            "charm-b": {"oci-image": "ghcr.io/org/rock-b:1.0"},
+        }
+
+    def test_single_charm_returns_single_entry_dict(self) -> None:
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "mycharm",
+                        "charmcraft-yaml": "c.yaml",
+                        "builds": [{"arch": "amd64", "path": "./mycharm.charm"}],
+                        "resources": {"myrock-image": {"type": "oci-image", "rock": "myrock"}},
+                    }
+                ],
+            }
+        )
+        result = _build_charm_resource_images(arts, {"myrock": "ghcr.io/org/myrock:1.0"})
+        assert result == {"mycharm": {"myrock-image": "ghcr.io/org/myrock:1.0"}}
+
+    def test_charm_with_no_rock_resources_gets_empty_dict(self) -> None:
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "mycharm",
+                        "charmcraft-yaml": "c.yaml",
+                        "builds": [{"arch": "amd64", "path": "./mycharm.charm"}],
+                        "resources": {"standalone-image": {"type": "oci-image"}},
+                    }
+                ],
+            }
+        )
+        result = _build_charm_resource_images(arts, {})
+        assert result == {"mycharm": {}}
+
+    def test_fails_no_charms(self) -> None:
+        arts = ArtifactsGenerated(version=1)
+        with pytest.raises(pytest.fail.Exception, match="no charms"):
+            _build_charm_resource_images(arts, {})
+
+    def test_fails_unresolved_rock(self) -> None:
+        with pytest.raises(pytest.fail.Exception, match="missing-rock"):
+            _build_charm_resource_images(
+                ArtifactsGenerated.model_validate(
+                    {
+                        "version": 1,
+                        "charms": [
+                            {
+                                "name": "mycharm",
+                                "charmcraft-yaml": "c.yaml",
+                                "builds": [{"arch": "amd64", "path": "./mycharm.charm"}],
+                                "resources": {
+                                    "oci-image": {"type": "oci-image", "rock": "missing-rock"}
+                                },
+                            }
+                        ],
+                    }
+                ),
+                {},
+            )
 
 
 # ---------------------------------------------------------------------------
