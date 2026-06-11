@@ -662,6 +662,7 @@ jobs:
       CHARMHUB_TOKEN: ${{ secrets.CHARMHUB_TOKEN }}
     with:
       # channel: latest/edge  # optional
+      # inject-version: true   # optional; set false to publish charms unchanged
       working-directory: .
 ```
 
@@ -669,6 +670,11 @@ The publish workflow also creates one GitHub Release per published charm revisio
 Release bodies start with CharmHub publish metadata (channel, base, architecture,
 and resource revisions) and then include GitHub-generated release notes such as
 the "What's Changed" and "New Contributors" sections.
+Before uploading to CharmHub, the workflow injects a `version` file containing
+the first 8 characters of the publish commit SHA into each fetched `.charm`
+archive, unless that archive already contains a `version` file.
+Set `inject-version: false` to skip this reusable-workflow-only behavior.
+Local `opcli artifacts publish` never modifies charm archives.
 
 Pinning to a SHA or tag automatically installs the matching `opcli` version via `canonical/get-workflow-version-action`.
 

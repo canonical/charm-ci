@@ -41,6 +41,10 @@ on:
         description: "Validate publish without actually uploading to CharmHub"
         type: boolean
         default: false
+      inject-version:
+        description: "Inject a version file with the publish commit SHA into fetched charm archives"
+        type: boolean
+        default: true
     secrets:
       CHARMHUB_TOKEN:
         description: "CharmHub auth token (from charmcraft login --export). Required for cross-org callers; same-org callers may use secrets: inherit."
@@ -135,6 +139,25 @@ jobs:
           opcli artifacts fetch \
             --run-id "${{ needs.resolve-run.outputs.run-id }}" \
             --wait
+
+      - name: Add version file to charms
+        if: inputs.inject-version
+        run: |
+          set -euo pipefail
+
+          CHARM_FILES=()
+          while IFS= read -r -d '' charm_file; do
+            CHARM_FILES+=("${charm_file}")
+          done < <(find . -type f -name '*.charm' -print0)
+
+          if [ "${#CHARM_FILES[@]}" -eq 0 ]; then
+            echo "::error::No .charm files found after fetching build artifacts."
+            exit 1
+          fi
+
+          "${GITHUB_WORKSPACE}/.charm-ci/.github/scripts/inject-charm-version.sh" \
+            "${GITHUB_SHA}" \
+            "${CHARM_FILES[@]}"
 
       - name: Publish to CharmHub
         id: publish

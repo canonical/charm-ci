@@ -1,16 +1,84 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-"""Tests for the publish workflow GitHub release script."""
+"""Tests for publish workflow scripts."""
 
 import json
 import os
 import stat
 import subprocess
+import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parents[2]
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "create-publish-release.sh"
+INJECT_SCRIPT = REPO_ROOT / ".github" / "scripts" / "inject-charm-version.sh"
+
+
+def test_inject_charm_version_adds_short_sha(tmp_path: Path) -> None:
+    charm_path = tmp_path / "test.charm"
+    _write_charm(charm_path)
+
+    result = _run_inject_script(tmp_path, "1234567890abcdef", charm_path)
+
+    assert result.returncode == 0, result.stderr
+    assert _read_charm_file(charm_path, "version") == "12345678\n"
+
+
+def test_inject_charm_version_preserves_existing_version(tmp_path: Path) -> None:
+    charm_path = tmp_path / "test.charm"
+    _write_charm(charm_path, version="custom-version\n")
+
+    result = _run_inject_script(tmp_path, "1234567890abcdef", charm_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "Preserving existing version file" in result.stdout
+    assert _read_charm_file(charm_path, "version") == "custom-version\n"
+
+
+def test_inject_charm_version_handles_multiple_charms(tmp_path: Path) -> None:
+    first_charm = tmp_path / "first.charm"
+    second_charm = tmp_path / "second.charm"
+    _write_charm(first_charm)
+    _write_charm(second_charm)
+
+    result = _run_inject_script(tmp_path, "abcdef1234567890", first_charm, second_charm)
+
+    assert result.returncode == 0, result.stderr
+    assert _read_charm_file(first_charm, "version") == "abcdef12\n"
+    assert _read_charm_file(second_charm, "version") == "abcdef12\n"
+
+
+def test_inject_charm_version_requires_charm_paths(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [str(INJECT_SCRIPT), "1234567890abcdef"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "usage: inject-charm-version.sh" in result.stderr
+
+
+def test_inject_charm_version_fails_when_charm_missing(tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing.charm"
+
+    result = _run_inject_script(tmp_path, "1234567890abcdef", missing_path)
+
+    assert result.returncode == 1
+    assert f"charm file not found: {missing_path}" in result.stderr
+
+
+def test_inject_charm_version_fails_when_charm_is_not_zip(tmp_path: Path) -> None:
+    charm_path = tmp_path / "invalid.charm"
+    charm_path.write_text("not a zip archive\n", encoding="utf-8")
+
+    result = _run_inject_script(tmp_path, "1234567890abcdef", charm_path)
+
+    assert result.returncode == 1
+    assert f"not a valid charm archive: {charm_path}" in result.stderr
 
 
 def test_missing_publish_results_fails(tmp_path: Path) -> None:
@@ -104,6 +172,32 @@ def _write_publish_results(tmp_path: Path, *, charm_name: str, revision: int) ->
         }
     ]
     (tmp_path / "publish-results.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_charm(path: Path, *, version: str | None = None) -> None:
+    with zipfile.ZipFile(path, "w") as charm:
+        charm.writestr("metadata.yaml", "name: test\n")
+        if version is not None:
+            charm.writestr("version", version)
+
+
+def _read_charm_file(path: Path, name: str) -> str:
+    with zipfile.ZipFile(path) as charm:
+        return charm.read(name).decode()
+
+
+def _run_inject_script(
+    tmp_path: Path,
+    commit_sha: str,
+    *charm_paths: Path,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(INJECT_SCRIPT), commit_sha, *(str(path) for path in charm_paths)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def _run_script(
