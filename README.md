@@ -665,6 +665,11 @@ jobs:
       working-directory: .
 ```
 
+The publish workflow also creates one GitHub Release per published charm revision.
+Release bodies start with CharmHub publish metadata (channel, base, architecture,
+and resource revisions) and then include GitHub-generated release notes such as
+the "What's Changed" and "New Contributors" sections.
+
 Pinning to a SHA or tag automatically installs the matching `opcli` version via `canonical/get-workflow-version-action`.
 
 ### Fork PR support
