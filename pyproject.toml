@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "opcli"
-version = "0.0.1-alpha.1"
+version = "0.0.1-alpha.2"
 description = "CLI tool for operator development workflows (Charms, Rocks, Snaps)"
 requires-python = ">=3.12"
 dependencies = [
