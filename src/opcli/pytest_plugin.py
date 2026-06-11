@@ -67,7 +67,7 @@ resource_images
 charm_resource_images
     ``{charm_name: {resource_name: image_ref}}`` -- OCI resource images for every
     charm, keyed first by charm name then by resource name.
-    yaml mode only; requires ``artifacts.build.yaml``.
+    yaml mode only (no CLI-flag equivalent); requires ``artifacts.build.yaml``.
 
     Example::
 
@@ -326,6 +326,8 @@ def resource_images(request: pytest.FixtureRequest) -> dict[str, str]:
     CLI mode: all ``--resource-image name=ref`` entries as ``{name: ref}``.
     yaml mode: resolves resource → rock → image for the single charm.
 
+    Single-charm only; for multi-charm repos use :func:`charm_resource_images`.
+
     Example::
 
         def test_deploy(juju, charm_path, resource_images):
@@ -360,6 +362,7 @@ def charm_resource_images(request: pytest.FixtureRequest) -> dict[str, dict[str,
     """OCI-image resources keyed by charm name, then by resource name.
 
     yaml mode only — always requires ``artifacts.build.yaml``.
+    No CLI-flag equivalent; use :func:`resource_images` for single-charm CLI workflows.
     Returns ``{charm_name: {resource_name: image_ref}}`` for every charm.
 
     Example::
@@ -532,8 +535,7 @@ def _build_resource_images(
         names = [c.name for c in charms]
         pytest.fail(
             f"resource_images: multiple charms found ({names!r}); "
-            "for multi-charm repos, define a local rock_images fixture in conftest.py "
-            "using opcli.pytest_plugin.build_rock_images"
+            "use the charm_resource_images fixture for multi-charm repos"
         )
     charm = charms[0]
     result: dict[str, str] = {}

@@ -29,6 +29,9 @@ from opcli.pytest_plugin import (
     charm_paths as _charm_paths_fixture,
 )
 from opcli.pytest_plugin import (
+    charm_resource_images as _charm_resource_images_fixture,
+)
+from opcli.pytest_plugin import (
     resource_images as _resource_images_fixture,
 )
 
@@ -946,3 +949,80 @@ class TestCliMode:
         request.config = config
         with pytest.raises(pytest.UsageError, match="--resource-image"):
             _resource_images_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+
+    # ---------- resource_images multi-charm failure message ----------
+
+    def test_resource_images_multi_charm_points_to_charm_resource_images(
+        self, tmp_path: Path
+    ) -> None:
+        """Multi-charm fail message should guide users to charm_resource_images."""
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "charm-a",
+                        "charmcraft-yaml": "a.yaml",
+                        "builds": [{"arch": "amd64", "path": "./a.charm"}],
+                    },
+                    {
+                        "name": "charm-b",
+                        "charmcraft-yaml": "b.yaml",
+                        "builds": [{"arch": "amd64", "path": "./b.charm"}],
+                    },
+                ],
+            }
+        )
+        with pytest.raises(pytest.fail.Exception, match="charm_resource_images"):
+            _build_resource_images(arts, {})
+
+
+# ---------------------------------------------------------------------------
+# charm_resource_images fixture (public contract)
+# ---------------------------------------------------------------------------
+
+
+class TestCharmResourceImagesFixture:
+    """Fixture-level tests for charm_resource_images."""
+
+    def test_no_yaml_raises_usage_error(self, tmp_path: Path) -> None:
+        """Missing artifacts.build.yaml raises UsageError with helpful hint."""
+        config = _mock_config(tmp_path)
+        request = MagicMock()
+        request.config = config
+        with pytest.raises(pytest.UsageError, match="opcli artifacts build"):
+            _charm_resource_images_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+
+    def test_yaml_mode_returns_nested_dict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fixture resolves resources from artifacts.build.yaml correctly."""
+        monkeypatch.setenv(_ARCH.replace("opcli.core.env.", ""), "amd64")
+        yaml_file = tmp_path / "artifacts.build.yaml"
+        yaml_file.write_text(
+            "version: 1\n"
+            "rocks:\n"
+            "  - name: myrock\n"
+            "    rockcraft-yaml: r.yaml\n"
+            "    builds:\n"
+            "      - arch: amd64\n"
+            "        image: ghcr.io/org/myrock:1.0\n"
+            "charms:\n"
+            "  - name: mycharm\n"
+            "    charmcraft-yaml: c.yaml\n"
+            "    builds:\n"
+            "      - arch: amd64\n"
+            "        path: ./mycharm.charm\n"
+            "    resources:\n"
+            "      oci-image:\n"
+            "        type: oci-image\n"
+            "        rock: myrock\n"
+        )
+        config = _mock_config(str(tmp_path))
+        request = MagicMock()
+        request.config = config
+
+        with patch(_ARCH, return_value="amd64"):
+            result = _charm_resource_images_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+
+        assert result == {"mycharm": {"oci-image": "ghcr.io/org/myrock:1.0"}}
