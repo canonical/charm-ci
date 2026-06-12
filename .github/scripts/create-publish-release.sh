@@ -25,12 +25,14 @@ find_previous_release_tag() {
     fi
   done < <(
     git ls-remote --tags --refs origin "${tag_prefix}*" \
-      | awk -v prefix="refs/tags/${tag_prefix}" -v current="${revision}" '
+      | awk -v prefix="refs/tags/${tag_prefix}" -v current="${revision}" \
+            -v skip_sha="${GITHUB_SHA:-}" '
       {
+        sha = $1
         ref = $2
         if (index(ref, prefix) == 1) {
           rev = substr(ref, length(prefix) + 1)
-          if (rev ~ /^[0-9]+$/ && rev + 0 < current + 0) {
+          if (rev ~ /^[0-9]+$/ && rev + 0 < current + 0 && sha != skip_sha) {
             print rev
           }
         }
