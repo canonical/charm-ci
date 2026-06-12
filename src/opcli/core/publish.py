@@ -21,6 +21,7 @@ from ruamel.yaml.error import YAMLError
 
 from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML
 from opcli.core.exceptions import ConfigurationError, DiscoveryError
+from opcli.core.pack_utils import resolve_pack_dir, with_pack_yaml_symlink
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
 from opcli.core.yaml_io import load_artifacts_build, load_artifacts_plan, load_yaml
@@ -113,16 +114,14 @@ def artifacts_publish(
 
     generated = load_artifacts_build(gen_path)
 
-    # Load per-charm channel defaults from artifacts.yaml only when --channel
-    # is not provided.  This keeps publish self-contained when an explicit
-    # channel is given, and avoids failures from unrelated artifacts.yaml
-    # changes when a global channel override is in use.
+    # Load artifacts.yaml for per-charm channel defaults and pack-dir config.
+    # Always loaded (not just when --channel is absent) because pack-dir is
+    # needed to replicate the same working directory used during charmcraft pack.
     plan_charms: dict[str, CharmArtifact] = {}
-    if channel is None:
-        plan_path = root / ARTIFACTS_YAML
-        if plan_path.exists():
-            plan = load_artifacts_plan(plan_path)
-            plan_charms = {c.name: c for c in plan.charms}
+    plan_path = root / ARTIFACTS_YAML
+    if plan_path.exists():
+        plan = load_artifacts_plan(plan_path)
+        plan_charms = {c.name: c for c in plan.charms}
 
     charms = _select_charms(generated, charm_names)
     rocks_by_name = {r.name: r for r in generated.rocks}
@@ -145,13 +144,13 @@ def artifacts_publish(
         )
 
     if dry_run:
-        _print_dry_run(charms, rocks_by_name, plan_resources, charm_channels, root)
+        _print_dry_run(charms, rocks_by_name, plan_resources, charm_channels, plan_charms, root)
         return []
 
     results: list[PublishResult] = []
     for charm in charms:
         result = _publish_charm(
-            charm, rocks_by_name, plan_resources, charm_channels[charm.name], root
+            charm, rocks_by_name, plan_resources, charm_channels[charm.name], plan_charms, root
         )
         results.append(result)
 
@@ -208,11 +207,12 @@ def _resolve_channel(
     return resolved
 
 
-def _print_dry_run(
+def _print_dry_run(  # noqa: PLR0913
     charms: list[GeneratedCharm],
     rocks_by_name: dict[str, GeneratedRock],
     plan_resources: dict[str, dict[str, str | None]],
     charm_channels: dict[str, str],
+    plan_charms: dict[str, CharmArtifact],
     root: Path,
 ) -> None:
     """Print what would be published without executing.
@@ -234,7 +234,8 @@ def _print_dry_run(
             raise ConfigurationError(msg)
 
         resource_map = plan_resources.get(charm.name, {})
-        _print_dry_run_charm(charm, resource_map, rocks_by_name, channel, root, out)
+        plan_charm = plan_charms.get(charm.name)
+        _print_dry_run_charm(charm, resource_map, rocks_by_name, channel, plan_charm, root, out)
 
         out.write("\n")
 
@@ -244,20 +245,25 @@ def _print_dry_run_charm(  # noqa: PLR0913
     resource_map: dict[str, str | None],
     rocks_by_name: dict[str, GeneratedRock],
     channel: str,
+    plan_charm: CharmArtifact | None,
     root: Path,
     out: Any,
 ) -> None:
     """Print dry-run output for a single charm."""
+    yaml_path = (root / charm.charmcraft_yaml).resolve()
+    pack_dir = resolve_pack_dir(yaml_path, plan_charm.pack_dir if plan_charm else None, root)
     if resource_map:
         # Stage 1: Upload all charm builds (no release)
         out.write("  Stage 1: Upload charm builds (registers resources)\n")
         for build in charm.builds:
             _validate_build_path(charm.name, build, root)
             path = cast(str, build.path)
+            charm_abs = str((root / path).resolve())
             base_str = f"{build.base} " if build.base else ""
             out.write(f"    {path} ({base_str}{build.arch})\n")
-            cmd_upload: list[str] = ["charmcraft", "upload", path, "--format=json"]
+            cmd_upload: list[str] = ["charmcraft", "upload", charm_abs, "--format=json"]
             out.write(f"    $ {shlex.join(cmd_upload)}\n")
+            out.write(f"      cwd: {pack_dir}\n")
 
         # Stage 2: Upload resources
         out.write("  Stage 2: Upload resources\n")
@@ -282,10 +288,12 @@ def _print_dry_run_charm(  # noqa: PLR0913
         for build in charm.builds:
             _validate_build_path(charm.name, build, root)
             path = cast(str, build.path)
+            charm_abs = str((root / path).resolve())
             base_str = f"{build.base} " if build.base else ""
             out.write(f"    {path} ({base_str}{build.arch})\n")
-            cmd = _build_upload_charm_cmd(path, channel, resource_map)
+            cmd = _build_upload_charm_cmd(charm_abs, channel, resource_map)
             out.write(f"    $ {shlex.join(cmd)}\n")
+            out.write(f"      cwd: {pack_dir}\n")
 
 
 def _validate_build_path(charm_name: str, build: CharmOutput, root: Path) -> None:
@@ -307,11 +315,12 @@ def _validate_build_path(charm_name: str, build: CharmOutput, root: Path) -> Non
         raise DiscoveryError(msg)
 
 
-def _publish_charm(
+def _publish_charm(  # noqa: PLR0913
     charm: GeneratedCharm,
     rocks_by_name: dict[str, GeneratedRock],
     plan_resources: dict[str, dict[str, str | None]],
     channel: str,
+    plan_charms: dict[str, CharmArtifact],
     root: Path,
 ) -> PublishResult:
     """Publish a single charm: upload, upload resources, then release.
@@ -332,12 +341,13 @@ def _publish_charm(
     _validate_build_paths(charm)
 
     resource_map = plan_resources.get(charm.name, {})
+    plan_charm = plan_charms.get(charm.name)
 
     if resource_map:
         return _publish_charm_with_resources(
-            charm, rocks_by_name, plan_resources, resource_map, channel, root
+            charm, rocks_by_name, plan_resources, resource_map, channel, plan_charm, root
         )
-    return _publish_charm_without_resources(charm, channel, root)
+    return _publish_charm_without_resources(charm, channel, plan_charm, root)
 
 
 def _publish_charm_with_resources(  # noqa: PLR0913
@@ -346,15 +356,19 @@ def _publish_charm_with_resources(  # noqa: PLR0913
     plan_resources: dict[str, dict[str, str | None]],
     resource_map: dict[str, str | None],
     channel: str,
+    plan_charm: CharmArtifact | None,
     root: Path,
 ) -> PublishResult:
     """Publish a charm that has resources: upload → resources → release."""
+    yaml_path = (root / charm.charmcraft_yaml).resolve()
+    pack_dir = resolve_pack_dir(yaml_path, plan_charm.pack_dir if plan_charm else None, root)
+
     # Stage 1: Upload all charm builds (no release) to register resource definitions
     build_revisions: list[tuple[int, CharmOutput]] = []
     for build in charm.builds:
         path = cast(str, build.path)
         with step(f"Uploading '{path}' (registering resources)"):
-            revision = _upload_charm_no_release(charm.name, path, root)
+            revision = _upload_charm_no_release(charm.name, path, pack_dir, yaml_path, root)
         build_revisions.append((revision, build))
 
     # Stage 2: Upload resources (CharmHub now knows about them)
@@ -377,13 +391,17 @@ def _publish_charm_with_resources(  # noqa: PLR0913
 def _publish_charm_without_resources(
     charm: GeneratedCharm,
     channel: str,
+    plan_charm: CharmArtifact | None,
     root: Path,
 ) -> PublishResult:
     """Publish a charm with no resources: upload + release in one step."""
+    yaml_path = (root / charm.charmcraft_yaml).resolve()
+    pack_dir = resolve_pack_dir(yaml_path, plan_charm.pack_dir if plan_charm else None, root)
+
     releases: list[ReleaseEntry] = []
     for build in charm.builds:
         path = cast(str, build.path)
-        entry = _upload_and_release_charm(charm.name, path, channel, [], root)
+        entry = _upload_and_release_charm(charm.name, path, channel, [], pack_dir, yaml_path, root)
         releases.append(ReleaseEntry(revision=entry, base=build.base, arch=build.arch))
 
     return PublishResult(
@@ -574,20 +592,30 @@ def _validate_build_paths(charm: GeneratedCharm) -> None:
             raise ConfigurationError(msg)
 
 
-def _upload_charm_no_release(charm_name: str, charm_path: str, root: Path) -> int:
+def _upload_charm_no_release(
+    charm_name: str, charm_path: str, pack_dir: Path, yaml_path: Path, root: Path
+) -> int:
     """Upload a .charm file without releasing it. Returns revision.
+
+    Runs from *pack_dir* (the same directory used during ``charmcraft pack``)
+    with a temporary ``charmcraft.yaml`` symlink if needed.  This avoids a
+    charmcraft ≥ 4.x crash (``RuntimeError: 'Project not configured yet.'``)
+    that occurs when ``charmcraft upload`` is run from a directory without a
+    ``charmcraft.yaml``.
 
     Used to register the charm revision (and its resource definitions) before
     uploading resources.  CharmHub requires a charm revision to exist before
     ``upload-resource`` will accept resource uploads.
     """
+    charm_abs = str((root / charm_path).resolve())
     full_path = root / charm_path
     if not full_path.exists():
         msg = f"Charm file '{charm_path}' not found at {full_path}."
         raise DiscoveryError(msg)
 
-    cmd = ["charmcraft", "upload", charm_path, "--format=json"]
-    result = run_command(cmd, cwd=str(root), stream=False)
+    cmd = ["charmcraft", "upload", charm_abs, "--format=json"]
+    with with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir):
+        result = run_command(cmd, cwd=str(pack_dir), stream=False)
     revision = _parse_revision(result.stdout, cmd)
     status(f"Uploaded charm '{charm_name}' → revision {revision}")
     return revision
@@ -615,25 +643,38 @@ def _release_charm(
         run_command(cmd, cwd=str(root), stream=False)
 
 
-def _upload_and_release_charm(
+def _upload_and_release_charm(  # noqa: PLR0913
     charm_name: str,
     charm_path: str,
     channel: str,
     resource_flags: list[tuple[str, int]],
+    pack_dir: Path,
+    yaml_path: Path,
     root: Path,
 ) -> int:
-    """Upload a .charm file and release it to the channel in one step. Returns revision."""
+    """Upload a .charm file and release it to the channel in one step. Returns revision.
+
+    Runs from *pack_dir* (the same directory used during ``charmcraft pack``)
+    with a temporary ``charmcraft.yaml`` symlink if needed.  This avoids a
+    charmcraft ≥ 4.x crash (``RuntimeError: 'Project not configured yet.'``)
+    that occurs when ``charmcraft upload`` is run from a directory without a
+    ``charmcraft.yaml``.
+    """
+    charm_abs = str((root / charm_path).resolve())
     full_path = root / charm_path
     if not full_path.exists():
         msg = f"Charm file '{charm_path}' not found at {full_path}."
         raise DiscoveryError(msg)
 
-    cmd = ["charmcraft", "upload", charm_path, f"--release={channel}", "--format=json"]
+    cmd = ["charmcraft", "upload", charm_abs, f"--release={channel}", "--format=json"]
     for res_name, rev in resource_flags:
         cmd.append(f"--resource={res_name}:{rev}")
 
-    with step(f"Uploading '{charm_path}' to {channel}"):
-        result = run_command(cmd, cwd=str(root), stream=False)
+    with (
+        step(f"Uploading '{charm_path}' to {channel}"),
+        with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
+    ):
+        result = run_command(cmd, cwd=str(pack_dir), stream=False)
 
     revision = _parse_revision(result.stdout, cmd)
     status(f"Uploaded charm '{charm_name}' → revision {revision}")

@@ -15,8 +15,6 @@ import logging
 import os
 import re
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +27,7 @@ from opcli.core.exceptions import (
     OpcliError,
     SubprocessError,
 )
+from opcli.core.pack_utils import resolve_pack_dir, with_pack_yaml_symlink
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
 from opcli.core.yaml_io import (
@@ -657,7 +656,7 @@ def _build_rock(rock: RockArtifact, root: Path, attributed: set[str]) -> Generat
     if not yaml_path.is_file():
         msg = f"rockcraft-yaml not found: {rock.rockcraft_yaml}"
         raise ConfigurationError(msg)
-    pack_dir = _resolve_pack_dir(yaml_path, rock.pack_dir, root)
+    pack_dir = resolve_pack_dir(yaml_path, rock.pack_dir, root)
     if not pack_dir.is_dir():
         msg = f"pack-dir not found: {rock.pack_dir}"
         raise ConfigurationError(msg)
@@ -665,7 +664,7 @@ def _build_rock(rock: RockArtifact, root: Path, attributed: set[str]) -> Generat
     before = _snapshot_outputs(pack_dir, "rock")
 
     with (
-        _with_pack_yaml_symlink("rockcraft.yaml", yaml_path, pack_dir),
+        with_pack_yaml_symlink("rockcraft.yaml", yaml_path, pack_dir),
         step(f"Building rock '{rock.name}' (rockcraft pack)"),
     ):
         run_command([*_PACK_COMMANDS["rock"]], cwd=str(pack_dir), env=_ROCKCRAFT_ENV)
@@ -681,52 +680,9 @@ def _build_rock(rock: RockArtifact, root: Path, attributed: set[str]) -> Generat
     )
 
 
-def _resolve_pack_dir(yaml_path: Path, pack_dir_str: str | None, root: Path) -> Path:
-    """Resolve the directory from which the pack command should run."""
-    if pack_dir_str:
-        return (root / pack_dir_str).resolve()
-    return yaml_path.parent.resolve()
-
-
 def _snapshot_outputs(pack_dir: Path, kind: str) -> set[str]:
     """Return the set of existing output files in *pack_dir* for *kind*."""
     return set(globmod.glob(str(pack_dir / _OUTPUT_GLOBS[kind])))
-
-
-@contextmanager
-def _with_pack_yaml_symlink(target_name: str, yaml_path: Path, pack_dir: Path) -> Iterator[None]:
-    """Temporarily provide ``target_name`` in *pack_dir* via a relative symlink.
-
-    If a regular file already exists at the target path, it is accepted only
-    when its content matches *yaml_path* exactly. Existing symlinks are replaced
-    for the duration of the context and removed afterwards, but cleanup only
-    deletes a symlink so a crafting tool cannot accidentally lose a real file it
-    created during the build.
-    """
-    target = pack_dir / target_name
-    if target.resolve() == yaml_path.resolve():
-        yield
-        return
-
-    if target.exists() and not target.is_symlink():
-        if target.read_bytes() == yaml_path.read_bytes():
-            yield
-            return
-        msg = (
-            f"A regular file already exists at {target} and it differs from "
-            f"{yaml_path}. Remove it or set pack-dir to a directory without a "
-            f"{target_name}."
-        )
-        raise ConfigurationError(msg)
-
-    if target.is_symlink():
-        target.unlink()
-    target.symlink_to(os.path.relpath(yaml_path, pack_dir))
-    try:
-        yield
-    finally:
-        if target.is_symlink():
-            target.unlink()
 
 
 def _pick_new_output(
@@ -813,13 +769,13 @@ def _build_charm(
     if not yaml_path.is_file():
         msg = f"charmcraft-yaml not found: {charm.charmcraft_yaml}"
         raise ConfigurationError(msg)
-    pack_dir = _resolve_pack_dir(yaml_path, charm.pack_dir, root)
+    pack_dir = resolve_pack_dir(yaml_path, charm.pack_dir, root)
     if not pack_dir.is_dir():
         msg = f"pack-dir not found: {charm.pack_dir}"
         raise ConfigurationError(msg)
 
     with (
-        _with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
+        with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
         step(f"Building charm '{charm.name}' (charmcraft pack)"),
     ):
         run_command([*_PACK_COMMANDS["charm"]], cwd=str(pack_dir))
@@ -914,7 +870,7 @@ def _build_snap(snap: SnapArtifact, root: Path, attributed: set[str]) -> Generat
     if not yaml_path.is_file():
         msg = f"snapcraft-yaml not found: {snap.snapcraft_yaml}"
         raise ConfigurationError(msg)
-    pack_dir = _resolve_pack_dir(yaml_path, snap.pack_dir, root)
+    pack_dir = resolve_pack_dir(yaml_path, snap.pack_dir, root)
     if not pack_dir.is_dir():
         msg = f"pack-dir not found: {snap.pack_dir}"
         raise ConfigurationError(msg)
