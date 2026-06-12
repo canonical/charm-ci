@@ -154,9 +154,9 @@ jobs:
           # Hash all files in source_dir, excluding any pre-built .rock outputs.
           hash=$(find "$source_dir" -type f -not -name "*.rock" | sort | xargs sha256sum | sha256sum | cut -c1-32)
           # Weekly expiry: caches rotate each ISO week to prevent long-lived stale entries.
-           week=$(date +%Y-W%V)
-           key="rock-${{ matrix.name }}-${{ matrix.arch }}-${hash}-${week}"
-           echo "key=${key}" >> "$GITHUB_OUTPUT"
+          week=$(date +%Y-W%V)
+          key="rock-${{ matrix.name }}-${{ matrix.arch }}-${hash}-${week}"
+          echo "key=${key}" >> "$GITHUB_OUTPUT"
 
       - name: Restore rock cache
         id: restore-rock-cache
