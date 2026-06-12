@@ -68,8 +68,8 @@ def with_pack_yaml_symlink(target_name: str, yaml_path: Path, pack_dir: Path) ->
     old_link_target: str | None = os.readlink(target) if target.is_symlink() else None
     if target.is_symlink():
         target.unlink()
-    target.symlink_to(os.path.relpath(yaml_path, pack_dir))
     try:
+        target.symlink_to(os.path.relpath(yaml_path, pack_dir))
         yield
     finally:
         if target.is_symlink():
