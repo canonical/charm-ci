@@ -136,6 +136,7 @@ class GeneratedCharm(BaseModel):
 
     name: str
     charmcraft_yaml: str = Field(alias="charmcraft-yaml")
+    pack_dir: str | None = Field(default=None, alias="pack-dir")
     builds: list[CharmOutput]
     resources: dict[str, GeneratedResource] | None = None
 
