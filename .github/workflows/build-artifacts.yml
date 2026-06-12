@@ -33,6 +33,10 @@ on:
           auto-detects based on fork status.
         type: string
         default: ""
+      pre-build-rock-script:
+        description: "Optional shell command to run before building each rock (e.g. './download_netbox.sh'). Skipped on cache hits."
+        type: string
+        default: ""
 
 jobs:
   # ── Job 1: produce the build matrix ────────────────────────────────────────
@@ -161,6 +165,10 @@ jobs:
         with:
           path: ${{ inputs.working-directory }}/artifacts.build.yaml
           key: ${{ steps.rock-cache-meta.outputs.key }}
+
+      - name: Run pre-build rock script
+        if: inputs.pre-build-rock-script != '' && matrix.type == 'rock' && steps.restore-rock-cache.outputs.cache-hit != 'true'
+        run: ${{ inputs.pre-build-rock-script }}
 
       - name: Install LXD
         if: matrix.type != 'rock' || steps.restore-rock-cache.outputs.cache-hit != 'true'
