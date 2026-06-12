@@ -40,9 +40,8 @@ def with_pack_yaml_symlink(target_name: str, yaml_path: Path, pack_dir: Path) ->
 
     If a regular file already exists at the target path, it is accepted only
     when its content matches *yaml_path* exactly. Existing symlinks are replaced
-    for the duration of the context and removed afterwards, but cleanup only
-    deletes a symlink so a crafting tool cannot accidentally lose a real file it
-    created during the build.
+    for the duration of the context and restored afterwards.  Only symlinks
+    are ever removed — regular files created by the craft tool are never touched.
 
     Args:
         target_name: Filename to create in *pack_dir* (e.g. ``"charmcraft.yaml"``).
@@ -65,6 +64,8 @@ def with_pack_yaml_symlink(target_name: str, yaml_path: Path, pack_dir: Path) ->
         )
         raise ConfigurationError(msg)
 
+    # Save the old symlink target so we can restore it on exit.
+    old_link_target: str | None = os.readlink(target) if target.is_symlink() else None
     if target.is_symlink():
         target.unlink()
     target.symlink_to(os.path.relpath(yaml_path, pack_dir))
@@ -73,3 +74,5 @@ def with_pack_yaml_symlink(target_name: str, yaml_path: Path, pack_dir: Path) ->
     finally:
         if target.is_symlink():
             target.unlink()
+        if old_link_target is not None:
+            target.symlink_to(old_link_target)

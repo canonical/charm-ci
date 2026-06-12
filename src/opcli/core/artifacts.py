@@ -802,6 +802,7 @@ def _build_charm(
     return GeneratedCharm(
         name=charm.name,
         **{"charmcraft-yaml": charm.charmcraft_yaml},
+        **{"pack-dir": os.path.relpath(str(pack_dir), str(root.resolve()))},
         builds=charm_outputs,
         resources=resources if resources else None,
     )

@@ -452,8 +452,9 @@ class TestArtifactsBuild:
         with patch("opcli.core.artifacts.run_command"):
             result = artifacts_build(tmp_path)
 
-        # Symlink removed after build
-        assert not existing_symlink.exists()
+        # Pre-existing symlink is restored to its original target after build
+        assert existing_symlink.is_symlink()
+        assert os.readlink(str(existing_symlink)) == "/dev/null"
         gen = load_artifacts_build(result)
         assert gen.rocks[0].builds[0].file is not None
 

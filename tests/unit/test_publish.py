@@ -1195,42 +1195,48 @@ charms:
             f"Expected absolute path, got {charm_path_arg!r}"
         )
 
-    def test_upload_cwd_is_pack_dir_from_artifacts_yaml(self, tmp_path: Path) -> None:
-        """When pack-dir is set in artifacts.yaml, upload runs from pack-dir."""
+    def test_upload_cwd_is_pack_dir_from_build_manifest(self, tmp_path: Path) -> None:
+        """When pack-dir is stored in the build manifest, upload runs from pack-dir.
+
+        This exercises the symlink creation path: pack_dir is the repo root (".")
+        but charmcraft.yaml lives in my-charm/. No pre-existing charmcraft.yaml is
+        present at the root, so with_pack_yaml_symlink must create one.
+        """
         build_yaml = """\
 version: 1
 charms:
   - name: my-charm
     charmcraft-yaml: my-charm/charmcraft.yaml
+    pack-dir: .
     builds:
       - arch: amd64
         base: "ubuntu@24.04"
         path: built-my-charm-amd64/my-charm/my-charm_amd64.charm
 """
-        plan_yaml = """\
-version: 1
-charms:
-  - name: my-charm
-    charmcraft-yaml: my-charm/charmcraft.yaml
-    pack-dir: .
-    channel: latest/edge
-"""
         root = tmp_path
         (root / "artifacts.build.yaml").write_text(build_yaml)
-        (root / "artifacts.yaml").write_text(plan_yaml)
+        # Write artifacts.yaml with channel only — pack-dir is in build manifest
+        (root / "artifacts.yaml").write_text(
+            "version: 1\ncharms:\n  - name: my-charm\n"
+            "    charmcraft-yaml: my-charm/charmcraft.yaml\n"
+            "    channel: latest/edge\n"
+        )
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
-        # pack-dir is "." (repo root) — create charmcraft.yaml there too
-        (root / "charmcraft.yaml").write_text("name: my-charm\n")
+        # Do NOT create root/charmcraft.yaml — the symlink code must create it
         artifact_dir = root / "built-my-charm-amd64" / "my-charm"
         artifact_dir.mkdir(parents=True)
         (artifact_dir / "my-charm_amd64.charm").write_bytes(b"fake")
 
         kwarg_cwds: list[str] = []
+        symlink_existed_during_run = False
 
         def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            nonlocal symlink_existed_during_run
             kwarg_cwds.append(str(kwargs.get("cwd", "")))
+            if (root / "charmcraft.yaml").is_symlink():
+                symlink_existed_during_run = True
             return _mock_result(stdout=json.dumps({"revision": 9}))
 
         with patch("opcli.core.publish.run_command", side_effect=fake_run):
@@ -1242,6 +1248,12 @@ charms:
         assert kwarg_cwds[0] == expected_cwd, (
             f"Expected cwd={expected_cwd!r}, got {kwarg_cwds[0]!r}"
         )
+        # Symlink must have been created during the run
+        assert symlink_existed_during_run, (
+            "charmcraft.yaml symlink was not created at pack_dir during upload"
+        )
+        # Symlink must be cleaned up after upload
+        assert not (root / "charmcraft.yaml").exists()
 
     def test_upload_cwd_is_charmcraft_yaml_dir_with_resources(self, tmp_path: Path) -> None:
         """Upload (no-release) also runs from charmcraft.yaml dir for charms with resources."""
@@ -1327,4 +1339,142 @@ charms:
         # Symlink must be cleaned up after upload
         assert not (charm_subdir / "charmcraft.yaml").exists(), (
             "charmcraft.yaml symlink was not cleaned up after upload"
+        )
+
+    def test_release_cwd_is_pack_dir(self, tmp_path: Path) -> None:
+        """Charmcraft release also runs from pack_dir (consistent with upload)."""
+        build_yaml = """\
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:latest
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: built-charm/my-charm_amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        (root / "built-charm").mkdir()
+        (root / "built-charm" / "my-charm_amd64.charm").write_bytes(b"fake")
+
+        cwds_by_cmd: dict[str, str] = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            cwd = str(kwargs.get("cwd", ""))
+            if "upload" in cmd and "upload-resource" not in cmd:
+                cwds_by_cmd["upload"] = cwd
+            elif "release" in cmd:
+                cwds_by_cmd["release"] = cwd
+            return _mock_result(stdout=json.dumps({"revision": 3}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge")
+
+        expected_cwd = str(charm_subdir.resolve())
+        assert cwds_by_cmd.get("upload") == expected_cwd, (
+            f"upload cwd: expected {expected_cwd!r}, got {cwds_by_cmd.get('upload')!r}"
+        )
+        assert cwds_by_cmd.get("release") == expected_cwd, (
+            f"release cwd: expected {expected_cwd!r}, got {cwds_by_cmd.get('release')!r}"
+        )
+
+    def test_upload_resource_cwd_is_root(self, tmp_path: Path) -> None:
+        """Charmcraft upload-resource runs from root (not affected by the cwd fix)."""
+        build_yaml = """\
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:latest
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: built-charm/my-charm_amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        (root / "built-charm").mkdir()
+        (root / "built-charm" / "my-charm_amd64.charm").write_bytes(b"fake")
+
+        upload_resource_cwds: list[str] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                upload_resource_cwds.append(str(kwargs.get("cwd", "")))
+            return _mock_result(stdout=json.dumps({"revision": 7}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge")
+
+        assert len(upload_resource_cwds) == 1
+        # upload-resource is NOT affected by the charmcraft 4.x bug and
+        # intentionally runs from root, not pack_dir.
+        assert upload_resource_cwds[0] == str(root.resolve()), (
+            f"Expected upload-resource cwd to be root, got {upload_resource_cwds[0]!r}"
+        )
+
+    def test_symlink_is_restored_after_replacement(self, tmp_path: Path) -> None:
+        """A pre-existing symlink pointing elsewhere is restored after upload."""
+        root = tmp_path
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        other_subdir = root / "other-charm"
+        other_subdir.mkdir()
+        # The "real" yaml for my-charm
+        (charm_subdir / "charmcraft-my-charm.yaml").write_text("name: my-charm\n")
+        # A pre-existing symlink in my-charm/ pointing somewhere else
+        other_yaml = other_subdir / "charmcraft.yaml"
+        other_yaml.write_text("name: other-charm\n")
+        (charm_subdir / "charmcraft.yaml").symlink_to(Path("../other-charm/charmcraft.yaml"))
+
+        build_yaml = """\
+version: 1
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft-my-charm.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: my-charm/my-charm_ubuntu-24.04-amd64.charm
+"""
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        (charm_subdir / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"fake")
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            return _mock_result(stdout=json.dumps({"revision": 5}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge")
+
+        # The original symlink must be restored (pointing back to other-charm's yaml)
+        restored = charm_subdir / "charmcraft.yaml"
+        assert restored.is_symlink(), "Original symlink was not restored"
+        assert restored.resolve() == other_yaml.resolve(), (
+            f"Expected symlink to point to {other_yaml}, got {restored.resolve()}"
         )
