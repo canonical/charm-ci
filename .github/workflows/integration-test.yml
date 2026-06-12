@@ -55,6 +55,10 @@ on:
         description: "fnmatch pattern to include only matching spread jobs (e.g. 'my-backend-ci:*'). When empty all jobs are included."
         type: string
         default: ""
+      pre-build-rock-script:
+        description: "Optional shell command to run before building each rock. Passed to build-artifacts."
+        type: string
+        default: ""
 
 jobs:
   # ── Job 1: build all artifacts ──────────────────────────────────────────────
@@ -63,6 +67,7 @@ jobs:
     with:
       working-directory: ${{ inputs.working-directory }}
       upload-image: ${{ inputs.upload-image }}
+      pre-build-rock-script: ${{ inputs.pre-build-rock-script }}
     permissions:
       contents: read
       packages: write
