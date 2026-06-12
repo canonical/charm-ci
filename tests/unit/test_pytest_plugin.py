@@ -521,7 +521,8 @@ class TestBuildCharmPaths:
         ):
             _build_charm_paths(arts, _FAKE_ROOT)
 
-    def test_fails_arch_mismatch(self) -> None:
+    def test_skips_charm_not_built_for_arch(self) -> None:
+        # A charm built only for arm64 is silently omitted when running on amd64.
         arts = ArtifactsGenerated.model_validate(
             {
                 "version": 1,
@@ -534,11 +535,49 @@ class TestBuildCharmPaths:
                 ],
             }
         )
-        with (
-            patch(_ARCH, return_value="amd64"),
-            pytest.raises(pytest.fail.Exception, match=r"charm_paths.*mycharm.*amd64"),
-        ):
-            _build_charm_paths(arts, _FAKE_ROOT)
+        with patch(_ARCH, return_value="amd64"):
+            result = _build_charm_paths(arts, _FAKE_ROOT)
+        assert result == {}
+
+    def test_multi_charm_partial_arch_skips_unsupported(self) -> None:
+        # Mirrors the haproxy-operator scenario: two charms on arm64, one is
+        # amd64-only.  The amd64-only charm should be absent; the arm64 charm
+        # should be present.
+        arts = ArtifactsGenerated.model_validate(
+            {
+                "version": 1,
+                "charms": [
+                    {
+                        "name": "main-charm",
+                        "charmcraft-yaml": "main.yaml",
+                        "builds": [
+                            {
+                                "arch": "amd64",
+                                "path": "./main-amd64.charm",
+                                "base": "ubuntu@24.04",
+                            },
+                            {
+                                "arch": "arm64",
+                                "path": "./main-arm64.charm",
+                                "base": "ubuntu@24.04",
+                            },
+                        ],
+                    },
+                    {
+                        "name": "amd64-only-charm",
+                        "charmcraft-yaml": "helper.yaml",
+                        "builds": [
+                            {"arch": "amd64", "path": "./helper.charm", "base": "ubuntu@24.04"},
+                        ],
+                    },
+                ],
+            }
+        )
+        with patch(_ARCH, return_value="arm64"):
+            result = _build_charm_paths(arts, _FAKE_ROOT)
+        assert "main-charm" in result
+        assert result["main-charm"].path == str(_FAKE_ROOT / "main-arm64.charm")
+        assert "amd64-only-charm" not in result
 
 
 # ---------------------------------------------------------------------------
