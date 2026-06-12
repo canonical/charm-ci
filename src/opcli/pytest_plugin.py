@@ -462,7 +462,14 @@ def _build_charm_path(artifacts: ArtifactsGenerated, artifacts_root: Path) -> st
 def _build_charm_paths(
     artifacts: ArtifactsGenerated, artifacts_root: Path
 ) -> dict[str, CharmPathList]:
-    """Core logic for the ``charm_paths`` fixture."""
+    """Core logic for the ``charm_paths`` fixture.
+
+    Returns a mapping of charm name to :class:`CharmPathList` for the current
+    machine architecture.  Charms that were not built for the current arch are
+    silently omitted from the result — this is intentional for multi-arch repos
+    where some charms only support a subset of architectures.  If a test tries
+    to access an omitted charm it will receive a ``KeyError``.
+    """
     from opcli.core.env import current_arch
 
     arch = current_arch()
@@ -470,11 +477,11 @@ def _build_charm_paths(
     for charm in artifacts.charms:
         arch_builds = _select_arch_builds_charm(charm.builds, arch)
         if not arch_builds:
-            available = sorted({b.arch for b in charm.builds})
-            pytest.fail(
-                f"charm_paths: no build for charm '{charm.name}' matches arch '{arch}'; "
-                f"available arches: {available!r}"
-            )
+            # Charm not built for this arch — skip it rather than failing.
+            # Multi-arch repos may legitimately build some charms for a subset
+            # of architectures (e.g. an amd64-only helper charm in an arm64
+            # test run).
+            continue
         entries = [(b.base, _resolve_path(b.path, artifacts_root)) for b in arch_builds if b.path]
         if not entries:
             pytest.fail(
