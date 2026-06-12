@@ -162,6 +162,36 @@ def test_release_create_omits_previous_tag_when_none_exists(tmp_path: Path) -> N
     assert "--notes-start-tag" not in log
 
 
+def test_same_commit_tag_skipped_for_subsequent_arch(tmp_path: Path) -> None:
+    """Multi-arch publish: second arch skips first-arch tag (same commit), uses older tag."""
+    payload = [
+        {
+            "charm_name": "traefik-k8s",
+            "channel": "latest/edge",
+            "releases": [
+                {"revision": 7, "base": None, "arch": "amd64"},
+                {"revision": 8, "base": None, "arch": "arm64"},
+            ],
+            "resources": {},
+        }
+    ]
+    (tmp_path / "publish-results.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _run_script(
+        tmp_path,
+        existing_releases="traefik-k8s-rev6",
+        remote_tags="traefik-k8s-rev6\ntraefik-k8s-rev7",
+        same_sha_tags="traefik-k8s-rev7",  # rev7 is at current commit — must be skipped for rev8
+    )
+
+    assert result.returncode == 0, result.stderr
+    log = _read_log(tmp_path)
+    # Both rev7 and rev8 should use rev6 (previous run) as their start tag
+    expected_start_tag_count = 2
+    assert log.count("--notes-start-tag traefik-k8s-rev6") == expected_start_tag_count
+    assert "--notes-start-tag traefik-k8s-rev7" not in log
+
+
 def _write_publish_results(tmp_path: Path, *, charm_name: str, revision: int) -> None:
     payload = [
         {
@@ -205,6 +235,7 @@ def _run_script(
     *,
     existing_releases: str = "",
     remote_tags: str = "",
+    same_sha_tags: str = "",
 ) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -231,7 +262,11 @@ set -euo pipefail
 if [ "$1" = "ls-remote" ]; then
   while IFS= read -r tag; do
     [ -n "$tag" ] || continue
-    printf 'abc123\\trefs/tags/%s\\n' "$tag"
+    case " ${SAME_SHA_TAGS:-} " in
+      *" ${tag} "*) sha="${GITHUB_SHA:-abc123}" ;;
+      *) sha="old123" ;;
+    esac
+    printf '%s\\trefs/tags/%s\\n' "$sha" "$tag"
   done <<< "${REMOTE_TAGS:-}"
   exit 0
 fi
@@ -249,6 +284,7 @@ printf '\\n' >> "${COMMAND_LOG}"
         "GITHUB_SHA": "abc123",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "REMOTE_TAGS": remote_tags,
+        "SAME_SHA_TAGS": same_sha_tags,
     }
     return subprocess.run(
         [str(SCRIPT)],
