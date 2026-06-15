@@ -148,13 +148,44 @@ charms: []
             patch("opcli.core.provision._is_port_open") as mock_port,
             patch("opcli.core.provision.provision_registry", return_value="deployed") as mock_reg,
         ):
-            # First call: port not open; after deploy: port open
+            # First call: initial availability check returns False; retry in _wait_for_port succeeds.
             mock_port.side_effect = [False, True]
             pushed = provision_load(tmp_path, missing_registry="deploy")
 
         mock_reg.assert_called_once_with(tmp_path)
         assert len(pushed) == 1
         assert "myrock" in pushed[0]
+
+    def test_deploy_policy_retries_port_check(self, tmp_path: Path) -> None:
+        """After deploying, _wait_for_port should retry before succeeding."""
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_WITH_FILE_ROCK)
+        (tmp_path / "myrock.rock").write_bytes(b"fake")
+
+        with (
+            patch("opcli.core.provision.run_command"),
+            patch("opcli.core.provision._is_port_open") as mock_port,
+            patch("opcli.core.provision.provision_registry", return_value="deployed"),
+            patch("opcli.core.provision.time.sleep"),
+        ):
+            # Initial availability check: False; two failed retries; then success.
+            mock_port.side_effect = [False, False, False, True]
+            pushed = provision_load(tmp_path, missing_registry="deploy")
+
+        assert len(pushed) == 1
+        assert "myrock" in pushed[0]
+
+    def test_deploy_policy_raises_if_port_never_opens(self, tmp_path: Path) -> None:
+        """If port never becomes reachable after deploy, raise ConfigurationError."""
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_WITH_FILE_ROCK)
+
+        with (
+            patch("opcli.core.provision.run_command"),
+            patch("opcli.core.provision._is_port_open", return_value=False),
+            patch("opcli.core.provision.provision_registry", return_value="deployed"),
+            patch("opcli.core.provision.time.sleep"),
+            pytest.raises(ConfigurationError, match="still not reachable"),
+        ):
+            provision_load(tmp_path, missing_registry="deploy")
 
     def test_skip_policy_returns_empty(self, tmp_path: Path) -> None:
         """--missing-registry=skip should return empty when registry is down."""
