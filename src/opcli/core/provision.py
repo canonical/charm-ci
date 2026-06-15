@@ -22,6 +22,7 @@ import logging
 import os
 import shutil
 import socket
+import time
 from pathlib import Path
 
 from opcli.core.constants import ARTIFACTS_BUILD_YAML
@@ -235,7 +236,7 @@ def _ensure_registry_available(root: Path, registry: str, missing_registry: str)
         if result == "skipped":
             logger.info("Registry deployment skipped (no k8s provider).")
             return False
-        if not _is_port_open("localhost", _REGISTRY_PORT):
+        if not _wait_for_port("localhost", _REGISTRY_PORT):
             msg = (
                 "Registry was deployed but is still not reachable at "
                 f"localhost:{_REGISTRY_PORT}. Check k8s cluster health."
@@ -314,6 +315,33 @@ def _is_port_open(host: str, port: int, *, timeout: float = 2.0) -> bool:
             return True
     except OSError:
         return False
+
+
+def _wait_for_port(
+    host: str,
+    port: int,
+    *,
+    retries: int = 15,
+    interval: float = 2.0,
+    probe_timeout: float = 2.0,
+) -> bool:
+    """Poll *host*:*port* up to *retries* times, waiting *interval* seconds between attempts.
+
+    Returns ``True`` as soon as the port is open, ``False`` if all attempts fail.
+    """
+    for attempt in range(retries):
+        if _is_port_open(host, port, timeout=probe_timeout):
+            return True
+        if attempt < retries - 1:
+            logger.debug(
+                "Port %d not yet open (attempt %d/%d), retrying in %.0fs…",
+                port,
+                attempt + 1,
+                retries,
+                interval,
+            )
+            time.sleep(interval)
+    return False
 
 
 def _detect_kubectl() -> list[str] | None:
