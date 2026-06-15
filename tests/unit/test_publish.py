@@ -9,10 +9,11 @@ from unittest.mock import patch
 
 import pytest
 
-from opcli.core.exceptions import ConfigurationError, DiscoveryError
+from opcli.core.exceptions import ConfigurationError, DiscoveryError, SubprocessError
 from opcli.core.publish import (
     PublishResult,
     ReleaseEntry,
+    _parse_duplicate_revision,
     artifacts_publish,
     publish_results_to_dicts,
 )
@@ -117,19 +118,19 @@ class TestPublishCharmWithRockFile:
         with patch("opcli.core.publish.run_command", side_effect=fake_run):
             results = artifacts_publish(root, channel="latest/edge")
 
-        # machine-charm: 1 upload+release (no resources)
+        # machine-charm: 1 upload + 1 release (no resources, two separate calls)
         # k8s-charm: 1 upload (no release), 1 upload-resource, 1 release
-        assert len(calls) == 4  # noqa: PLR2004
+        assert len(calls) == 5  # noqa: PLR2004
 
         # Check first k8s-charm upload (register resources - no release)
-        reg_cmd = calls[1]
+        reg_cmd = calls[2]
         assert "upload" in reg_cmd
         assert "k8s-charm" in str(reg_cmd)
         assert "--release=" not in " ".join(reg_cmd)
         assert "--resource=" not in " ".join(reg_cmd)
 
         # Check upload-resource call
-        res_cmd = calls[2]
+        res_cmd = calls[3]
         assert "upload-resource" in res_cmd
         assert "k8s-charm" in res_cmd
         assert "k8s-rock-image" in res_cmd
@@ -138,7 +139,7 @@ class TestPublishCharmWithRockFile:
         assert "k8s-rock_amd64.rock" in image_arg
 
         # Check release call for k8s-charm has --resource flag
-        charm_cmd = calls[3]
+        charm_cmd = calls[4]
         assert "release" in charm_cmd
         assert "--resource=k8s-rock-image:5" in charm_cmd
         assert "--channel=latest/edge" in charm_cmd
@@ -210,9 +211,11 @@ charms:
         with patch("opcli.core.publish.run_command", side_effect=fake_run):
             results = artifacts_publish(root, channel="latest/stable")
 
-        assert len(calls) == 1
-        # No --resource flags
+        # upload + release (two separate calls for no-resources path)
+        assert len(calls) == 2  # noqa: PLR2004
+        # Upload call: no --resource flags, no --release
         assert not any("--resource" in arg for arg in calls[0])
+        assert not any("--release" in arg for arg in calls[0])
         assert results[0].charm_name == "machine-charm"
         assert results[0].resources == {}
 
@@ -1004,8 +1007,9 @@ class TestPerCharmChannel:
 
         assert len(results) == 1
         assert results[0].channel == "1.0/stable"
-        release_cmd = calls[0]
-        assert "--release=1.0/stable" in release_cmd
+        # calls[0] is the upload, calls[1] is the release
+        release_cmd = calls[1]
+        assert "--channel=1.0/stable" in release_cmd
 
     def test_global_channel_used_as_fallback(self, tmp_path: Path) -> None:
         """--channel is used when a charm has no per-charm channel set."""
@@ -1024,7 +1028,8 @@ class TestPerCharmChannel:
             results = artifacts_publish(root, channel="latest/edge")
 
         assert results[0].channel == "latest/edge"
-        assert "--release=latest/edge" in calls[0]
+        # calls[1] is the release command (calls[0] is upload)
+        assert "--channel=latest/edge" in calls[1]
 
     def test_global_channel_overrides_per_charm_channel(self, tmp_path: Path) -> None:
         """--channel takes precedence over the charm's channel in artifacts.yaml."""
@@ -1042,8 +1047,9 @@ class TestPerCharmChannel:
 
         # --channel (latest/edge) must win over per-charm channel (1.0/stable)
         assert results[0].channel == "latest/edge"
-        assert "--release=latest/edge" in calls[0]
-        assert "--release=1.0/stable" not in " ".join(" ".join(c) for c in calls)
+        # calls[1] is the release command (calls[0] is upload)
+        assert "--channel=latest/edge" in calls[1]
+        assert "--channel=1.0/stable" not in " ".join(" ".join(c) for c in calls)
 
     def test_mixed_channels_with_global_override(self, tmp_path: Path) -> None:
         """--channel overrides ALL charms, ignoring per-charm config."""
@@ -1477,4 +1483,184 @@ charms:
         assert restored.is_symlink(), "Original symlink was not restored"
         assert restored.resolve() == other_yaml.resolve(), (
             f"Expected symlink to point to {other_yaml}, got {restored.resolve()}"
+        )
+
+
+# ---------------------------------------------------------------------------
+#  Duplicate digest handling
+# ---------------------------------------------------------------------------
+
+_EXISTING_REVISION = 425
+
+_DUPLICATE_STDOUT = json.dumps(
+    {
+        "errors": [
+            {
+                "code": "review-error",
+                "message": (
+                    "Cannot insert package. An upload with that digest "
+                    "(SHA3-384: 'abc123') already exists in the database. "
+                    f"Revision of the existing package is: {_EXISTING_REVISION}"
+                ),
+            }
+        ]
+    }
+)
+
+
+class TestParseDuplicateRevision:
+    """Unit tests for the _parse_duplicate_revision helper."""
+
+    def test_matches_known_error_shape(self) -> None:
+        """Extracts the revision from charmcraft's standard duplicate-upload JSON."""
+        result = _parse_duplicate_revision(_DUPLICATE_STDOUT)
+        assert result == _EXISTING_REVISION
+
+    def test_returns_none_for_unrelated_error(self) -> None:
+        """Returns None when the error message is unrelated."""
+        other = json.dumps({"errors": [{"code": "some-error", "message": "Something else"}]})
+        assert _parse_duplicate_revision(other) is None
+
+    def test_returns_none_for_non_json(self) -> None:
+        """Returns None rather than raising when stdout is not valid JSON."""
+        assert _parse_duplicate_revision("not json") is None
+
+    def test_returns_none_for_empty_string(self) -> None:
+        """Returns None for empty stdout."""
+        assert _parse_duplicate_revision("") is None
+
+    def test_returns_none_when_errors_key_missing(self) -> None:
+        """Returns None when stdout is valid JSON but has no 'errors' key."""
+        assert _parse_duplicate_revision(json.dumps({"revision": 5})) is None
+
+
+class TestDuplicateUploadNoResources:
+    """Duplicate digest reuse for charms without resources.
+
+    The no-resources path now uses _upload_charm_no_release + _release_charm
+    (two separate charmcraft calls), so release is always issued regardless
+    of whether the upload was new or a duplicate.
+    """
+
+    def test_reuses_existing_revision_on_duplicate(self, tmp_path: Path) -> None:
+        """When charmcraft upload returns a duplicate-digest error, reuses existing revision and releases it."""
+        build_yaml = """\
+version: 1
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: my-charm/my-charm_ubuntu-24.04-amd64.charm
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        (charm_subdir / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"fake")
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            if "upload" in cmd:
+                return _mock_result(stdout=_DUPLICATE_STDOUT, returncode=1)
+            # release command succeeds
+            return _mock_result()
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge")
+
+        assert len(results) == 1
+        assert results[0].releases[0].revision == _EXISTING_REVISION
+        # A release command must have been issued with the reused revision
+        release_cmds = [c for c in calls if "release" in c]
+        assert any(f"--revision={_EXISTING_REVISION}" in c for c in release_cmds), (
+            f"Expected --revision={_EXISTING_REVISION} in a release call, got: {release_cmds}"
+        )
+
+    def test_reraises_non_duplicate_error(self, tmp_path: Path) -> None:
+        """Non-duplicate SubprocessError is still raised."""
+        build_yaml = """\
+version: 1
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: my-charm/my-charm_ubuntu-24.04-amd64.charm
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        (charm_subdir / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"fake")
+
+        other_error = json.dumps({"errors": [{"code": "auth-error", "message": "Unauthorized"}]})
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            return _mock_result(stdout=other_error, stderr="Unauthorized", returncode=1)
+
+        with (
+            patch("opcli.core.publish.run_command", side_effect=fake_run),
+            pytest.raises(SubprocessError),
+        ):
+            artifacts_publish(root, channel="latest/edge")
+
+
+class TestDuplicateUploadWithResources:
+    """Duplicate digest reuse for charms with resources (_upload_charm_no_release)."""
+
+    def test_reuses_existing_revision_on_duplicate(self, tmp_path: Path) -> None:
+        """When charmcraft upload returns duplicate-digest, revision is reused for release."""
+        build_yaml = """\
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:latest
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: built-charm/my-charm_amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        (root / "built-charm").mkdir()
+        (root / "built-charm" / "my-charm_amd64.charm").write_bytes(b"fake")
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": 7}))
+            # charm upload returns duplicate error
+            return _mock_result(stdout=_DUPLICATE_STDOUT, returncode=1)
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge")
+
+        assert len(results) == 1
+        assert results[0].releases[0].revision == _EXISTING_REVISION
+        # release command must have been called with the reused revision
+        release_cmds = [c for c in calls if "release" in c and "upload-resource" not in c]
+        assert any(f"--revision={_EXISTING_REVISION}" in c for c in release_cmds), (
+            f"Expected --revision={_EXISTING_REVISION} in a release command, got: {release_cmds}"
         )

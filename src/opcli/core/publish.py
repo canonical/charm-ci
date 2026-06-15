@@ -20,7 +20,7 @@ from typing import Any, cast
 from ruamel.yaml.error import YAMLError
 
 from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML
-from opcli.core.exceptions import ConfigurationError, DiscoveryError
+from opcli.core.exceptions import ConfigurationError, DiscoveryError, SubprocessError
 from opcli.core.pack_utils import resolve_pack_dir, with_pack_yaml_symlink
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
@@ -388,15 +388,22 @@ def _publish_charm_without_resources(
     channel: str,
     root: Path,
 ) -> PublishResult:
-    """Publish a charm with no resources: upload + release in one step."""
+    """Publish a charm with no resources: upload then release.
+
+    Mirrors the with-resources path structure so that release is always
+    issued — even when the upload is a duplicate and charmcraft reuses an
+    existing revision.
+    """
     yaml_path = (root / charm.charmcraft_yaml).resolve()
     pack_dir = resolve_pack_dir(yaml_path, charm.pack_dir, root)
 
     releases: list[ReleaseEntry] = []
     for build in charm.builds:
         path = cast(str, build.path)
-        entry = _upload_and_release_charm(charm.name, path, channel, [], pack_dir, yaml_path, root)
-        releases.append(ReleaseEntry(revision=entry, base=build.base, arch=build.arch))
+        with step(f"Uploading '{path}' to {channel}"):
+            revision = _upload_charm_no_release(charm.name, path, pack_dir, yaml_path, root)
+        _release_charm(charm.name, revision, channel, [], pack_dir, yaml_path, root)
+        releases.append(ReleaseEntry(revision=revision, base=build.base, arch=build.arch))
 
     return PublishResult(
         charm_name=charm.name,
@@ -600,6 +607,10 @@ def _upload_charm_no_release(
     Used to register the charm revision (and its resource definitions) before
     uploading resources.  CharmHub requires a charm revision to exist before
     ``upload-resource`` will accept resource uploads.
+
+    If charmcraft rejects the upload because a file with the same digest was
+    already uploaded before, the existing revision is reused automatically
+    (idempotent behaviour).
     """
     charm_abs = str((root / charm_path).resolve())
     full_path = root / charm_path
@@ -609,7 +620,18 @@ def _upload_charm_no_release(
 
     cmd = ["charmcraft", "upload", charm_abs, "--format=json"]
     with with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir):
-        result = run_command(cmd, cwd=str(pack_dir), stream=False)
+        result = run_command(cmd, cwd=str(pack_dir), stream=False, check=False)
+
+    if result.returncode != 0:
+        dup_revision = _parse_duplicate_revision(result.stdout)
+        if dup_revision is not None:
+            status(
+                f"Charm '{charm_name}' already uploaded with the same digest — "
+                f"reusing revision {dup_revision}"
+            )
+            return dup_revision
+        raise SubprocessError(cmd=cmd, returncode=result.returncode, stderr=result.stderr)
+
     revision = _parse_revision(result.stdout, cmd)
     status(f"Uploaded charm '{charm_name}' → revision {revision}")
     return revision
@@ -644,44 +666,6 @@ def _release_charm(  # noqa: PLR0913
         with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
     ):
         run_command(cmd, cwd=str(pack_dir), stream=False)
-
-
-def _upload_and_release_charm(  # noqa: PLR0913
-    charm_name: str,
-    charm_path: str,
-    channel: str,
-    resource_flags: list[tuple[str, int]],
-    pack_dir: Path,
-    yaml_path: Path,
-    root: Path,
-) -> int:
-    """Upload a .charm file and release it to the channel in one step. Returns revision.
-
-    Runs from *pack_dir* (the same directory used during ``charmcraft pack``)
-    with a temporary ``charmcraft.yaml`` symlink if needed.  This avoids a
-    charmcraft ≥ 4.x crash (``RuntimeError: 'Project not configured yet.'``)
-    that occurs when ``charmcraft upload`` is run from a directory without a
-    ``charmcraft.yaml``.
-    """
-    charm_abs = str((root / charm_path).resolve())
-    full_path = root / charm_path
-    if not full_path.exists():
-        msg = f"Charm file '{charm_path}' not found at {full_path}."
-        raise DiscoveryError(msg)
-
-    cmd = ["charmcraft", "upload", charm_abs, f"--release={channel}", "--format=json"]
-    for res_name, rev in resource_flags:
-        cmd.append(f"--resource={res_name}:{rev}")
-
-    with (
-        step(f"Uploading '{charm_path}' to {channel}"),
-        with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
-    ):
-        result = run_command(cmd, cwd=str(pack_dir), stream=False)
-
-    revision = _parse_revision(result.stdout, cmd)
-    status(f"Uploaded charm '{charm_name}' → revision {revision}")
-    return revision
 
 
 # ---------------------------------------------------------------------------
@@ -732,6 +716,48 @@ def _add_transport_prefix(ref: str) -> str:
     if re.match(_TRANSPORT_PREFIX_RE, ref):
         return ref
     return f"docker://{ref}"
+
+
+_DUPLICATE_REVISION_RE = re.compile(r"Revision of the existing package is:\s*(\d+)")
+
+
+def _parse_duplicate_revision(stdout: str) -> int | None:
+    """Detect a duplicate-digest upload error and extract the existing revision.
+
+    When ``charmcraft upload --format=json`` rejects an upload because the
+    exact same digest was already stored, it exits with code 1 and writes a
+    JSON object to stdout::
+
+        {"errors": [{"code": "review-error", "message": "... Revision of the
+        existing package is: 425"}]}
+
+    Returns the integer revision if detected, ``None`` otherwise (including
+    on any JSON / format error — callers should then treat the failure as a
+    regular error).
+    """
+    try:
+        parsed = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    errors = parsed.get("errors")
+    if not isinstance(errors, list):
+        return None
+
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        message = error.get("message", "")
+        if not isinstance(message, str):
+            continue
+        match = _DUPLICATE_REVISION_RE.search(message)
+        if match:
+            return int(match.group(1))
+
+    return None
 
 
 def _parse_revision(stdout: str, cmd: list[str]) -> int:
