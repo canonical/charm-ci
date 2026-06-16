@@ -959,10 +959,10 @@ snap install astral-uv --classic
 export UV_TOOL_BIN_DIR=/usr/local/bin
 export UV_TOOL_DIR=/usr/local/share/uv-tools
 if grep -q 'name = "opcli"' "${SPREAD_PATH}/pyproject.toml" 2>/dev/null; then
-  uv tool install "${SPREAD_PATH}" --quiet
+  uv tool install "opcli[cli] @ ${SPREAD_PATH}" --quiet
 else
   uv tool install \
-      "git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
+      "opcli[cli] @ git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
       --quiet
 fi
 opcli install spread
@@ -985,10 +985,10 @@ snap install astral-uv --classic
 export UV_TOOL_BIN_DIR=/usr/local/bin
 export UV_TOOL_DIR=/usr/local/share/uv-tools
 if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
-  uv tool install "${GITHUB_WORKSPACE}" --quiet
+  uv tool install "opcli[cli] @ ${GITHUB_WORKSPACE}" --quiet
 else
   uv tool install \
-      "git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
+      "opcli[cli] @ git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
       --quiet
 fi
 opcli install spread
@@ -1035,10 +1035,10 @@ snap install astral-uv --classic
 export UV_TOOL_BIN_DIR=/usr/local/bin
 export UV_TOOL_DIR=/usr/local/share/uv-tools
 if grep -q 'name = "opcli"' "${SPREAD_PATH}/pyproject.toml" 2>/dev/null; then
-  uv tool install "${SPREAD_PATH}" --quiet
+  uv tool install "opcli[cli] @ ${SPREAD_PATH}" --quiet
 else
   uv tool install \
-      "git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
+      "opcli[cli] @ git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
       --quiet
 fi
 """
@@ -1050,10 +1050,10 @@ snap install astral-uv --classic
 export UV_TOOL_BIN_DIR=/usr/local/bin
 export UV_TOOL_DIR=/usr/local/share/uv-tools
 if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
-  uv tool install "${GITHUB_WORKSPACE}" --quiet
+  uv tool install "opcli[cli] @ ${GITHUB_WORKSPACE}" --quiet
 else
   uv tool install \
-      "git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
+      "opcli[cli] @ git+https://github.com/canonical/charm-ci@${OPCLI_GIT_REF:-main}" \
       --quiet
 fi
 """
