@@ -28,6 +28,8 @@ uv run codespell src/ tests/               # spell check
 
 Never use `pip install`. All dependency management goes through `uv` and `pyproject.toml`.
 
+`uv sync` installs all dev dependencies including `typer` and `jinja2` (which are `[cli]` optional extras in the published package but are always present in the dev environment via `[dependency-groups] dev`).
+
 > **Note:** These commands mirror the CI workflow (`.github/workflows/ci.yml`). If you change one, update the other.
 
 ---
@@ -72,11 +74,11 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 |---|---|
 | Language | Python 3.12+, strict typing |
 | Packaging | `uv` |
-| CLI | `Typer` |
+| CLI | `Typer` (`[cli]` optional extra — not a base dependency) |
 | Data models | `Pydantic V2` |
 | Lint/format | `Ruff` (see `pyproject.toml [tool.ruff.lint]` for full config — selected rule groups include `A B C D E F I N PL RUF S SIM TC UP W`) |
 | YAML (user files) | `ruamel.yaml` (preserves comments) |
-| Templating | `Jinja2` (pytest invocation templates) |
+| Templating | `Jinja2` (pytest invocation templates — `[cli]` extra) |
 | Testing | `pytest` + `pytest-mock` |
 
 ---

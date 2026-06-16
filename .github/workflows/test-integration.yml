@@ -65,7 +65,7 @@ jobs:
         run: sudo snap install astral-uv --classic
 
       - name: Install opcli
-        run: uv tool install "${GITHUB_WORKSPACE}"
+        run: uv tool install "opcli[cli] @ ${GITHUB_WORKSPACE}"
 
       - name: Install spread
         run: |

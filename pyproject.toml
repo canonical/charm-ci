@@ -8,9 +8,13 @@ version = "0.0.1-alpha.2"
 description = "CLI tool for operator development workflows (Charms, Rocks, Snaps)"
 requires-python = ">=3.12"
 dependencies = [
-    "typer>=0.15",
     "pydantic>=2",
     "ruamel.yaml>=0.18",
+]
+
+[project.optional-dependencies]
+cli = [
+    "typer>=0.15",
     "jinja2>=3.1",
 ]
 
@@ -89,11 +93,13 @@ markers = [
 [dependency-groups]
 dev = [
     "codespell>=2.2",
+    "jinja2>=3.1",
     "mypy>=1.20.2",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
     "pytest-mock>=3.15.1",
     "ruff>=0.15.11",
+    "typer>=0.15",
 ]
 
 [tool.codespell]
