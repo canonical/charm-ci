@@ -121,6 +121,30 @@ class TestArtifactsBuild:
         assert "ubuntu@22.04" in bases
         assert "ubuntu@24.04" in bases
 
+    def test_build_multi_base_charm_at_separator(self, tmp_path: Path) -> None:
+        """Multi-base charm with modern charmcraft ``@`` filename format."""
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: traefik-k8s\n  charmcraft-yaml: charmcraft.yaml\n",
+        )
+        write_file(tmp_path / "charmcraft.yaml", "name: traefik-k8s\n")
+        # Modern charmcraft uses @ between distro and version
+        write_file(tmp_path / "traefik-k8s_ubuntu@20.04-amd64.charm", "fake")
+        write_file(tmp_path / "traefik-k8s_ubuntu@26.04-amd64.charm", "fake")
+
+        with patch("opcli.core.artifacts.run_command"):
+            result = artifacts_build(tmp_path)
+
+        gen = load_artifacts_build(result)
+        outputs = gen.charms[0].builds
+        assert len(outputs) == 2  # noqa: PLR2004
+        paths = {o.path for o in outputs}
+        assert "./traefik-k8s_ubuntu@20.04-amd64.charm" in paths
+        assert "./traefik-k8s_ubuntu@26.04-amd64.charm" in paths
+        bases = {o.base for o in outputs}
+        assert "ubuntu@20.04" in bases
+        assert "ubuntu@26.04" in bases
+
     def test_build_multi_base_charm_incremental(self, tmp_path: Path) -> None:
         """Adding a new base: pre-existing files + new file all appear in output.
 
@@ -1492,6 +1516,25 @@ class TestArtifactsLocalize:
         write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
         (tmp_path / "my-charm_ubuntu-22.04-amd64.charm").write_bytes(b"")
         (tmp_path / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
+
+        artifacts_localize(tmp_path)
+
+        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        charm = gen.charms[0]
+        assert len(charm.builds) == 2  # noqa: PLR2004
+        paths = {o.path for o in charm.builds}
+        assert any("22.04" in p for p in paths)
+        assert any("24.04" in p for p in paths)
+        bases = {o.base for o in charm.builds}
+        assert "ubuntu@22.04" in bases
+        assert "ubuntu@24.04" in bases
+
+    def test_localises_all_files_for_multi_base_charm_at_separator(self, tmp_path: Path) -> None:
+        """Localize populates base correctly for modern ``@`` filename format."""
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        # Modern charmcraft uses @ between distro and version
+        (tmp_path / "my-charm_ubuntu@22.04-amd64.charm").write_bytes(b"")
+        (tmp_path / "my-charm_ubuntu@24.04-amd64.charm").write_bytes(b"")
 
         artifacts_localize(tmp_path)
 

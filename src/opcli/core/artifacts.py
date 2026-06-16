@@ -70,10 +70,10 @@ _OUTPUT_GLOBS: dict[str, str] = {
 }
 
 
-# Pattern: {name}_{distro}-{version}-{arch}.charm
-# e.g. aproxy_ubuntu-22.04-amd64.charm → distro=ubuntu, version=22.04, arch=amd64
+# Pattern: {name}_{distro}{sep}{version}-{arch}.charm  (sep is - or @)
+# e.g. aproxy_ubuntu-22.04-amd64.charm or traefik-k8s_ubuntu@22.04-amd64.charm
 _CHARM_FILENAME_RE = re.compile(
-    r"^.+_(?P<distro>[a-z]+)-(?P<version>\d+\.\d+)-(?P<arch>[^.]+)\.charm$"
+    r"^.+_(?P<distro>[a-z]+)[-@](?P<version>\d+\.\d+)-(?P<arch>[^.]+)\.charm$"
 )
 
 
