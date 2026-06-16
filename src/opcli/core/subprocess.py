@@ -19,8 +19,6 @@ import sys
 import threading
 from dataclasses import dataclass
 
-import typer
-
 from opcli.core.exceptions import SubprocessError
 
 _DEFAULT_TIMEOUT_SECONDS = 3600
@@ -148,9 +146,10 @@ def _run_interactive(
 
 def _log_command(cmd: list[str], cwd: str | None, *, err: bool = False) -> None:
     """Print the command and working directory for reproducibility."""
-    typer.echo(f"$ {shlex.join(cmd)}", err=err)
+    dest = sys.stderr if err else sys.stdout
+    print(f"$ {shlex.join(cmd)}", file=dest)
     if cwd:
-        typer.echo(f"  cwd: {cwd}", err=err)
+        print(f"  cwd: {cwd}", file=dest)
 
 
 def _run_streaming(  # noqa: PLR0913

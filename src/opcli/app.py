@@ -7,8 +7,16 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-import typer
-from typer.core import TyperGroup
+try:
+    import typer
+    from typer.core import TyperGroup
+except ImportError:
+    print(
+        "error: the 'cli' extra is required to run opcli.\n"
+        "       Install with: pip install 'opcli[cli]'",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 from opcli.commands import (
     artifacts,

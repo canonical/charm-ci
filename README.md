@@ -44,10 +44,12 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 ```bash
 sudo snap install astral-uv --classic
-uv tool install git+https://github.com/canonical/charm-ci.git
+uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git"
 export PATH="$HOME/.local/bin:$PATH"  # or: uv tool update-shell && exec $SHELL
 opcli --help
 ```
+
+> **Note:** The `[cli]` extra is required for the CLI. The bare `opcli` package (without `[cli]`) installs only the pytest plugin — useful when your project already has a conflicting `typer` pin.
 
 ## Quick start
 
@@ -412,6 +414,8 @@ The `x-pytest-args` key at the top level is ignored by both spread and opcli —
 ### Installation
 
 The plugin is bundled inside `opcli` and activates automatically whenever `opcli` is installed in the same Python environment as pytest. Add it as a test dependency alongside pytest-jubilant and your other test packages.
+
+The bare `opcli` package (without `[cli]`) installs only `pydantic` and `ruamel.yaml` — no `typer` dependency. This makes it safe to add as a test dependency even when your project pins an older `typer` version.
 
 **With uv — add to your project:**
 

@@ -348,38 +348,47 @@ name = "opcli"
 version = "0.0.1a2"
 source = { editable = "." }
 dependencies = [
-    { name = "jinja2" },
     { name = "pydantic" },
     { name = "ruamel-yaml" },
+]
+
+[package.optional-dependencies]
+cli = [
+    { name = "jinja2" },
     { name = "typer" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "codespell" },
+    { name = "jinja2" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
     { name = "ruff" },
+    { name = "typer" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "jinja2", specifier = ">=3.1" },
+    { name = "jinja2", marker = "extra == 'cli'", specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
-    { name = "typer", specifier = ">=0.15" },
+    { name = "typer", marker = "extra == 'cli'", specifier = ">=0.15" },
 ]
+provides-extras = ["cli"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "codespell", specifier = ">=2.2" },
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "mypy", specifier = ">=1.20.2" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-mock", specifier = ">=3.15.1" },
     { name = "ruff", specifier = ">=0.15.11" },
+    { name = "typer", specifier = ">=0.15" },
 ]
 
 [[package]]
