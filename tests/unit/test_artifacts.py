@@ -193,6 +193,36 @@ class TestArtifactsBuild:
         assert gen.rocks[0].builds[0].file is not None
         assert gen.rocks[0].builds[0].file.startswith("./")
 
+    def test_build_rock_overwrite_with_multiple_rocks_in_pack_dir(self, tmp_path: Path) -> None:
+        """When multiple rocks share a pack-dir and rockcraft overwrites in place,
+        the name-prefix fallback identifies the correct output file.
+        """
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\nrocks:\n"
+            "- name: garm\n  rockcraft-yaml: garm-rockcraft.yaml\n"
+            "- name: planner\n  rockcraft-yaml: planner-rockcraft.yaml\n",
+        )
+        write_file(tmp_path / "garm-rockcraft.yaml", "name: garm\n")
+        write_file(tmp_path / "planner-rockcraft.yaml", "name: planner\n")
+        # Pre-existing .rock files from a previous build run
+        write_file(tmp_path / "garm_0.1_amd64.rock", "old garm")
+        write_file(tmp_path / "planner_0.1_amd64.rock", "old planner")
+
+        # rockcraft pack overwrites the target file in place — no new files appear
+        with patch("opcli.core.artifacts.run_command"):
+            result = artifacts_build(tmp_path)
+
+        gen = load_artifacts_build(result)
+        expected_rock_count = 2
+        assert len(gen.rocks) == expected_rock_count
+        rock_names = {r.name for r in gen.rocks}
+        assert rock_names == {"garm", "planner"}
+        garm_file = next(r.builds[0].file for r in gen.rocks if r.name == "garm")
+        planner_file = next(r.builds[0].file for r in gen.rocks if r.name == "planner")
+        assert garm_file is not None and "garm" in garm_file
+        assert planner_file is not None and "planner" in planner_file
+
     def test_build_rock_sets_experimental_extensions_env(self, tmp_path: Path) -> None:
         """Rockcraft pack must always pass ROCKCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS."""
         write_file(

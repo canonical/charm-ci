@@ -670,7 +670,25 @@ def _build_rock(rock: RockArtifact, root: Path, attributed: set[str]) -> Generat
         run_command([*_PACK_COMMANDS["rock"]], cwd=str(pack_dir), env=_ROCKCRAFT_ENV)
 
     after = _snapshot_outputs(pack_dir, "rock")
-    new_output = _pick_new_output(before, after, "rock", pack_dir, attributed)
+    try:
+        new_output = _pick_new_output(before, after, "rock", pack_dir, attributed)
+    except OpcliError:
+        # Overwrite-in-place with multiple pre-existing files: fall back to a
+        # name-prefix filter.  Rockcraft always names output as {name}_*.rock,
+        # so filtering by prefix unambiguously identifies the file we just built.
+        prefix = str(pack_dir / f"{rock.name}_")
+        candidates = sorted(p for p in after if p.startswith(prefix))
+        if len(candidates) != 1:
+            raise
+        new_output = candidates[0]
+        if attributed and new_output in attributed:
+            msg = (
+                f"Output file {new_output} was already produced by another artifact. "
+                "Two artifacts cannot share the same output filename in the same "
+                "pack-dir. Use separate pack-dirs or ensure each artifact produces "
+                "a unique filename."
+            )
+            raise OpcliError(msg)
     output_file = _relative_to_root(new_output, root)
     attributed.add(new_output)
     return GeneratedRock(
