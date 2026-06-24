@@ -10,6 +10,7 @@ from typing import Annotated
 import typer
 
 from opcli.core.artifacts import (
+    _DEFAULT_WAIT_TIMEOUT_SECONDS,
     artifacts_build,
     artifacts_collect,
     artifacts_fetch,
@@ -44,6 +45,12 @@ def build(
     charm: list[str] = typer.Option([], "--charm", help="Build only this charm. Repeatable."),
     rock: list[str] = typer.Option([], "--rock", help="Build only this rock. Repeatable."),
     snap: list[str] = typer.Option([], "--snap", help="Build only this snap. Repeatable."),
+    build_timeout: int = typer.Option(
+        3600,
+        "--build-timeout",
+        help="Maximum seconds allowed for each pack invocation "
+        "(charmcraft/rockcraft/snapcraft). Defaults to 3600 (1 hour).",
+    ),
 ) -> None:
     """Build artifacts and produce artifacts.build.yaml."""
     path = artifacts_build(
@@ -51,6 +58,7 @@ def build(
         charm_names=charm or None,
         rock_names=rock or None,
         snap_names=snap or None,
+        build_timeout=build_timeout,
     )
     typer.echo(f"Wrote {path}")
 
@@ -102,9 +110,20 @@ def fetch(
         typer.Option(
             "--wait/--no-wait",
             help="Retry until artifacts-build appears (use when the build "
-            "job may still be running).",
+            "job may still be running). Automatically enabled when "
+            "--wait-timeout is provided.",
         ),
     ] = False,
+    wait_timeout: Annotated[
+        int | None,
+        typer.Option(
+            "--wait-timeout",
+            help="Maximum seconds to wait for the artifacts-build artifact "
+            "to appear. Specifying this option automatically enables waiting "
+            f"(equivalent to --wait). Default: {_DEFAULT_WAIT_TIMEOUT_SECONDS}s "
+            f"({_DEFAULT_WAIT_TIMEOUT_SECONDS // 60} min) when waiting is active.",
+        ),
+    ] = None,
 ) -> None:
     """Download artifacts from a CI run and prepare for local testing.
 
@@ -112,8 +131,13 @@ def fetch(
     archives. Rock artifacts are GHCR images and require no download.
     Finally rewrites artifacts.build.yaml with local file paths so that
     ``opcli pytest run`` and ``opcli spread run`` work without a local build.
+
+    Use ``--wait`` (or ``--wait-timeout``) when the build job may still be
+    running — the command will retry until the artifact appears.
     """
-    path = artifacts_fetch(Path.cwd(), run_id=run_id, repo=repo, wait=wait)
+    path = artifacts_fetch(
+        Path.cwd(), run_id=run_id, repo=repo, wait=wait, wait_timeout=wait_timeout
+    )
     typer.echo(f"Fetched artifacts and updated {path}")
 
 

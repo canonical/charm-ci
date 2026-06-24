@@ -87,6 +87,7 @@ _GITHUB_URL_RE = re.compile(r"github\.com[:/](.+?)(?:\.git)?/?$")
 
 _WAIT_MAX_ATTEMPTS = 60
 _WAIT_SLEEP_SECONDS = 30
+_DEFAULT_WAIT_TIMEOUT_SECONDS = _WAIT_MAX_ATTEMPTS * _WAIT_SLEEP_SECONDS
 # Keywords in gh CLI stderr that indicate a hard auth/permission failure
 # rather than "artifact not yet available" — retrying is pointless for these.
 _AUTH_ERROR_KEYWORDS = (
@@ -257,11 +258,21 @@ def artifacts_build(
     charm_names: list[str] | None = None,
     rock_names: list[str] | None = None,
     snap_names: list[str] | None = None,
+    build_timeout: int = 3600,
 ) -> Path:
     """Build artifacts and write ``artifacts.build.yaml``.
 
     If *charm_names*, *rock_names*, or *snap_names* are given, only
     those artifacts are built.  Otherwise all declared artifacts are built.
+
+    Args:
+        root: Working directory containing ``artifacts.yaml``.
+        charm_names: Names of charms to build. ``None`` builds all.
+        rock_names: Names of rocks to build. ``None`` builds all.
+        snap_names: Names of snaps to build. ``None`` builds all.
+        build_timeout: Maximum wall-clock seconds allowed for each individual
+            pack invocation (charmcraft/rockcraft/snapcraft). Defaults to
+            3600 (1 hour).
 
     Returns:
         The path to the written file.
@@ -302,9 +313,9 @@ def artifacts_build(
     # Track absolute output paths attributed to each artifact so far, to detect
     # collisions when multiple artifacts share a pack-dir.
     attributed: set[str] = set()
-    gen_rocks = [_build_rock(r, root, attributed) for r in rocks_to_build]
-    gen_charms = [_build_charm(c, root, attributed) for c in charms_to_build]
-    gen_snaps = [_build_snap(s, root, attributed) for s in snaps_to_build]
+    gen_rocks = [_build_rock(r, root, attributed, build_timeout) for r in rocks_to_build]
+    gen_charms = [_build_charm(c, root, attributed, build_timeout) for c in charms_to_build]
+    gen_snaps = [_build_snap(s, root, attributed, build_timeout) for s in snaps_to_build]
 
     # In GitHub Actions, rewrite outputs to CI-format references.
     ci = _get_ci_context()
@@ -522,15 +533,15 @@ def artifacts_fetch(  # noqa: C901, PLR0912
     repo: str | None = None,
     *,
     wait: bool = False,
+    wait_timeout: int | None = None,
 ) -> Path:
     """Download a CI run's artifacts and prepare for local testing.
 
     Steps:
     1. Infer ``owner/repo`` from the local git remote if *repo* is not given.
     2. Download ``artifacts.build.yaml`` from the named GitHub Actions
-       artifact.  When *wait* is ``True``, retries up to
-       :data:`_WAIT_MAX_ATTEMPTS` times until the artifact appears (useful
-       when the test job starts before the build completes).
+       artifact.  When *wait* is ``True`` (or *wait_timeout* is provided),
+       retries until the artifact appears or the timeout is exceeded.
     3. For every charm/snap/rock that carries a CI artifact reference,
        download the corresponding artifact archive.
     4. Call :func:`artifacts_localize` to rewrite ``artifacts.build.yaml``
@@ -545,9 +556,13 @@ def artifacts_fetch(  # noqa: C901, PLR0912
         run_id: GitHub Actions workflow run ID.
         repo: GitHub repository in ``owner/name`` format.  Inferred from the
             local git remote when ``None``.
-        wait: When ``True``, retry the initial ``artifacts-build``
-            download until it succeeds.  Fails immediately on
-            authentication/permission errors.
+        wait: When ``True``, retry the initial ``artifacts-build`` download
+            until it succeeds.  Specifying *wait_timeout* also enables
+            waiting.  Fails immediately on authentication/permission errors.
+        wait_timeout: Maximum seconds to wait for the artifact to appear.
+            When ``None`` (default), uses :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`
+            (1800 s / 30 min). Providing any value enables waiting even when
+            *wait* is ``False``.
 
     Returns:
         Path to the updated ``artifacts.build.yaml``.
@@ -573,8 +588,18 @@ def artifacts_fetch(  # noqa: C901, PLR0912
         str(root),
     ]
     gen_path = root / ARTIFACTS_BUILD_YAML
-    if wait:
-        _gh_download_with_wait(generated_cmd, str(root), run_id, repo, dest=gen_path)
+    # Providing wait_timeout always enables waiting, regardless of the wait flag.
+    if wait or wait_timeout is not None:
+        _gh_download_with_wait(
+            generated_cmd,
+            str(root),
+            run_id,
+            repo,
+            dest=gen_path,
+            wait_timeout=wait_timeout
+            if wait_timeout is not None
+            else _DEFAULT_WAIT_TIMEOUT_SECONDS,
+        )
     else:
         _gh_download(generated_cmd, str(root), dest=gen_path)
 
@@ -650,7 +675,9 @@ def _filter_by_name[T: (RockArtifact, CharmArtifact, SnapArtifact)](
     return [item for item in items if item.name in name_set]
 
 
-def _build_rock(rock: RockArtifact, root: Path, attributed: set[str]) -> GeneratedRock:
+def _build_rock(
+    rock: RockArtifact, root: Path, attributed: set[str], build_timeout: int = 3600
+) -> GeneratedRock:
     """Build a single rock artifact."""
     yaml_path = (root / rock.rockcraft_yaml).resolve()
     if not yaml_path.is_file():
@@ -667,7 +694,9 @@ def _build_rock(rock: RockArtifact, root: Path, attributed: set[str]) -> Generat
         with_pack_yaml_symlink("rockcraft.yaml", yaml_path, pack_dir),
         step(f"Building rock '{rock.name}' (rockcraft pack)"),
     ):
-        run_command([*_PACK_COMMANDS["rock"]], cwd=str(pack_dir), env=_ROCKCRAFT_ENV)
+        run_command(
+            [*_PACK_COMMANDS["rock"]], cwd=str(pack_dir), env=_ROCKCRAFT_ENV, timeout=build_timeout
+        )
 
     after = _snapshot_outputs(pack_dir, "rock")
     try:
@@ -781,6 +810,7 @@ def _build_charm(
     charm: CharmArtifact,
     root: Path,
     attributed: set[str],
+    build_timeout: int = 3600,
 ) -> GeneratedCharm:
     """Build a single charm artifact."""
     yaml_path = (root / charm.charmcraft_yaml).resolve()
@@ -796,7 +826,7 @@ def _build_charm(
         with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
         step(f"Building charm '{charm.name}' (charmcraft pack)"),
     ):
-        run_command([*_PACK_COMMANDS["charm"]], cwd=str(pack_dir))
+        run_command([*_PACK_COMMANDS["charm"]], cwd=str(pack_dir), timeout=build_timeout)
     after = _snapshot_outputs(pack_dir, "charm")
     new_outputs = _pick_new_charm_outputs(after, pack_dir, charm.name, attributed)
     attributed.update(new_outputs)
@@ -883,7 +913,9 @@ def _parse_base_from_charm_path(path: str) -> str | None:
     return f"{m.group('distro')}@{m.group('version')}"
 
 
-def _build_snap(snap: SnapArtifact, root: Path, attributed: set[str]) -> GeneratedSnap:
+def _build_snap(
+    snap: SnapArtifact, root: Path, attributed: set[str], build_timeout: int = 3600
+) -> GeneratedSnap:
     """Build a single snap artifact."""
     yaml_path = (root / snap.snapcraft_yaml).resolve()
     if not yaml_path.is_file():
@@ -896,7 +928,7 @@ def _build_snap(snap: SnapArtifact, root: Path, attributed: set[str]) -> Generat
 
     before = _snapshot_outputs(pack_dir, "snap")
     with step(f"Building snap '{snap.name}' (snapcraft pack)"):
-        run_command([*_PACK_COMMANDS["snap"]], cwd=str(pack_dir))
+        run_command([*_PACK_COMMANDS["snap"]], cwd=str(pack_dir), timeout=build_timeout)
     after = _snapshot_outputs(pack_dir, "snap")
     new_output = _pick_new_output(before, after, "snap", pack_dir, attributed)
     output_file = _relative_to_root(new_output, root)
@@ -1503,17 +1535,22 @@ def _infer_repo_from_git(root: Path) -> str:
     return m.group(1)
 
 
-def _gh_download_with_wait(
-    cmd: list[str], cwd: str, run_id: str, repo: str, dest: Path | None = None
+def _gh_download_with_wait(  # noqa: PLR0913
+    cmd: list[str],
+    cwd: str,
+    run_id: str,
+    repo: str,
+    dest: Path | None = None,
+    wait_timeout: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> None:
     """Run ``gh run download``, retrying until the artifact appears.
 
-    Retries up to :data:`_WAIT_MAX_ATTEMPTS` times with
-    :data:`_WAIT_SLEEP_SECONDS` between each attempt.  Fails immediately if
-    the error looks like an authentication/permission problem, a deterministic
-    failure (e.g. "file exists", handled via delete-and-retry), or if the
-    ``Collect artifacts`` job is known to have been skipped, failed, or
-    cancelled (meaning the artifact will never arrive).
+    Retries every :data:`_WAIT_SLEEP_SECONDS` seconds until *wait_timeout*
+    seconds have elapsed.  Fails immediately if the error looks like an
+    authentication/permission problem, a deterministic failure (e.g. "file
+    exists", handled via delete-and-retry), or if the ``Collect artifacts``
+    job is known to have been skipped, failed, or cancelled (meaning the
+    artifact will never arrive).
 
     Args:
         cmd: Full ``gh run download ...`` command list.
@@ -1524,6 +1561,8 @@ def _gh_download_with_wait(
         dest: Path of the expected output file.  When provided and ``gh``
             reports "file exists", the file is deleted and the download is
             retried once before giving up.
+        wait_timeout: Maximum seconds to keep retrying. Defaults to
+            :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`.
 
     Raises:
         ConfigurationError: On auth/permission errors, when the
@@ -1531,8 +1570,9 @@ def _gh_download_with_wait(
             when the timeout is exceeded (includes the last error message).
         SubprocessError: Propagated for unexpected non-retryable failures.
     """
+    max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
     last_exc: SubprocessError | None = None
-    for attempt in range(1, _WAIT_MAX_ATTEMPTS + 1):
+    for attempt in range(1, max_attempts + 1):
         try:
             _run_gh_download(cmd, cwd, dest)
             return
@@ -1557,7 +1597,7 @@ def _gh_download_with_wait(
             logger.info(
                 "Artifact not yet available (attempt %d/%d): %s — retrying in %ds...",
                 attempt,
-                _WAIT_MAX_ATTEMPTS,
+                max_attempts,
                 exc.stderr.strip(),
                 _WAIT_SLEEP_SECONDS,
             )
@@ -1566,7 +1606,7 @@ def _gh_download_with_wait(
     last_msg = last_exc.stderr.strip() if last_exc else ""
     msg = (
         f"Timed out waiting for artifacts-build artifact from run "
-        f"{run_id!r} after {_WAIT_MAX_ATTEMPTS * _WAIT_SLEEP_SECONDS}s. "
+        f"{run_id!r} after {max_attempts * _WAIT_SLEEP_SECONDS}s. "
         f"Last error: {last_msg}"
     )
     raise ConfigurationError(msg)
