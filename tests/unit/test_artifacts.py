@@ -1997,13 +1997,36 @@ class TestArtifactsFetch:
             patch("opcli.core.artifacts._check_collect_job_conclusion", return_value=None),
             patch("opcli.core.artifacts.time.sleep"),
         ):
-            # wait=False but wait_timeout != default → should retry
+            # wait=False but wait_timeout is not None → should retry (any value)
             artifacts_fetch(
                 tmp_path,
                 run_id="99887766",
                 repo="owner/my-repo",
                 wait=False,
                 wait_timeout=300,
+            )
+
+    def test_wait_timeout_implies_wait_even_at_default_value(self, tmp_path: Path) -> None:
+        """wait_timeout=_DEFAULT_WAIT_TIMEOUT_SECONDS (the default numeric value) still enables waiting."""
+        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        self._make_charm_files(tmp_path)
+        self._make_snap_files(tmp_path)
+
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+        gh = self._GH_RESULT
+        results = [not_ready, gh, gh, gh, gh]
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=results),
+            patch("opcli.core.artifacts._check_collect_job_conclusion", return_value=None),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            # Even passing exactly the default value enables waiting (not None → wait)
+            artifacts_fetch(
+                tmp_path,
+                run_id="99887766",
+                repo="owner/my-repo",
+                wait=False,
+                wait_timeout=_artifacts_mod._DEFAULT_WAIT_TIMEOUT_SECONDS,
             )
 
 

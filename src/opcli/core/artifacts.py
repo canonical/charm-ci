@@ -533,7 +533,7 @@ def artifacts_fetch(  # noqa: C901, PLR0912
     repo: str | None = None,
     *,
     wait: bool = False,
-    wait_timeout: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+    wait_timeout: int | None = None,
 ) -> Path:
     """Download a CI run's artifacts and prepare for local testing.
 
@@ -560,9 +560,9 @@ def artifacts_fetch(  # noqa: C901, PLR0912
             until it succeeds.  Specifying *wait_timeout* also enables
             waiting.  Fails immediately on authentication/permission errors.
         wait_timeout: Maximum seconds to wait for the artifact to appear.
-            Only used when waiting is enabled (via *wait* or by providing
-            this argument). Defaults to
-            :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS` (1800 s / 30 min).
+            When ``None`` (default), uses :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`
+            (1800 s / 30 min). Providing any value enables waiting even when
+            *wait* is ``False``.
 
     Returns:
         Path to the updated ``artifacts.build.yaml``.
@@ -588,10 +588,17 @@ def artifacts_fetch(  # noqa: C901, PLR0912
         str(root),
     ]
     gen_path = root / ARTIFACTS_BUILD_YAML
-    # wait_timeout being explicitly set implies --wait
-    if wait or wait_timeout != _DEFAULT_WAIT_TIMEOUT_SECONDS:
+    # Providing wait_timeout always enables waiting, regardless of the wait flag.
+    if wait or wait_timeout is not None:
         _gh_download_with_wait(
-            generated_cmd, str(root), run_id, repo, dest=gen_path, wait_timeout=wait_timeout
+            generated_cmd,
+            str(root),
+            run_id,
+            repo,
+            dest=gen_path,
+            wait_timeout=wait_timeout
+            if wait_timeout is not None
+            else _DEFAULT_WAIT_TIMEOUT_SECONDS,
         )
     else:
         _gh_download(generated_cmd, str(root), dest=gen_path)

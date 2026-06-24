@@ -115,16 +115,15 @@ def fetch(
         ),
     ] = False,
     wait_timeout: Annotated[
-        int,
+        int | None,
         typer.Option(
             "--wait-timeout",
             help="Maximum seconds to wait for the artifacts-build artifact "
             "to appear. Specifying this option automatically enables waiting "
-            f"(equivalent to --wait). Defaults to {_DEFAULT_WAIT_TIMEOUT_SECONDS}s "
-            f"({_DEFAULT_WAIT_TIMEOUT_SECONDS // 60} min). "
-            "Cannot be combined with --no-wait.",
+            f"(equivalent to --wait). Default: {_DEFAULT_WAIT_TIMEOUT_SECONDS}s "
+            f"({_DEFAULT_WAIT_TIMEOUT_SECONDS // 60} min) when waiting is active.",
         ),
-    ] = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+    ] = None,
 ) -> None:
     """Download artifacts from a CI run and prepare for local testing.
 
@@ -136,9 +135,6 @@ def fetch(
     Use ``--wait`` (or ``--wait-timeout``) when the build job may still be
     running — the command will retry until the artifact appears.
     """
-    if not wait and wait_timeout != _DEFAULT_WAIT_TIMEOUT_SECONDS:
-        # --wait-timeout was explicitly set — implies waiting
-        wait = True
     path = artifacts_fetch(
         Path.cwd(), run_id=run_id, repo=repo, wait=wait, wait_timeout=wait_timeout
     )
