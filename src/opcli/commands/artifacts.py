@@ -109,26 +109,23 @@ def fetch(
         typer.Option(
             "--arch",
             help=(
-                "Only download artifacts for this architecture (e.g. amd64, arm64). "
-                "Reads artifacts.yaml to discover which partial manifests to fetch "
-                "and downloads only the matching archives. "
-                "When omitted, all architectures are downloaded."
+                "Architecture to fetch. Defaults to the current machine's arch (auto-detected). "
+                "Use 'all' to download every architecture (e.g. for publish workflows). "
+                "Requires artifacts.yaml in the working directory."
             ),
         ),
     ] = None,
 ) -> None:
     """Download artifacts from a CI run and prepare for local testing.
 
-    Without --arch: downloads the merged artifacts-build artifact (produced by
-    the Collect artifacts CI job), then downloads all charm/snap/rock archives.
+    By default, auto-detects the current machine's architecture and downloads
+    only the matching artifacts. Use --arch all to fetch every architecture
+    (needed for publish workflows that upload all arch variants).
 
-    With --arch: downloads only the per-arch partial build manifests, merges
-    them locally (no dependency on the Collect artifacts job), and downloads
-    only the matching archives. With --wait, only waits for the specified
-    arch's builds to complete rather than all architectures.
-
-    Finally rewrites artifacts.build.yaml with local file paths so that
-    ``opcli pytest run`` and ``opcli spread run`` work without a local build.
+    Reads artifacts.yaml to discover which partial build manifests to download,
+    merges them locally, downloads the artifact archives, then rewrites
+    artifacts.build.yaml with local file paths so that ``opcli pytest run``
+    and ``opcli spread run`` work without a local build.
     """
     path = artifacts_fetch(Path.cwd(), run_id=run_id, repo=repo, wait=wait, arch=arch)
     typer.echo(f"Fetched artifacts and updated {path}")
