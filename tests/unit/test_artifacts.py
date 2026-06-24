@@ -2041,3 +2041,240 @@ class TestSafeArtifactDir:
 
         with pytest.raises(ConfigurationError, match="resolves outside"):
             _artifacts_mod._safe_artifact_dir(tmp_path, "innocent-artifact")
+
+
+class TestArtifactsFetchByArch:
+    """Tests for artifacts_fetch() with arch= (arch-filtered mode)."""
+
+    # artifacts.yaml declaring multi-arch builds.
+    _PLAN_YAML = (
+        "version: 1\n"
+        "charms:\n"
+        "- name: my-charm\n"
+        "  charmcraft-yaml: charmcraft.yaml\n"
+        "  platforms:\n"
+        "  - arch: amd64\n"
+        "  - arch: arm64\n"
+        "rocks:\n"
+        "- name: my-rock\n"
+        "  rockcraft-yaml: rock/rockcraft.yaml\n"
+        "  platforms:\n"
+        "  - arch: amd64\n"
+        "  - arch: arm64\n"
+        "snaps: []\n"
+    )
+
+    # Partial manifest for amd64 charm build.
+    _PARTIAL_CHARM_AMD64 = (
+        "version: 1\n"
+        "rocks: []\n"
+        "charms:\n"
+        "- name: my-charm\n"
+        "  charmcraft-yaml: charmcraft.yaml\n"
+        "  builds:\n"
+        "  - arch: amd64\n"
+        "    artifact: built-charm-my-charm-amd64\n"
+        "    run-id: '12345'\n"
+        "snaps: []\n"
+    )
+
+    # Partial manifest for amd64 rock build.
+    _PARTIAL_ROCK_AMD64 = (
+        "version: 1\n"
+        "rocks:\n"
+        "- name: my-rock\n"
+        "  rockcraft-yaml: rock/rockcraft.yaml\n"
+        "  builds:\n"
+        "  - arch: amd64\n"
+        "    image: ghcr.io/owner/repo/my-rock:abc1234-amd64\n"
+        "charms: []\n"
+        "snaps: []\n"
+    )
+
+    _GH_RESULT = SubprocessResult(stdout="", stderr="", returncode=0)
+
+    def _write_plan(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "artifacts.yaml", self._PLAN_YAML)
+
+    def _write_partial_charm(self, tmp_path: Path) -> None:
+        d = tmp_path / "partial-artifacts-fetch" / "artifacts-build-charm-my-charm-amd64"
+        d.mkdir(parents=True, exist_ok=True)
+        write_file(d / "artifacts.build.yaml", self._PARTIAL_CHARM_AMD64)
+
+    def _write_partial_rock(self, tmp_path: Path) -> None:
+        d = tmp_path / "partial-artifacts-fetch" / "artifacts-build-rock-my-rock-amd64"
+        d.mkdir(parents=True, exist_ok=True)
+        write_file(d / "artifacts.build.yaml", self._PARTIAL_ROCK_AMD64)
+
+    def _make_charm_files(self, tmp_path: Path) -> None:
+        d = tmp_path / "built-charm-my-charm-amd64"
+        d.mkdir(exist_ok=True)
+        (d / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
+
+    def test_downloads_only_arch_specific_partials(self, tmp_path: Path) -> None:
+        """Downloads only partial manifests for the requested arch, not arm64."""
+        self._write_plan(tmp_path)
+        self._write_partial_charm(tmp_path)
+        self._write_partial_rock(tmp_path)
+        self._make_charm_files(tmp_path)
+
+        with patch("opcli.core.artifacts.run_command", return_value=self._GH_RESULT) as mock_run:
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64")
+
+        # Collect the --name values from gh run download calls.
+        download_names = [
+            c.args[0][c.args[0].index("--name") + 1]
+            for c in mock_run.call_args_list
+            if "download" in c.args[0]
+        ]
+        # Should download exactly the amd64 partials + the amd64 charm archive.
+        assert "artifacts-build-charm-my-charm-amd64" in download_names
+        assert "artifacts-build-rock-my-rock-amd64" in download_names
+        assert "built-charm-my-charm-amd64" in download_names
+        # Must NOT touch arm64 artifacts or the merged artifacts-build.
+        assert not any("arm64" in n for n in download_names)
+        assert "artifacts-build" not in download_names
+
+    def test_does_not_download_merged_artifacts_build(self, tmp_path: Path) -> None:
+        """Arch-filtered fetch never downloads the 'artifacts-build' merged artifact."""
+        self._write_plan(tmp_path)
+        self._write_partial_charm(tmp_path)
+        self._write_partial_rock(tmp_path)
+        self._make_charm_files(tmp_path)
+
+        with patch("opcli.core.artifacts.run_command", return_value=self._GH_RESULT) as mock_run:
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64")
+
+        download_names = [
+            c.args[0][c.args[0].index("--name") + 1]
+            for c in mock_run.call_args_list
+            if "download" in c.args[0]
+        ]
+        assert "artifacts-build" not in download_names
+
+    def test_raises_when_artifacts_yaml_missing(self, tmp_path: Path) -> None:
+        """Arch-filtered fetch requires artifacts.yaml to determine partial names."""
+        with pytest.raises(ConfigurationError, match=r"artifacts\.yaml"):
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64")
+
+    def test_raises_when_arch_not_in_plan(self, tmp_path: Path) -> None:
+        """Raises ConfigurationError if no artifacts match the requested arch."""
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: x\n  charmcraft-yaml: charmcraft.yaml\n"
+            "  platforms:\n  - arch: amd64\n",
+        )
+        with pytest.raises(ConfigurationError, match="s390x"):
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="s390x")
+
+    def test_localises_after_arch_filtered_fetch(self, tmp_path: Path) -> None:
+        """artifacts.build.yaml is updated with local paths after arch-filtered fetch."""
+        self._write_plan(tmp_path)
+        self._write_partial_charm(tmp_path)
+        self._write_partial_rock(tmp_path)
+        self._make_charm_files(tmp_path)
+
+        with patch("opcli.core.artifacts.run_command", return_value=self._GH_RESULT):
+            gen_path = artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64")
+
+        gen = load_artifacts_build(gen_path)
+        for charm in gen.charms:
+            amd64_builds = [b for b in charm.builds if b.arch == "amd64"]
+            assert amd64_builds, f"Charm '{charm.name}' has no amd64 build"
+            assert amd64_builds[0].path, f"Charm '{charm.name}' amd64 not localised"
+
+    def test_wait_retries_partials_without_collect_check(self, tmp_path: Path) -> None:
+        """With wait=True and arch=, retries partial manifests without checking collect job."""
+        # Use a charm-only plan so the side-effect only needs to handle one partial manifest.
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\n"
+            "charms:\n"
+            "- name: my-charm\n"
+            "  charmcraft-yaml: charmcraft.yaml\n"
+            "  platforms:\n"
+            "  - arch: amd64\n"
+            "rocks: []\n"
+            "snaps: []\n",
+        )
+        self._make_charm_files(tmp_path)
+
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+        gh = self._GH_RESULT
+        charm_partial = "artifacts-build-charm-my-charm-amd64"
+        attempts = 0
+
+        def side_effect(cmd: list[str], cwd: str | None = None, **kw: object) -> object:
+            nonlocal attempts
+            if "download" not in cmd or "--name" not in cmd:
+                return gh
+            name = cmd[cmd.index("--name") + 1]
+            if name != charm_partial:
+                return gh
+            attempts += 1
+            if attempts == 1:
+                raise not_ready
+            # Second attempt: write the partial file and succeed.
+            dest_dir = tmp_path / "partial-artifacts-fetch" / name
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            write_file(
+                dest_dir / "artifacts.build.yaml",
+                "version: 1\n"
+                "rocks: []\n"
+                "charms:\n"
+                "- name: my-charm\n"
+                "  charmcraft-yaml: charmcraft.yaml\n"
+                "  builds:\n"
+                "  - arch: amd64\n"
+                "    artifact: built-charm-my-charm-amd64\n"
+                "    run-id: '12345'\n"
+                "snaps: []\n",
+            )
+            return gh
+
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=side_effect),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64", wait=True)
+
+    def test_wait_arch_fails_fast_on_auth_error(self, tmp_path: Path) -> None:
+        """Arch-filtered wait fails immediately on authentication errors."""
+        self._write_plan(tmp_path)
+
+        auth_error = SubprocessError(["gh"], 1, "HTTP 401 Unauthorized: bad credentials")
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=auth_error),
+            patch("opcli.core.artifacts.time.sleep") as mock_sleep,
+            pytest.raises(ConfigurationError, match="Authentication"),
+        ):
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64", wait=True)
+
+        mock_sleep.assert_not_called()
+
+    def test_without_arch_preserves_existing_behavior(self, tmp_path: Path) -> None:
+        """Without --arch, fetch uses the merged artifacts-build artifact (original behavior)."""
+        merged = (
+            "version: 1\n"
+            "rocks: []\n"
+            "charms:\n"
+            "- name: my-charm\n"
+            "  charmcraft-yaml: charmcraft.yaml\n"
+            "  builds:\n"
+            "  - arch: amd64\n"
+            "    artifact: built-charm-my-charm-amd64\n"
+            "    run-id: '12345'\n"
+            "snaps: []\n"
+        )
+        write_file(tmp_path / "artifacts.build.yaml", merged)
+        d = tmp_path / "built-charm-my-charm-amd64"
+        d.mkdir()
+        (d / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
+
+        with patch("opcli.core.artifacts.run_command", return_value=self._GH_RESULT) as mock_run:
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo")
+
+        first_call_name = mock_run.call_args_list[0].args[0][
+            mock_run.call_args_list[0].args[0].index("--name") + 1
+        ]
+        assert first_call_name == "artifacts-build"

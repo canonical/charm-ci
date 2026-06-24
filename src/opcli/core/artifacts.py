@@ -37,6 +37,7 @@ from opcli.core.yaml_io import (
     load_artifacts_plan,
 )
 from opcli.models.artifacts import (
+    ArtifactsPlan,
     CharmArtifact,
     RockArtifact,
     SnapArtifact,
@@ -522,17 +523,30 @@ def artifacts_fetch(  # noqa: C901, PLR0912
     repo: str | None = None,
     *,
     wait: bool = False,
+    arch: str | None = None,
 ) -> Path:
     """Download a CI run's artifacts and prepare for local testing.
 
-    Steps:
+    There are two modes, selected by the *arch* parameter:
+
+    **All-arch mode** (``arch=None``, the default):
+      Downloads the merged ``artifacts-build`` artifact produced by the
+      ``Collect artifacts`` CI job, then downloads every charm/snap/rock
+      archive regardless of architecture.
+
+    **Arch-filtered mode** (``arch`` specified):
+      Downloads only the per-arch partial build manifests
+      (``artifacts-build-{type}-{name}-{arch}``), merges them locally
+      (no dependency on the ``Collect artifacts`` job), then downloads
+      only the artifact archives for the requested architecture.  With
+      ``wait=True``, retries only until the arch-specific partials appear
+      rather than waiting for all architectures to finish.
+
+    Steps (both modes):
     1. Infer ``owner/repo`` from the local git remote if *repo* is not given.
-    2. Download ``artifacts.build.yaml`` from the named GitHub Actions
-       artifact.  When *wait* is ``True``, retries up to
-       :data:`_WAIT_MAX_ATTEMPTS` times until the artifact appears (useful
-       when the test job starts before the build completes).
-    3. For every charm/snap/rock that carries a CI artifact reference,
-       download the corresponding artifact archive.
+    2. Download the build manifest(s) — merged or per-arch partial.
+    3. For every charm/snap/rock that carries a CI artifact reference
+       (filtered to *arch* when provided), download the archive.
     4. Call :func:`artifacts_localize` to rewrite ``artifacts.build.yaml``
        with the local ``.charm`` / ``.snap`` file paths.
 
@@ -545,9 +559,11 @@ def artifacts_fetch(  # noqa: C901, PLR0912
         run_id: GitHub Actions workflow run ID.
         repo: GitHub repository in ``owner/name`` format.  Inferred from the
             local git remote when ``None``.
-        wait: When ``True``, retry the initial ``artifacts-build``
-            download until it succeeds.  Fails immediately on
-            authentication/permission errors.
+        wait: When ``True``, retry the initial manifest download until it
+            succeeds.  Fails immediately on authentication/permission errors.
+        arch: When given, only download artifacts for this architecture.
+            Reads ``artifacts.yaml`` to discover which partial manifests to
+            fetch.  When ``None`` (default), downloads all architectures.
 
     Returns:
         Path to the updated ``artifacts.build.yaml``.
@@ -559,6 +575,9 @@ def artifacts_fetch(  # noqa: C901, PLR0912
     """
     if repo is None:
         repo = _infer_repo_from_git(root)
+
+    if arch is not None:
+        return _artifacts_fetch_by_arch(root, run_id, repo, arch=arch, wait=wait)
 
     generated_cmd = [
         "gh",
@@ -604,7 +623,156 @@ def artifacts_fetch(  # noqa: C901, PLR0912
             if snap_build.artifact:
                 seen_artifacts.add(snap_build.artifact)
 
-    for name in sorted(seen_artifacts):
+    _download_artifact_archives(root, run_id, repo, seen_artifacts)
+
+    # Rewrite artifact refs to local file paths
+    artifacts_localize(root)
+    return gen_path
+
+
+def _artifacts_fetch_by_arch(
+    root: Path,
+    run_id: str,
+    repo: str,
+    *,
+    arch: str,
+    wait: bool,
+) -> Path:
+    """Arch-filtered fetch: download per-arch partial manifests, merge, then download archives.
+
+    Unlike the all-arch fetch, this function does not depend on the ``Collect
+    artifacts`` CI job.  It discovers the expected partial manifest names from
+    ``artifacts.yaml``, downloads only the partials for *arch*, merges them
+    locally, and then downloads only the *arch*-specific artifact archives.
+
+    Args:
+        root: Working directory; all artifacts are downloaded here.
+        run_id: GitHub Actions workflow run ID.
+        repo: GitHub repository in ``owner/name`` format.
+        arch: Target architecture (e.g. ``"amd64"``).
+        wait: When ``True``, retry each partial manifest download until it
+            appears (useful when the build job is still running).
+    """
+    plan_path = root / ARTIFACTS_YAML
+    if not plan_path.exists():
+        msg = (
+            f"{ARTIFACTS_YAML} not found.  Arch-filtered fetch requires "
+            f"artifacts.yaml to discover the expected partial manifests."
+        )
+        raise ConfigurationError(msg)
+    plan = load_artifacts_plan(plan_path)
+
+    partial_names = _partial_manifest_names_for_arch(plan, arch)
+    if not partial_names:
+        msg = f"No artifacts are defined for arch '{arch}' in {ARTIFACTS_YAML}."
+        raise ConfigurationError(msg)
+
+    # Download each partial manifest into its own subdirectory.
+    partial_paths = _download_partial_manifests(partial_names, root, run_id, repo, wait=wait)
+
+    # Merge partials into artifacts.build.yaml.
+    gen_path = artifacts_collect(root, partial_paths)
+
+    # Download only arch-specific artifact archives.
+    generated = load_artifacts_build(gen_path)
+    seen_artifacts = _arch_artifact_archives(generated, arch)
+    _download_artifact_archives(root, run_id, repo, seen_artifacts)
+
+    # Rewrite artifact refs to local file paths.
+    artifacts_localize(root)
+    return gen_path
+
+
+def _partial_manifest_names_for_arch(
+    plan: ArtifactsPlan,
+    arch: str,
+) -> list[str]:
+    """Return the GitHub artifact names for per-arch partial build manifests.
+
+    The naming convention ``artifacts-build-{type}-{name}-{arch}`` mirrors
+    what ``build-artifacts.yml`` uploads in the ``Upload partial build manifest``
+    step.
+    """
+    names: list[str] = []
+    for rock in plan.rocks:
+        if any(b.arch == arch for b in rock.platforms):
+            names.append(f"artifacts-build-rock-{rock.name}-{arch}")
+    for charm in plan.charms:
+        if any(b.arch == arch for b in charm.platforms):
+            names.append(f"artifacts-build-charm-{charm.name}-{arch}")
+    for snap in plan.snaps:
+        if any(b.arch == arch for b in snap.platforms):
+            names.append(f"artifacts-build-snap-{snap.name}-{arch}")
+    return names
+
+
+def _download_partial_manifests(
+    partial_names: list[str],
+    root: Path,
+    run_id: str,
+    repo: str,
+    *,
+    wait: bool,
+) -> list[Path]:
+    """Download per-arch partial ``artifacts.build.yaml`` files from a CI run.
+
+    Each partial is downloaded into
+    ``root/partial-artifacts-fetch/{name}/artifacts.build.yaml``.
+    Returns the list of downloaded file paths (one per name).
+    """
+    partial_dir = root / "partial-artifacts-fetch"
+    partial_paths: list[Path] = []
+    for name in partial_names:
+        dest_dir = partial_dir / name
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / ARTIFACTS_BUILD_YAML
+        cmd = [
+            "gh",
+            "run",
+            "download",
+            run_id,
+            "--repo",
+            repo,
+            "--name",
+            name,
+            "--dir",
+            str(dest_dir),
+        ]
+        status(f"Downloading build manifest '{name}'")
+        if wait:
+            _gh_download_with_wait_no_collect(cmd, str(root), dest=dest)
+        else:
+            _gh_download(cmd, str(root), dest=dest)
+        partial_paths.append(dest)
+    return partial_paths
+
+
+def _arch_artifact_archives(generated: ArtifactsGenerated, arch: str) -> set[str]:
+    """Return the set of GitHub artifact archive names for a given architecture."""
+    seen: set[str] = set()
+    for rock in generated.rocks:
+        for rock_build in rock.builds:
+            if rock_build.artifact and rock_build.arch == arch:
+                seen.add(rock_build.artifact)
+    for charm in generated.charms:
+        for charm_build in charm.builds:
+            if charm_build.artifact and charm_build.arch == arch:
+                seen.add(charm_build.artifact)
+    for snap in generated.snaps:
+        for snap_build in snap.builds:
+            if snap_build.artifact and snap_build.arch == arch:
+                seen.add(snap_build.artifact)
+    return seen
+
+
+def _download_artifact_archives(
+    root: Path,
+    run_id: str,
+    repo: str,
+    artifact_names: set[str],
+) -> None:
+    """Download a set of GitHub Actions artifact archives to *root*."""
+    for name in sorted(artifact_names):
         artifact_dir = _safe_artifact_dir(root, name)
         artifact_dir.mkdir(parents=True, exist_ok=True)
         status(f"Downloading artifact '{name}'")
@@ -624,10 +792,6 @@ def artifacts_fetch(  # noqa: C901, PLR0912
             cwd=str(root),
         )
         logger.info("Downloaded artifact '%s'.", name)
-
-    # Rewrite artifact refs to local file paths
-    artifacts_localize(root)
-    return gen_path
 
 
 def _filter_by_name[T: (RockArtifact, CharmArtifact, SnapArtifact)](
@@ -1567,6 +1731,61 @@ def _gh_download_with_wait(
     msg = (
         f"Timed out waiting for artifacts-build artifact from run "
         f"{run_id!r} after {_WAIT_MAX_ATTEMPTS * _WAIT_SLEEP_SECONDS}s. "
+        f"Last error: {last_msg}"
+    )
+    raise ConfigurationError(msg)
+
+
+def _gh_download_with_wait_no_collect(cmd: list[str], cwd: str, dest: Path | None = None) -> None:
+    """Run ``gh run download``, retrying until the artifact appears (no collect-job check).
+
+    Like :func:`_gh_download_with_wait` but does not check the ``Collect
+    artifacts`` job conclusion.  Used in arch-filtered fetch where partial
+    manifests are downloaded directly from individual build jobs (which never
+    produce a ``Collect artifacts`` entry).
+
+    Retries up to :data:`_WAIT_MAX_ATTEMPTS` times.  Fails immediately on
+    authentication/permission errors.
+
+    Args:
+        cmd: Full ``gh run download ...`` command list.
+        cwd: Working directory for the subprocess.
+        dest: Path of the expected output file.  When provided and ``gh``
+            reports "file exists", the file is deleted and the download is
+            retried once before giving up.
+
+    Raises:
+        ConfigurationError: On auth/permission errors or when the timeout is
+            exceeded (includes the last error message).
+        SubprocessError: Propagated for unexpected non-retryable failures.
+    """
+    last_exc: SubprocessError | None = None
+    for attempt in range(1, _WAIT_MAX_ATTEMPTS + 1):
+        try:
+            _run_gh_download(cmd, cwd, dest)
+            return
+        except SubprocessError as exc:
+            stderr_lower = exc.stderr.lower()
+            if any(kw in stderr_lower for kw in _AUTH_ERROR_KEYWORDS):
+                msg = (
+                    f"Authentication/permission error downloading artifact. "
+                    f"Check GH_TOKEN and repository permissions.\n{exc.stderr.strip()}"
+                )
+                raise ConfigurationError(msg) from exc
+            last_exc = exc
+            logger.info(
+                "Artifact not yet available (attempt %d/%d): %s — retrying in %ds...",
+                attempt,
+                _WAIT_MAX_ATTEMPTS,
+                exc.stderr.strip(),
+                _WAIT_SLEEP_SECONDS,
+            )
+            time.sleep(_WAIT_SLEEP_SECONDS)
+
+    last_msg = last_exc.stderr.strip() if last_exc else ""
+    msg = (
+        f"Timed out waiting for artifact after "
+        f"{_WAIT_MAX_ATTEMPTS * _WAIT_SLEEP_SECONDS}s. "
         f"Last error: {last_msg}"
     )
     raise ConfigurationError(msg)
