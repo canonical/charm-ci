@@ -9,6 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from opcli.commands.env import app as env_app
+from opcli.core.env import current_arch
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.provision import provision_load, provision_prepare, provision_registry
 from opcli.core.yaml_io import load_artifacts_build
@@ -556,3 +557,23 @@ class TestEnvCli:
         assert result.exit_code == 0
         mock_registry.assert_called_once_with(tmp_path)
         assert result.stdout == message
+
+
+class TestCurrentArch:
+    """Tests for current_arch() architecture normalisation."""
+
+    @pytest.mark.parametrize(
+        ("machine", "expected"),
+        [
+            pytest.param("x86_64", "amd64", id="x86_64->amd64"),
+            pytest.param("amd64", "amd64", id="amd64->amd64"),
+            pytest.param("aarch64", "arm64", id="aarch64->arm64"),
+            pytest.param("arm64", "arm64", id="arm64->arm64"),
+            pytest.param("ppc64le", "ppc64el", id="ppc64le->ppc64el"),
+            pytest.param("s390x", "s390x", id="s390x-passthrough"),
+            pytest.param("riscv64", "riscv64", id="riscv64-passthrough"),
+        ],
+    )
+    def test_arch_normalisation(self, machine: str, expected: str) -> None:
+        with patch("platform.machine", return_value=machine):
+            assert current_arch() == expected
