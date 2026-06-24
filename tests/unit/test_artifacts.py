@@ -1952,20 +1952,22 @@ class TestArtifactsFetch:
         """With wait=True, raises ConfigurationError after exhausting all attempts."""
         self._write_plan(tmp_path)
         not_ready = SubprocessError(["gh"], 1, "no artifact named X in run")
-        _orig = _artifacts_mod._WAIT_MAX_ATTEMPTS
-        try:
-            _artifacts_mod._WAIT_MAX_ATTEMPTS = 2  # speed up the test
-            with (
-                patch("opcli.core.artifacts.run_command", side_effect=not_ready),
-                patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
-                patch("opcli.core.artifacts.time.sleep"),
-                pytest.raises(ConfigurationError, match="Timed out"),
-            ):
-                artifacts_fetch(
-                    tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
-                )
-        finally:
-            _artifacts_mod._WAIT_MAX_ATTEMPTS = _orig
+        # 2 * _WAIT_SLEEP_SECONDS gives exactly 2 attempts (max = timeout // sleep).
+        two_attempt_timeout = _artifacts_mod._WAIT_SLEEP_SECONDS * 2
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=not_ready),
+            patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
+            patch("opcli.core.artifacts.time.sleep"),
+            pytest.raises(ConfigurationError, match="Timed out"),
+        ):
+            artifacts_fetch(
+                tmp_path,
+                run_id="99887766",
+                repo="owner/my-repo",
+                wait=True,
+                wait_timeout=two_attempt_timeout,
+                arch="all",
+            )
 
     @pytest.mark.parametrize("conclusion", ["failure", "cancelled"])
     def test_wait_fails_fast_on_terminal_run_conclusion(
@@ -1989,7 +1991,43 @@ class TestArtifactsFetch:
 
         mock_sleep.assert_not_called()
 
-    def test_wait_continues_when_run_still_in_progress(self, tmp_path: Path) -> None:
+    def test_wait_bails_on_success_conclusion_with_missing_partials_all_arch(
+        self, tmp_path: Path
+    ) -> None:
+        """With arch=all + wait, bails immediately when run is 'success' but partials are missing."""
+        self._write_plan(tmp_path)
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=not_ready),
+            patch("opcli.core.artifacts._check_run_conclusion", return_value="success"),
+            patch("opcli.core.artifacts.time.sleep") as mock_sleep,
+            pytest.raises(ConfigurationError, match="skipped"),
+        ):
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
+
+        mock_sleep.assert_not_called()
+
+    def test_wait_bails_on_success_conclusion_with_missing_artifact_single_arch(
+        self, tmp_path: Path
+    ) -> None:
+        """With single arch + wait, bails immediately when run is 'success' but artifact is missing."""
+        self._write_plan(tmp_path)
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+        with (
+            patch("opcli.core.artifacts._gh_download", side_effect=not_ready),
+            patch("opcli.core.artifacts._run_gh_download", side_effect=not_ready),
+            patch("opcli.core.artifacts._check_run_conclusion", return_value="success"),
+            patch("opcli.core.artifacts.time.sleep") as mock_sleep,
+            pytest.raises(ConfigurationError, match="skipped"),
+        ):
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="amd64"
+            )
+
+        mock_sleep.assert_not_called()
+
         """With wait=True, keeps retrying when run conclusion is None (still running)."""
         self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
@@ -2038,7 +2076,7 @@ class TestArtifactsFetch:
                 arch="all",
             )
 
-        assert len(sleep_calls) == 2  # noqa: PLR2004
+        assert len(sleep_calls) == 1  # only between attempts, not after the last one
 
     def test_wait_timeout_implies_wait(self, tmp_path: Path) -> None:
         """Providing wait_timeout without wait=True still enables waiting."""

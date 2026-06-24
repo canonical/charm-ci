@@ -415,9 +415,10 @@ def artifacts_collect(root: Path, partial_paths: list[Path]) -> Path:
 
     In CI, each matrix build job produces a partial file containing only the
     artifact it built.  This function merges all partials into a single
-    ``artifacts.build.yaml`` and re-fills charm resource ``file``/``image``
-    references from the merged rock outputs (rocks and charms build in parallel
-    so charm partials have ``null`` resource refs at build time).
+    ``artifacts.build.yaml`` by concatenating per-arch build entries for each
+    artifact type, then validates that every charm resource's referenced rock
+    is present in the merged output.  Image refs on rocks are not resolved
+    here — they are resolved lazily at publish time (``opcli artifacts publish``).
 
     Args:
         root: Repository root; the merged file is written here.
@@ -644,7 +645,13 @@ def _artifacts_fetch_all_arches(
         raise ConfigurationError(msg)
 
     partial_dir = root / "partial-artifacts-fetch"
-    partial_dir.mkdir(parents=True, exist_ok=True)
+    # Always start clean so stale partials from a previous fetch (e.g. a
+    # different run_id or an earlier single-arch fetch) can never corrupt
+    # the merge.  The wait path also clears before each retry; doing it here
+    # guarantees both branches are safe.
+    if partial_dir.exists():
+        shutil.rmtree(partial_dir)
+    partial_dir.mkdir(parents=True)
 
     pattern_cmd = [
         "gh",
@@ -671,6 +678,15 @@ def _artifacts_fetch_all_arches(
         )
     else:
         run_command(pattern_cmd, cwd=str(root))
+        missing = _missing_partial_names(partial_dir, all_partial_names)
+        if missing:
+            msg = (
+                f"{len(missing)} partial build manifest(s) were not available: "
+                f"{', '.join(missing[:5])}. "
+                "The build may still be running — use --wait to retry until all "
+                "partials are present."
+            )
+            raise ConfigurationError(msg)
 
     # Collect all downloaded partial files.
     partial_paths = sorted(partial_dir.rglob(ARTIFACTS_BUILD_YAML))
@@ -821,9 +837,14 @@ def _download_partial_manifests(  # noqa: PLR0913
     Each partial is downloaded into
     ``root/partial-artifacts-fetch/{name}/artifacts.build.yaml``.
     Returns the list of downloaded file paths (one per name).
+
+    The *wait_timeout* budget is shared across all partials: each call to
+    :func:`_gh_download_with_wait` receives only the *remaining* budget so
+    the total wait never exceeds *wait_timeout*.
     """
     partial_dir = root / "partial-artifacts-fetch"
     partial_paths: list[Path] = []
+    deadline = time.monotonic() + wait_timeout
     for name in partial_names:
         dest_dir = partial_dir / name
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -842,8 +863,9 @@ def _download_partial_manifests(  # noqa: PLR0913
         ]
         status(f"Downloading build manifest '{name}'")
         if wait:
+            remaining = max(_WAIT_SLEEP_SECONDS, int(deadline - time.monotonic()))
             _gh_download_with_wait(
-                cmd, str(root), run_id=run_id, repo=repo, dest=dest, wait_timeout=wait_timeout
+                cmd, str(root), run_id=run_id, repo=repo, dest=dest, wait_timeout=remaining
             )
         else:
             _gh_download(cmd, str(root), dest=dest)
@@ -1847,18 +1869,15 @@ def _gh_download_with_wait(  # noqa: PLR0913
                 )
                 raise ConfigurationError(msg)
 
-        time.sleep(_WAIT_SLEEP_SECONDS)
+        if attempt < max_attempts:
+            time.sleep(_WAIT_SLEEP_SECONDS)
 
     last_msg = last_exc.stderr.strip() if last_exc else ""
-    msg = (
-        f"Timed out waiting for artifact after "
-        f"{max_attempts * _WAIT_SLEEP_SECONDS}s. "
-        f"Last error: {last_msg}"
-    )
+    msg = f"Timed out waiting for artifact after {wait_timeout}s. Last error: {last_msg}"
     raise ConfigurationError(msg)
 
 
-def _gh_download_all_partials_with_wait(  # noqa: PLR0913
+def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
     cmd: list[str],
     cwd: str,
     run_id: str,
@@ -1941,12 +1960,13 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913
             attempt,
             max_attempts,
         )
-        time.sleep(_WAIT_SLEEP_SECONDS)
+        if attempt < max_attempts:
+            time.sleep(_WAIT_SLEEP_SECONDS)
 
     last_msg = last_exc.stderr.strip() if last_exc else "Some partial manifests still missing."
     msg = (
         f"Timed out waiting for all partial build manifests from run "
-        f"{run_id!r} after {max_attempts * _WAIT_SLEEP_SECONDS}s. "
+        f"{run_id!r} after {wait_timeout}s. "
         f"Last error: {last_msg}"
     )
     raise ConfigurationError(msg)

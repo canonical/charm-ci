@@ -226,19 +226,21 @@ jobs:
       # ── Early bail-out if the build already failed ─────────────────────────
       # The test job starts without waiting for the build (by design — provisioning
       # runs in parallel).  However, if the build has already failed by the time we
-      # reach this point, there is no reason to continue.  The "Collect artifacts"
-      # job in the build workflow is skipped/failed/cancelled when a build fails,
-      # so we use its conclusion as the signal.
+      # reach this point, there is no reason to continue.  We query the overall run
+      # conclusion; if it is already failure or cancelled the build will never
+      # produce artifacts and we bail early.  A null/in-progress conclusion means
+      # the build is still running — the spread _CI_PREPARE fetch --wait will block
+      # and bail if it eventually fails.
       - name: Abort if build failed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           conclusion=$(gh run view "${{ github.run_id }}" \
             --repo "${{ github.repository }}" \
-            --json jobs \
-            --jq '.jobs[] | select(.name | contains("Collect artifacts")) | .conclusion')
-          if [[ "$conclusion" =~ ^(skipped|failure|cancelled)$ ]]; then
-            echo "::error::Build failed — 'Collect artifacts' job conclusion is '$conclusion'. Skipping test."
+            --json conclusion \
+            --jq '.conclusion // empty')
+          if [[ "$conclusion" =~ ^(failure|cancelled)$ ]]; then
+            echo "::error::Build failed — run conclusion is '$conclusion'. Skipping test."
             exit 1
           fi
 
