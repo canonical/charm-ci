@@ -910,6 +910,22 @@ class TestArtifactsBuild:
         assert len(gen.rocks) == 0
         assert len(gen.charms) == 1
 
+    def test_build_timeout_passed_to_run_command(self, tmp_path: Path) -> None:
+        """build_timeout is forwarded to run_command as the timeout kwarg."""
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: mycharm\n  charmcraft-yaml: charmcraft.yaml\n",
+        )
+        write_file(tmp_path / "charmcraft.yaml", "name: mycharm\n")
+        write_file(tmp_path / "mycharm_ubuntu-22.04-amd64.charm", "fake charm")
+
+        custom_timeout = 7200
+        with patch("opcli.core.artifacts.run_command") as mock_run:
+            artifacts_build(tmp_path, build_timeout=custom_timeout)
+
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs.get("timeout") == custom_timeout
+
 
 class TestArtifactsMatrix:
     """Tests for artifacts_matrix()."""
@@ -1995,6 +2011,87 @@ class TestArtifactsFetch:
         ):
             artifacts_fetch(
                 tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
+
+    def test_wait_timeout_uses_custom_duration(self, tmp_path: Path) -> None:
+        """wait_timeout controls how many attempts are made (max = timeout // sleep)."""
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+        sleep_calls: list[object] = []
+        self._write_plan(tmp_path)
+
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=not_ready),
+            patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
+            patch(
+                "opcli.core.artifacts.time.sleep",
+                side_effect=sleep_calls.append,
+            ),
+            pytest.raises(ConfigurationError, match="Timed out"),
+        ):
+            # 60s timeout / 30s sleep interval = 2 attempts max
+            artifacts_fetch(
+                tmp_path,
+                run_id="99887766",
+                repo="owner/my-repo",
+                wait=True,
+                wait_timeout=60,
+                arch="all",
+            )
+
+        assert len(sleep_calls) == 2  # noqa: PLR2004
+
+    def test_wait_timeout_implies_wait(self, tmp_path: Path) -> None:
+        """Providing wait_timeout without wait=True still enables waiting."""
+        self._write_plan(tmp_path)
+        self._make_charm_files(tmp_path)
+        self._make_snap_files(tmp_path)
+
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+        gh = self._GH_RESULT
+        results = [not_ready, gh, gh, gh, gh]
+        with (
+            patch(
+                "opcli.core.artifacts.run_command",
+                side_effect=self._make_side_effect(tmp_path, results),
+            ),
+            patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            # wait=False but wait_timeout is not None → should retry (any value)
+            artifacts_fetch(
+                tmp_path,
+                run_id="99887766",
+                repo="owner/my-repo",
+                wait=False,
+                wait_timeout=300,
+                arch="all",
+            )
+
+    def test_wait_timeout_implies_wait_even_at_default_value(self, tmp_path: Path) -> None:
+        """wait_timeout=_DEFAULT_WAIT_TIMEOUT_SECONDS (the default numeric value) still enables waiting."""
+        self._write_plan(tmp_path)
+        self._make_charm_files(tmp_path)
+        self._make_snap_files(tmp_path)
+
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+        gh = self._GH_RESULT
+        results = [not_ready, gh, gh, gh, gh]
+        with (
+            patch(
+                "opcli.core.artifacts.run_command",
+                side_effect=self._make_side_effect(tmp_path, results),
+            ),
+            patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            # Even passing exactly the default value enables waiting (not None → wait)
+            artifacts_fetch(
+                tmp_path,
+                run_id="99887766",
+                repo="owner/my-repo",
+                wait=False,
+                wait_timeout=_artifacts_mod._DEFAULT_WAIT_TIMEOUT_SECONDS,
+                arch="all",
             )
 
 

@@ -59,6 +59,14 @@ on:
         description: "Optional shell command to run before building each rock. Passed to build-artifacts."
         type: string
         default: ""
+      build-timeout-minutes:
+        description: "Maximum minutes allowed for each artifact build job. Passed to build-artifacts."
+        type: number
+        default: 60
+      test-timeout-minutes:
+        description: "Maximum minutes allowed for each spread test job."
+        type: number
+        default: 120
 
 jobs:
   # ── Job 1: build all artifacts ──────────────────────────────────────────────
@@ -68,6 +76,7 @@ jobs:
       working-directory: ${{ inputs.working-directory }}
       upload-image: ${{ inputs.upload-image }}
       pre-build-rock-script: ${{ inputs.pre-build-rock-script }}
+      build-timeout-minutes: ${{ inputs.build-timeout-minutes }}
     permissions:
       contents: read
       packages: write
@@ -135,6 +144,7 @@ jobs:
     name: "${{ matrix.name }}"
     needs: [test-matrix]
     runs-on: ${{ fromJSON(matrix.runs-on) }}
+    timeout-minutes: ${{ inputs.test-timeout-minutes }}
     permissions:
       contents: read
       actions: read
