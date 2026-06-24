@@ -15,7 +15,8 @@ def is_ci() -> bool:
 def current_arch() -> str:
     """Return the normalised architecture of the current machine.
 
-    Maps ``x86_64`` → ``amd64`` and ``aarch64`` → ``arm64``.
+    Maps ``x86_64`` → ``amd64``, ``aarch64`` → ``arm64``, and
+    ``ppc64le`` → ``ppc64el`` (Linux kernel name → Debian/charmcraft name).
     All other values are returned as-is (lower-cased).
     """
     machine = platform.machine().lower()
@@ -23,4 +24,6 @@ def current_arch() -> str:
         return "amd64"
     if machine in ("aarch64", "arm64"):
         return "arm64"
+    if machine == "ppc64le":
+        return "ppc64el"
     return machine

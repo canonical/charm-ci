@@ -101,6 +101,7 @@ jobs:
     name: "Build ${{ matrix.type }} ${{ matrix.name }} (${{ matrix.arch }})"
     needs: build-matrix
     runs-on: ${{ fromJSON(matrix.runner) }}
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
