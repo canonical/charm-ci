@@ -113,10 +113,10 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 | Command | Description |
 |---|---|
 | `init` | Discover charms/rocks/snaps and generate `artifacts.yaml`. `--force` to overwrite. |
-| `build` | Build artifacts → `artifacts.build.yaml`. Filter: `--charm`, `--rock`, `--snap`. |
+| `build` | Build artifacts → `artifacts.build.yaml`. Filter: `--charm`, `--rock`, `--snap`. `--build-timeout <seconds>` (default: 3600). |
 | `matrix` | Print JSON build matrix for GitHub Actions. |
 | `collect <partial>...` | Merge partial `artifacts.build.yaml` from parallel jobs. |
-| `fetch` | Download CI artifacts and rewrite to local paths. `--run-id` (required), `--repo`, `--wait`. |
+| `fetch` | Download CI artifacts and rewrite to local paths. `--run-id` (required), `--repo`, `--wait`, `--wait-timeout <seconds>` (default: 1800; implies `--wait`). |
 | `localize` | Rewrite CI artifact refs to local paths (after manual download). |
 | `push-images` | Load rock OCI images into a local registry. `-r` for registry (default: `localhost:32000`). `--missing-registry`: `skip` (default), `deploy` (auto-provision), or `fail`. |
 | `publish` | Upload charms and OCI resources to CharmHub. `--channel` (optional; per-charm channels supported), `--charm` (filter), `--dry-run`. |
@@ -641,7 +641,8 @@ jobs:
       actions: read
     with:
       working-directory: .
-      # upload-image: artifact  # uncomment for fork PRs (no GHCR push)
+      # upload-image: artifact       # uncomment for fork PRs (no GHCR push)
+      # build-timeout-minutes: 60    # max minutes per artifact build job (default: 60)
 
   test:
     needs: build
@@ -649,6 +650,8 @@ jobs:
     secrets: inherit
     with:
       working-directory: .
+      # build-timeout-minutes: 60    # forwarded to build-artifacts (default: 60)
+      # test-timeout-minutes: 120    # max minutes per spread test job (default: 120)
 ```
 
 Example usage for documentation tests:
