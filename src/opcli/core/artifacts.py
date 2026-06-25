@@ -17,7 +17,6 @@ import random
 import re
 import shutil
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1830,7 +1829,6 @@ def _wait_bail_or_sleep(  # noqa: PLR0913
     repo: str | None,
     *,
     download_succeeded: bool,
-    skipped_fn: Callable[[], list[str]] | None = None,
 ) -> None:
     """Check build job conclusions and sleep between retry iterations.
 
@@ -1838,9 +1836,13 @@ def _wait_bail_or_sleep(  # noqa: PLR0913
     so that changes to retry semantics only need to be made once.
 
     Raises :class:`ConfigurationError` immediately when a terminal build failure
-    is detected or when all build jobs succeeded yet partials are still missing
-    (possible skipped matrix job).  Returns normally when the loop should sleep
-    and retry.
+    (failure or cancelled) is detected.  Returns normally when the loop should
+    sleep and retry.
+
+    The "success + missing partials" diagnosis is intentionally *not* handled
+    here — the all-arches loop performs a fresh re-download before that
+    diagnosis to avoid a download↔conclusion race (see
+    ``_gh_download_all_partials_with_wait``).
 
     Args:
         attempt: Current attempt number (1-based).
@@ -1851,30 +1853,16 @@ def _wait_bail_or_sleep(  # noqa: PLR0913
             ``None`` to skip conclusion checks.
         repo: Repository in ``owner/name`` format.  Pass ``None`` to skip
             conclusion checks.
-        download_succeeded: Whether the download call on this attempt returned
-            without raising.  When ``False`` the skipped check is suppressed —
-            a download failure is ambiguous (transient vs. genuinely missing)
-            so we retry rather than raising a misleading error.
-        skipped_fn: Optional callable returning the list of still-missing
-            artifact names.  Called only when ``conclusion == "success"`` and
-            ``download_succeeded``.  A non-empty result raises
-            ``ConfigurationError`` with a "skipped matrix job" hint.
+        download_succeeded: Reserved for future use; currently unused but kept
+            for API symmetry with callers that track download state.
     """
+    _ = download_succeeded  # see docstring
     if run_id and repo:
         conclusion = _check_build_jobs_conclusion(run_id, repo)
         if conclusion in _BAIL_CONCLUSIONS:
             raise ConfigurationError(
                 f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
             )
-        if conclusion == "success" and download_succeeded and skipped_fn is not None:
-            missing = skipped_fn()
-            if missing:
-                raise ConfigurationError(
-                    f"CI run {run_id!r} build jobs succeeded but "
-                    f"{len(missing)} artifact(s) were never uploaded: "
-                    f"{', '.join(missing[:5])}. "
-                    "Some matrix jobs may have been skipped."
-                )
 
     remaining = deadline - time.monotonic()
     if attempt < max_attempts and remaining > 0:
@@ -1950,7 +1938,6 @@ def _gh_download_with_wait(  # noqa: PLR0913
             run_id,
             repo,
             download_succeeded=False,
-            skipped_fn=None,
         )
 
     last_msg = last_exc.stderr.strip() if last_exc else ""
@@ -1962,7 +1949,7 @@ def _gh_download_with_wait(  # noqa: PLR0913
     raise ConfigurationError(msg)
 
 
-def _gh_download_all_partials_with_wait(  # noqa: PLR0913
+def _gh_download_all_partials_with_wait(  # noqa: PLR0913, PLR0912, C901
     cmd: list[str],
     cwd: str,
     run_id: str,
@@ -2029,11 +2016,38 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913
                 max_attempts,
                 ", ".join(missing[:5]),
             )
+            # When all build jobs are done and partials are still missing, a
+            # partial artifact upload could have completed *after* this
+            # iteration's ``gh run download`` enumerated the artifact list but
+            # *before* the conclusion API call (the download↔conclusion race).
+            # Perform one final re-download to close that window before
+            # diagnosing a skipped matrix job.
+            if run_id and repo:
+                conclusion = _check_build_jobs_conclusion(run_id, repo)
+                if conclusion in _BAIL_CONCLUSIONS:
+                    raise ConfigurationError(
+                        f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
+                    )
+                if conclusion == "success":
+                    if partial_dir.exists():
+                        shutil.rmtree(partial_dir)
+                    partial_dir.mkdir(parents=True, exist_ok=True)
+                    try:
+                        run_command(cmd, cwd=cwd)
+                        missing = _missing_partial_names(partial_dir, expected_names)
+                    except SubprocessError:
+                        missing = list(expected_names)
+                    if not missing:
+                        return
+                    raise ConfigurationError(
+                        f"CI run {run_id!r} build jobs succeeded but "
+                        f"{len(missing)} artifact(s) were never uploaded: "
+                        f"{', '.join(missing[:5])}. "
+                        "Some matrix jobs may have been skipped."
+                    )
 
-        # Delegate conclusion check, skipped diagnosis, and jittered sleep to
-        # the shared helper.  The skipped_fn re-reads the directory: if all
-        # partials appeared between the earlier check and now, skipped_fn
-        # returns [] and no error is raised.
+        # Delegate conclusion check (failure/cancelled bail) and jittered sleep
+        # to the shared helper.
         _wait_bail_or_sleep(
             attempt,
             max_attempts,
@@ -2041,7 +2055,6 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913
             run_id,
             repo,
             download_succeeded=download_succeeded,
-            skipped_fn=lambda: _missing_partial_names(partial_dir, expected_names),
         )
         logger.info(
             "Retrying in ~%ds (attempt %d/%d)...",

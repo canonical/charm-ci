@@ -1994,12 +1994,22 @@ class TestArtifactsFetch:
     def test_wait_bails_on_success_conclusion_with_missing_partials_all_arch(
         self, tmp_path: Path
     ) -> None:
-        """With arch=all + wait, bails when run='success' AND download succeeded but partials are missing."""
+        """With arch=all + wait, raises 'skipped' after one final re-download when run='success' but partials missing.
+
+        When all build jobs succeed but partials are still missing, the loop
+        performs one final re-download to close the download↔conclusion race
+        window.  If partials are still missing after that re-download the
+        error is a genuine missing artifact (skipped matrix job), not a race.
+        """
         self._write_plan(tmp_path)
 
+        download_call_count = 0
+
         def partial_side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
-            """Download succeeds but only writes 1 of 4 expected partials."""
+            """Both download attempts return only 1 of 4 expected partials (genuinely missing)."""
+            nonlocal download_call_count
             if "--pattern" in cmd:
+                download_call_count += 1
                 dir_idx = cmd.index("--dir") + 1
                 partial_dir = Path(cmd[dir_idx])
                 # Write only the rock partial; 3 charm/snap partials remain missing
@@ -2022,6 +2032,57 @@ class TestArtifactsFetch:
                 tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
             )
 
+        # Two --pattern downloads: initial attempt + one re-download to close the race
+        assert download_call_count == 2  # noqa: PLR2004
+        mock_sleep.assert_not_called()
+
+    def test_wait_success_race_closes_on_redownload_all_arch(self, tmp_path: Path) -> None:
+        """Race closed: first download misses a partial, re-download after success conclusion gets it.
+
+        Simulates the download↔conclusion race: the first --pattern download
+        misses one partial (upload happened after enumeration), but by the time
+        of the re-download all partials are present.  The fetch should succeed
+        without raising 'skipped'.
+        """
+        self._write_plan(tmp_path)
+        self._make_charm_files(tmp_path)
+        self._make_snap_files(tmp_path)
+
+        download_call_count = 0
+
+        def race_side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
+            nonlocal download_call_count
+            if "--pattern" in cmd:
+                download_call_count += 1
+                dir_idx = cmd.index("--dir") + 1
+                partial_dir = Path(cmd[dir_idx])
+                # First attempt: missing the rock partial (simulates race — upload
+                # completed after this download enumerated the artifact list)
+                # Second attempt (re-download): all partials present
+                names_to_write = list(self._PARTIAL_FILES.keys())
+                if download_call_count == 1:
+                    names_to_write = [n for n in names_to_write if "rock" not in n]
+                for name in names_to_write:
+                    d = partial_dir / name
+                    d.mkdir(parents=True, exist_ok=True)
+                    write_file(d / "artifacts.build.yaml", self._PARTIAL_FILES[name])
+            elif "--name" in cmd:
+                dir_idx = cmd.index("--dir") + 1
+                archive_dir = Path(cmd[dir_idx])
+                archive_dir.mkdir(parents=True, exist_ok=True)
+            return self._GH_RESULT
+
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=race_side_effect),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value="success"),
+            patch("opcli.core.artifacts.time.sleep") as mock_sleep,
+        ):
+            result = artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
+
+        assert result == tmp_path / "artifacts.build.yaml"
+        assert download_call_count == 2  # noqa: PLR2004
         mock_sleep.assert_not_called()
 
     def test_wait_retries_on_success_conclusion_with_missing_artifact_single_arch(
