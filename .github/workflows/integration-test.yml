@@ -235,7 +235,10 @@ jobs:
       # We check individual build job conclusions (not the overall run conclusion).
       # The overall run conclusion stays null while any job is running, so it
       # cannot signal build failure while the test VM is still executing.
-      # Build jobs are named "Build {type} {name} ({arch})" per build-artifacts.yml.
+      # Build jobs are named "Build {type} {name} ({arch})" per build-artifacts.yml,
+      # but when build-artifacts.yml is called as a nested reusable workflow GitHub
+      # prefixes names with the caller chain (e.g. "integration-test / build / Build ..."),
+      # so we match by regex instead of startswith.
       - name: Abort if build failed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -244,7 +247,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --json jobs \
             --jq '
-              [.jobs[] | select(.name | startswith("Build ")) | .conclusion] |
+              [.jobs[] | select(.name | test("(?:^|/ )Build (?:charm|rock|snap) .+ \\(")) | .conclusion] |
               if any(. == "failure") then "failure"
               elif any(. == "cancelled") then "cancelled"
               else empty

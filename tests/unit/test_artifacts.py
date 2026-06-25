@@ -2486,8 +2486,71 @@ class TestCheckBuildJobsConclusion:
             "jobs",
         ]
 
+    def test_matches_prefixed_names_from_nested_reusable_workflow(self) -> None:
+        """Matches jobs with caller-chain prefix added by GitHub for nested reusable workflows.
 
-class TestArtifactNameToBuildJobName:
+        When build-artifacts.yml is called as a reusable workflow, GitHub
+        prefixes every job name with the caller chain, e.g.:
+          "integration-test / build / Build charm my-charm (amd64)"
+        The bare name must still be found via suffix matching.
+        """
+        jobs = [
+            self._build_job("integration-test / build / Build charm my-charm (amd64)", "success"),
+            self._build_job("integration-test / build / Build rock my-rock (amd64)", "success"),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-rock-my-rock-amd64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "success"
+
+    def test_prefixed_failure_detected(self) -> None:
+        """Failure is detected even when job names carry a reusable-workflow prefix."""
+        jobs = [
+            self._build_job("integration-test / build / Build charm my-charm (amd64)", "success"),
+            self._build_job("integration-test / build / Build charm my-charm (arm64)", "failure"),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "failure"
+
+    def test_returns_none_when_only_subset_of_expected_jobs_registered(self) -> None:
+        """Returns None if only some expected jobs appear in the API response.
+
+        GitHub may register matrix jobs progressively.  We must not return
+        'success' if one expected job hasn't appeared yet — it might still be
+        running or might fail.
+        """
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            # arm64 job not yet registered in API
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion is None
+
+    def test_prefixed_names_excluded_by_expected_set(self) -> None:
+        """Non-build jobs with prefixed names don't pollute results."""
+        jobs = [
+            self._build_job("integration-test / build / Build charm my-charm (amd64)", "success"),
+            self._build_job("integration-test / build / Build matrix", "success"),
+            self._build_job("integration-test / Test integration", "failure"),
+        ]
+        expected = self._job_names("artifacts-build-charm-my-charm-amd64")
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "success"
+
     """Unit tests for _artifact_name_to_build_job_name."""
 
     def test_charm_simple_name(self) -> None:

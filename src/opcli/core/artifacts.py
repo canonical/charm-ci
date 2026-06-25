@@ -108,6 +108,14 @@ _FILE_EXISTS_KEYWORDS = ("file exists",)
 # Conclusions that mean the artifact will never arrive — bail immediately.
 _BAIL_CONCLUSIONS: frozenset[str] = frozenset({"failure", "cancelled"})
 
+
+# Sentinel used by _check_build_jobs_conclusion to distinguish "job not found
+# in API yet" (return None/keep waiting) from "job found with null conclusion"
+# (job is registered but still running).
+class _SENTINEL:  # noqa: N801, RUF100
+    pass
+
+
 # Prefix for per-arch partial build manifest artifact names.
 # COUPLING: this prefix must stay in sync with the artifact `name:` field in
 # build-artifacts.yml:
@@ -2152,24 +2160,35 @@ def _artifact_name_to_build_job_name(artifact_name: str) -> str:
     return f"Build {type_} {name} ({arch})"
 
 
-def _check_build_jobs_conclusion(  # noqa: PLR0911
+def _check_build_jobs_conclusion(  # noqa: PLR0911, C901
     run_id: str, repo: str, expected_job_names: set[str]
 ) -> str | None:
     """Return the worst conclusion across the expected build jobs in a CI run.
 
-    Looks up each job by its **exact name** (derived from the artifact names
-    via :func:`_artifact_name_to_build_job_name`) rather than a regex.  This
-    avoids coupling to a hardcoded list of artifact types and correctly ignores
-    unrelated jobs like ``"Build matrix"``.
+    Looks up each expected job by a **suffix match** on its name.  When
+    ``build-artifacts.yml`` is invoked as a nested reusable workflow, GitHub
+    prefixes every job name with the caller-job chain, e.g.::
+
+        integration-test / build / Build charm my-charm (amd64)
+
+    The bare name ``Build charm my-charm (amd64)`` (derived from the artifact
+    name via :func:`_artifact_name_to_build_job_name`) is always the final
+    segment, so a ``"/ {bare_name}"`` suffix match handles both bare names
+    (local/single-workflow runs) and prefixed names (nested reusable workflows).
+
+    Returns ``"success"`` only when **all** expected build jobs are accounted
+    for and all have concluded ``"success"``.  Returns ``None`` if any expected
+    job has not appeared in the response yet, so callers do not prematurely
+    declare success while some jobs are still registering.
 
     Returns:
     - ``"failure"`` if any expected build job has concluded with ``failure``.
     - ``"cancelled"`` if any expected build job has been cancelled (and none
       failed).
-    - ``"success"`` if **all** expected build jobs have concluded with
-      ``success``.
-    - ``None`` if any expected build job is still running, the API call fails,
-      or none of the expected jobs appear in the response yet.
+    - ``"success"`` if **all** expected build jobs are present and concluded
+      ``"success"``.
+    - ``None`` if any expected build job is still running or not yet registered,
+      the API call fails, or none of the expected jobs appear in the response.
 
     Callers should treat ``None`` as "don't know yet — keep retrying".
 
@@ -2197,15 +2216,32 @@ def _check_build_jobs_conclusion(  # noqa: PLR0911
     if not isinstance(jobs, list):
         return None
 
-    # Look up each expected job by its exact name — no regex needed because
-    # _artifact_name_to_build_job_name derives the name deterministically from
-    # the artifact name, so both are always in sync.
-    job_by_name = {
+    # Build a name→conclusion map.  API names may carry a caller-job prefix
+    # (e.g. "integration-test / build / Build charm my-charm (amd64)") when
+    # build-artifacts.yml is invoked as a nested reusable workflow.  Match
+    # each expected bare name by exact equality OR by "/ {bare_name}" suffix.
+    api_names: dict[str, str | None] = {
         j["name"]: j.get("conclusion")
         for j in jobs
         if isinstance(j, dict) and isinstance(j.get("name"), str)
     }
-    build_conclusions = [job_by_name[jn] for jn in expected_job_names if jn in job_by_name]
+
+    def _find_conclusion(bare_name: str) -> str | None | type[_SENTINEL]:
+        if bare_name in api_names:
+            return api_names[bare_name]
+        suffix = f" / {bare_name}"
+        for api_name, conclusion in api_names.items():
+            if api_name.endswith(suffix):
+                return conclusion
+        return _SENTINEL
+
+    build_conclusions = []
+    for jn in expected_job_names:
+        conclusion = _find_conclusion(jn)
+        if conclusion is _SENTINEL:
+            # Job not yet registered in the API — treat as still running.
+            return None
+        build_conclusions.append(conclusion)
 
     if not build_conclusions:
         return None
