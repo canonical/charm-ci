@@ -220,14 +220,14 @@ def test_install_concierge_uses_sudo_as_non_root(mocker):
 
 def test_lxd_is_initialised_returns_true_when_storage_pools_present(mocker):
     mock_result = MagicMock()
-    mock_result.stdout = "default,dir,0 volumes,1 used by 0 profiles\n"
+    mock_result.stdout = "config:\n  user.user-data: ...\ndevices:\n  root:\n    path: /\n    pool: default\n    type: disk\n"
     mocker.patch("opcli.core.install.run_command", return_value=mock_result)
     assert _lxd_is_initialised([]) is True
 
 
 def test_lxd_is_initialised_returns_false_when_no_storage_pools(mocker):
     mock_result = MagicMock()
-    mock_result.stdout = ""
+    mock_result.stdout = "config: {}\ndevices: {}\n"
     mocker.patch("opcli.core.install.run_command", return_value=mock_result)
     assert _lxd_is_initialised([]) is False
 
