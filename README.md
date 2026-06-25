@@ -33,7 +33,7 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 ### Prerequisites
 
 - Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
+- [uv](https://docs.astral.sh/uv/) (`sudo snap install astral-uv --classic`)
 - [charmcraft](https://charmcraft.io/) (`sudo snap install charmcraft --classic`)
 - [rockcraft](https://rockcraft.io/) (`sudo snap install rockcraft --classic`) — if building rocks
 
@@ -47,8 +47,6 @@ opcli --help
 ```
 
 > **Note:** The `[cli]` extra is required for the CLI. The bare `opcli` package (without `[cli]`) installs only the pytest plugin — useful when your project already has a conflicting `typer` pin.
-
-> **Root installs:** `uv tool install` from a git URL requires building opcli from source, which can fail when running as root due to snap confinement. For root environments (e.g. spread prepare scripts), install opcli via the workflow-provided mechanism, or transfer and install from a local path: `uv tool install "./opcli[cli]"`.
 
 ### Install all local dev tools
 
