@@ -108,7 +108,6 @@ _FILE_EXISTS_KEYWORDS = ("file exists",)
 # Conclusions that mean the artifact will never arrive — bail immediately.
 _BAIL_CONCLUSIONS: frozenset[str] = frozenset({"failure", "cancelled"})
 
-# Matches "Build {charm|rock|snap} {name} ({arch})" — the job naming convention
 # Prefix for per-arch partial build manifest artifact names.
 # COUPLING: this prefix must stay in sync with the artifact `name:` field in
 # build-artifacts.yml:
@@ -2015,7 +2014,7 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
     # Derive the exact workflow job names from artifact names once — no regex.
     expected_job_names = {_artifact_name_to_build_job_name(n) for n in expected_names}
     # Use a real wall-clock deadline so that slow API calls (run_command,
-    # _check_run_conclusion) don't silently extend the effective wait beyond
+    # _check_build_jobs_conclusion) don't silently extend the effective wait beyond
     # wait_timeout.  max_attempts caps the loop as a safety valve.
     deadline = time.monotonic() + wait_timeout
     max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
