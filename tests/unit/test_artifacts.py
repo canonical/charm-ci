@@ -2305,14 +2305,23 @@ class TestCheckBuildJobsConclusion:
     def _build_job(self, name: str, conclusion: str | None) -> dict[str, object]:
         return {"name": name, "conclusion": conclusion}
 
+    @staticmethod
+    def _job_names(*artifact_names: str) -> set[str]:
+        """Derive workflow job names from artifact names for test assertions."""
+        return {_artifacts_mod._artifact_name_to_build_job_name(n) for n in artifact_names}
+
     def test_returns_success_when_all_build_jobs_succeed(self) -> None:
         """Returns 'success' when all Build jobs have succeeded."""
         jobs = [
             self._build_job("Build charm my-charm (amd64)", "success"),
             self._build_job("Build charm my-charm (arm64)", "success"),
         ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
         with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
-            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion == "success"
 
     def test_returns_failure_when_any_build_job_fails(self) -> None:
@@ -2321,8 +2330,12 @@ class TestCheckBuildJobsConclusion:
             self._build_job("Build charm my-charm (amd64)", "success"),
             self._build_job("Build charm my-charm (arm64)", "failure"),
         ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
         with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
-            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion == "failure"
 
     def test_returns_cancelled_when_build_job_cancelled_no_failure(self) -> None:
@@ -2331,8 +2344,12 @@ class TestCheckBuildJobsConclusion:
             self._build_job("Build charm my-charm (amd64)", "success"),
             self._build_job("Build charm my-charm (arm64)", "cancelled"),
         ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
         with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
-            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion == "cancelled"
 
     def test_failure_takes_priority_over_cancelled(self) -> None:
@@ -2341,8 +2358,12 @@ class TestCheckBuildJobsConclusion:
             self._build_job("Build charm my-charm (amd64)", "failure"),
             self._build_job("Build charm my-charm (arm64)", "cancelled"),
         ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
         with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
-            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion == "failure"
 
     def test_returns_none_when_build_job_still_running(self) -> None:
@@ -2351,52 +2372,64 @@ class TestCheckBuildJobsConclusion:
             self._build_job("Build charm my-charm (amd64)", "success"),
             self._build_job("Build charm my-charm (arm64)", None),
         ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
         with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
-            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion is None
 
     def test_ignores_non_build_jobs(self) -> None:
-        """'Build matrix' and other support jobs are excluded from the check."""
+        """Jobs not in expected_job_names are excluded — no regex needed."""
         jobs = [
             self._build_job("Build charm my-charm (amd64)", "success"),
-            self._build_job("Build matrix", "success"),  # excluded — no type prefix
-            self._build_job("Test integration", "failure"),  # excluded — not a build job
+            self._build_job("Build matrix", "success"),  # excluded — not in expected set
+            self._build_job("Test integration", "failure"),  # excluded — not in expected set
         ]
+        expected = self._job_names("artifacts-build-charm-my-charm-amd64")
         with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
-            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion == "success"
 
     def test_returns_none_when_no_build_jobs_found(self) -> None:
-        """Returns None when no Build (charm|rock|snap) jobs exist yet."""
+        """Returns None when none of the expected jobs appear in the response yet."""
         jobs = [
-            self._build_job("Build matrix", "success"),  # matrix job — excluded
-            self._build_job("Test integration", None),  # not a build job
+            self._build_job("Build matrix", "success"),
+            self._build_job("Test integration", None),
         ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
         with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
-            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion is None
 
     def test_returns_none_when_gh_command_fails(self) -> None:
         """Returns None if the gh API call fails (don't know yet — keep retrying)."""
         error = SubprocessError(["gh"], 1, "API error")
+        expected = self._job_names("artifacts-build-charm-my-charm-amd64")
         with patch("opcli.core.artifacts.run_command", side_effect=error):
-            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion is None
 
     def test_returns_none_on_invalid_json(self) -> None:
         """Returns None if gh returns non-JSON output."""
         result = SubprocessResult(stdout="not-json", stderr="", returncode=0)
+        expected = self._job_names("artifacts-build-charm-my-charm-amd64")
         with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion is None
 
     def test_uses_correct_gh_command(self) -> None:
         """Calls gh run view with --json jobs."""
         jobs = [self._build_job("Build charm x (amd64)", "success")]
+        expected = self._job_names("artifacts-build-charm-x-amd64")
         with patch(
             "opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)
         ) as mock_run:
-            _artifacts_mod._check_build_jobs_conclusion("456", "owner/myrepo")
+            _artifacts_mod._check_build_jobs_conclusion("456", "owner/myrepo", expected)
         cmd = mock_run.call_args.args[0]
         assert cmd == [
             "gh",
@@ -2408,6 +2441,38 @@ class TestCheckBuildJobsConclusion:
             "--json",
             "jobs",
         ]
+
+
+class TestArtifactNameToBuildJobName:
+    """Unit tests for _artifact_name_to_build_job_name."""
+
+    def test_charm_simple_name(self) -> None:
+        result = _artifacts_mod._artifact_name_to_build_job_name(
+            "artifacts-build-charm-my-charm-amd64"
+        )
+        assert result == "Build charm my-charm (amd64)"
+
+    def test_rock_with_hyphenated_name(self) -> None:
+        result = _artifacts_mod._artifact_name_to_build_job_name(
+            "artifacts-build-rock-my-rock-name-arm64"
+        )
+        assert result == "Build rock my-rock-name (arm64)"
+
+    def test_snap_arm64(self) -> None:
+        result = _artifacts_mod._artifact_name_to_build_job_name(
+            "artifacts-build-snap-my-snap-arm64"
+        )
+        assert result == "Build snap my-snap (arm64)"
+
+    def test_roundtrips_with_workflow_name_format(self) -> None:
+        """Conversion matches the build-artifacts.yml job name format exactly."""
+        # Simulates: matrix.type=charm, matrix.name=operator, matrix.arch=s390x
+        # Job name: "Build charm operator (s390x)"
+        # Artifact name: "artifacts-build-charm-operator-s390x"
+        result = _artifacts_mod._artifact_name_to_build_job_name(
+            "artifacts-build-charm-operator-s390x"
+        )
+        assert result == "Build charm operator (s390x)"
 
 
 class TestSafeArtifactDir:

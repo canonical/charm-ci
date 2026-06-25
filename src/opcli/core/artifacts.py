@@ -109,10 +109,6 @@ _FILE_EXISTS_KEYWORDS = ("file exists",)
 _BAIL_CONCLUSIONS: frozenset[str] = frozenset({"failure", "cancelled"})
 
 # Matches "Build {charm|rock|snap} {name} ({arch})" — the job naming convention
-# from build-artifacts.yml.  Used to identify actual artifact build jobs and
-# exclude support jobs like "Build matrix".
-_BUILD_JOB_RE: re.Pattern[str] = re.compile(r"^Build (?:charm|rock|snap) ")
-
 # Prefix for per-arch partial build manifest artifact names.
 # COUPLING: this prefix must stay in sync with the artifact `name:` field in
 # build-artifacts.yml:
@@ -885,7 +881,13 @@ def _download_partial_manifests(  # noqa: PLR0913
         if wait:
             remaining = max(_WAIT_SLEEP_SECONDS, int(deadline - time.monotonic()))
             _gh_download_with_wait(
-                cmd, str(root), run_id=run_id, repo=repo, dest=dest, wait_timeout=remaining
+                cmd,
+                str(root),
+                run_id=run_id,
+                repo=repo,
+                dest=dest,
+                wait_timeout=remaining,
+                artifact_name=name,
             )
         else:
             _gh_download(cmd, str(root), dest=dest)
@@ -1829,6 +1831,7 @@ def _wait_bail_or_sleep(  # noqa: PLR0913
     repo: str | None,
     *,
     download_succeeded: bool,
+    expected_job_names: set[str] | None = None,
 ) -> None:
     """Check build job conclusions and sleep between retry iterations.
 
@@ -1855,10 +1858,14 @@ def _wait_bail_or_sleep(  # noqa: PLR0913
             conclusion checks.
         download_succeeded: Reserved for future use; currently unused but kept
             for API symmetry with callers that track download state.
+        expected_job_names: Exact workflow job names to check conclusions for.
+            Derived from artifact names via
+            :func:`_artifact_name_to_build_job_name`.  When ``None`` (or empty)
+            conclusion checks are skipped.
     """
     _ = download_succeeded  # see docstring
-    if run_id and repo:
-        conclusion = _check_build_jobs_conclusion(run_id, repo)
+    if run_id and repo and expected_job_names:
+        conclusion = _check_build_jobs_conclusion(run_id, repo, expected_job_names)
         if conclusion in _BAIL_CONCLUSIONS:
             raise ConfigurationError(
                 f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
@@ -1877,6 +1884,7 @@ def _gh_download_with_wait(  # noqa: PLR0913
     repo: str | None = None,
     dest: Path | None = None,
     wait_timeout: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+    artifact_name: str | None = None,
 ) -> None:
     """Run ``gh run download``, retrying until the artifact appears.
 
@@ -1898,11 +1906,15 @@ def _gh_download_with_wait(  # noqa: PLR0913
             retried once before giving up.
         wait_timeout: Maximum seconds to keep retrying. Defaults to
             :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`.
-
-    Raises:
-        ConfigurationError: On auth/permission errors or timeout.
-        SubprocessError: Propagated for non-retryable failures.
+        artifact_name: The partial artifact name being downloaded (e.g.
+            ``"artifacts-build-charm-my-charm-amd64"``).  Used to derive the
+            expected workflow job name for early-failure detection.  When
+            ``None``, conclusion checks are still made but match no specific
+            job (and therefore only detect failure once all jobs complete).
     """
+    expected_job_names: set[str] = (
+        {_artifact_name_to_build_job_name(artifact_name)} if artifact_name else set()
+    )
     deadline = time.monotonic() + wait_timeout
     max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
     last_exc: SubprocessError | None = None
@@ -1938,6 +1950,7 @@ def _gh_download_with_wait(  # noqa: PLR0913
             run_id,
             repo,
             download_succeeded=False,
+            expected_job_names=expected_job_names,
         )
 
     last_msg = last_exc.stderr.strip() if last_exc else ""
@@ -1949,7 +1962,7 @@ def _gh_download_with_wait(  # noqa: PLR0913
     raise ConfigurationError(msg)
 
 
-def _gh_download_all_partials_with_wait(  # noqa: PLR0913, PLR0912, C901
+def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
     cmd: list[str],
     cwd: str,
     run_id: str,
@@ -1974,6 +1987,8 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, PLR0912, C901
         wait_timeout: Maximum seconds to keep retrying. Defaults to
             :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`.
     """
+    # Derive the exact workflow job names from artifact names once — no regex.
+    expected_job_names = {_artifact_name_to_build_job_name(n) for n in expected_names}
     # Use a real wall-clock deadline so that slow API calls (run_command,
     # _check_run_conclusion) don't silently extend the effective wait beyond
     # wait_timeout.  max_attempts caps the loop as a safety valve.
@@ -2022,29 +2037,28 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, PLR0912, C901
             # *before* the conclusion API call (the download↔conclusion race).
             # Perform one final re-download to close that window before
             # diagnosing a skipped matrix job.
-            if run_id and repo:
-                conclusion = _check_build_jobs_conclusion(run_id, repo)
-                if conclusion in _BAIL_CONCLUSIONS:
-                    raise ConfigurationError(
-                        f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
-                    )
-                if conclusion == "success":
-                    if partial_dir.exists():
-                        shutil.rmtree(partial_dir)
-                    partial_dir.mkdir(parents=True, exist_ok=True)
-                    try:
-                        run_command(cmd, cwd=cwd)
-                        missing = _missing_partial_names(partial_dir, expected_names)
-                    except SubprocessError:
-                        missing = list(expected_names)
-                    if not missing:
-                        return
-                    raise ConfigurationError(
-                        f"CI run {run_id!r} build jobs succeeded but "
-                        f"{len(missing)} artifact(s) were never uploaded: "
-                        f"{', '.join(missing[:5])}. "
-                        "Some matrix jobs may have been skipped."
-                    )
+            conclusion = _check_build_jobs_conclusion(run_id, repo, expected_job_names)
+            if conclusion in _BAIL_CONCLUSIONS:
+                raise ConfigurationError(
+                    f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
+                )
+            if conclusion == "success":
+                if partial_dir.exists():
+                    shutil.rmtree(partial_dir)
+                partial_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    run_command(cmd, cwd=cwd)
+                    missing = _missing_partial_names(partial_dir, expected_names)
+                except SubprocessError:
+                    missing = list(expected_names)
+                if not missing:
+                    return
+                raise ConfigurationError(
+                    f"CI run {run_id!r} build jobs succeeded but "
+                    f"{len(missing)} artifact(s) were never uploaded: "
+                    f"{', '.join(missing[:5])}. "
+                    "Some matrix jobs may have been skipped."
+                )
 
         # Delegate conclusion check (failure/cancelled bail) and jittered sleep
         # to the shared helper.
@@ -2055,6 +2069,7 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, PLR0912, C901
             run_id,
             repo,
             download_succeeded=download_succeeded,
+            expected_job_names=expected_job_names,
         )
         logger.info(
             "Retrying in ~%ds (attempt %d/%d)...",
@@ -2090,20 +2105,47 @@ def _run_gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None
         run_command(cmd, cwd=cwd)
 
 
-def _check_build_jobs_conclusion(run_id: str, repo: str) -> str | None:  # noqa: PLR0911
-    """Return the worst conclusion across build jobs in a CI run, or ``None``.
+def _artifact_name_to_build_job_name(artifact_name: str) -> str:
+    """Convert a partial artifact name to the corresponding workflow job name.
 
-    Queries all jobs whose name matches ``"Build (charm|rock|snap) ..."`` — the
-    naming convention used by ``build-artifacts.yml``
-    (``"Build {type} {name} ({arch})"``).  This correctly excludes support jobs
-    such as ``"Build matrix"``.
+    Both the artifact name and the job name are generated from the same
+    ``build-artifacts.yml`` matrix variables, so the conversion is
+    deterministic:
+
+    ``artifacts-build-charm-my-charm-amd64`` → ``Build charm my-charm (amd64)``
+
+    This function is the canonical coupling point between artifact names
+    (controlled by the ``upload-artifact`` step) and job names (controlled
+    by the matrix ``name:`` field).  Keeping both derivable from the same
+    source removes the need for a hardcoded regex.
+    """
+    rest = artifact_name.removeprefix(f"{_PARTIAL_ARTIFACT_PREFIX}-")
+    # rest = "{type}-{name}-{arch}"  e.g. "charm-my-charm-amd64"
+    parts = rest.split("-")
+    type_ = parts[0]  # "charm" / "rock" / "snap"
+    arch = parts[-1]  # "amd64" / "arm64" / …
+    name = "-".join(parts[1:-1])  # artifact name may contain hyphens
+    return f"Build {type_} {name} ({arch})"
+
+
+def _check_build_jobs_conclusion(  # noqa: PLR0911
+    run_id: str, repo: str, expected_job_names: set[str]
+) -> str | None:
+    """Return the worst conclusion across the expected build jobs in a CI run.
+
+    Looks up each job by its **exact name** (derived from the artifact names
+    via :func:`_artifact_name_to_build_job_name`) rather than a regex.  This
+    avoids coupling to a hardcoded list of artifact types and correctly ignores
+    unrelated jobs like ``"Build matrix"``.
 
     Returns:
-    - ``"failure"`` if any build job has concluded with ``failure``.
-    - ``"cancelled"`` if any build job has been cancelled (and none failed).
-    - ``"success"`` if **all** build jobs have concluded with ``success``.
-    - ``None`` if any build job is still running, the API call fails, or no
-      build jobs are found yet.
+    - ``"failure"`` if any expected build job has concluded with ``failure``.
+    - ``"cancelled"`` if any expected build job has been cancelled (and none
+      failed).
+    - ``"success"`` if **all** expected build jobs have concluded with
+      ``success``.
+    - ``None`` if any expected build job is still running, the API call fails,
+      or none of the expected jobs appear in the response yet.
 
     Callers should treat ``None`` as "don't know yet — keep retrying".
 
@@ -2131,16 +2173,15 @@ def _check_build_jobs_conclusion(run_id: str, repo: str) -> str | None:  # noqa:
     if not isinstance(jobs, list):
         return None
 
-    # Match "Build {charm|rock|snap} {name} ({arch})" — the naming convention
-    # from build-artifacts.yml.  This excludes "Build matrix" (the matrix
-    # generation job) and any other "Build ..." jobs not part of the artifact build.
-    build_conclusions = [
-        j.get("conclusion")
+    # Look up each expected job by its exact name — no regex needed because
+    # _artifact_name_to_build_job_name derives the name deterministically from
+    # the artifact name, so both are always in sync.
+    job_by_name = {
+        j["name"]: j.get("conclusion")
         for j in jobs
-        if isinstance(j, dict)
-        and isinstance(j.get("name"), str)
-        and _BUILD_JOB_RE.match(j["name"])
-    ]
+        if isinstance(j, dict) and isinstance(j.get("name"), str)
+    }
+    build_conclusions = [job_by_name[jn] for jn in expected_job_names if jn in job_by_name]
 
     if not build_conclusions:
         return None
