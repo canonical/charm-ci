@@ -51,13 +51,17 @@ opcli --help
 
 ### Install all local dev tools
 
-After opcli is installed, one command installs the remaining tools (gh, spread, concierge, tox):
+After opcli is installed, one command installs everything else (gh, spread, concierge, tox, LXD):
 
 ```bash
-opcli install local
+opcli install bootstrap
 ```
 
-This requires passwordless sudo (standard on developer workstations and cloud VMs) for the snap-based installs. Each tool is a no-op if already present.
+Idempotent — skips any tool already present. Requires passwordless sudo for snap-based installs when not running as root. To verify your environment afterwards:
+
+```bash
+opcli install check
+```
 
 ## Quick start
 
@@ -82,7 +86,7 @@ opcli pytest run --suite k8s-charm/tests/integration/
 ```bash
 opcli artifacts init
 opcli artifacts build
-opcli install tox                                      # install tox + tox-uv
+opcli install bootstrap                                # install gh, spread, concierge, tox, lxd
 opcli env provision                                    # concierge (auto-elevates with sudo)
 opcli artifacts push-images --missing-registry deploy  # push rocks to local registry (k8s only)
 opcli pytest run                                       # run all integration tests via tox
@@ -134,11 +138,10 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 | Command | Description |
 |---|---|
-| `local` | Install all local dev tools in one shot: gh, spread, concierge, tox. |
-| `gh` | Install the GitHub CLI (gh) snap (no-op if already present). |
-| `spread` | Install the spread test runner (no-op if already present). |
-| `tox` | Install tox with tox-uv for running integration tests. |
-| `concierge` | Install the concierge snap (no-op if already present). |
+| `bootstrap` | Install all local dev tools in one shot: gh, spread (built from source), concierge, tox, LXD. |
+| `check` | Print a ✓/✗ status table for all required tools. Exits 1 if any are missing. |
+
+Individual commands (`gh`, `spread`, `tox`, `concierge`, `lxd`) are available for scripting and CI prepare scripts but hidden from `--help`.
 
 ### `opcli env`
 

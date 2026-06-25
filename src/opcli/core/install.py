@@ -9,25 +9,38 @@ work correctly whether invoked as root (e.g. inside a spread ``prepare:``
 script) or as a regular user (developer workstation).
 """
 
+import grp
 import os
 import shutil
 from pathlib import Path
 
+from opcli.core.exceptions import ConfigurationError
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
 
 
-def install_local() -> None:
+def install_bootstrap() -> None:
     """Install all tools needed for local charm development.
 
-    Installs gh, spread, concierge, and tox.  Idempotent — each tool is
-    skipped if already present.  Requires passwordless sudo (standard on
+    Installs gh, spread, concierge, tox, and LXD.  Idempotent — each tool
+    is skipped if already present.  Requires passwordless sudo (standard on
     developer workstations) for snap-based installs when not running as root.
     """
     install_gh()
     install_spread()
     install_concierge()
     install_tox()
+    install_lxd()
+    _warn_if_local_bin_not_on_path()
+
+
+def install_check() -> dict[str, str | None]:
+    """Return a mapping of tool name to resolved PATH location (or None).
+
+    Checks gh, spread, concierge, tox, lxd, and uv.
+    """
+    tools = ["gh", "spread", "concierge", "tox", "lxd", "uv"]
+    return {tool: shutil.which(tool) for tool in tools}
 
 
 def install_gh() -> None:
@@ -43,16 +56,16 @@ def install_gh() -> None:
 def install_spread() -> None:
     """Install spread if not already on PATH.
 
-    Installs Go via snap and builds spread from source.  When running as
-    root the spread binary is symlinked to /usr/local/bin; when running as
-    a regular user it is symlinked to ~/.local/bin so it stays on PATH.
+    Builds spread from source, installing the Go snap as a build dependency.
+    When running as root the spread binary is symlinked to /usr/local/bin;
+    when running as a regular user it is symlinked to ~/.local/bin.
     """
     if shutil.which("spread"):
         status("spread already installed")
         return
     root = os.getuid() == 0
     snap_cmd = [] if root else ["sudo"]
-    with step("Installing spread (Go + build from source)"):
+    with step("Installing spread (Go snap + build from source)"):
         run_command([*snap_cmd, "snap", "install", "go", "--classic"])
         run_command(
             ["go", "install", "github.com/canonical/spread/cmd/spread@latest"],
@@ -75,6 +88,12 @@ def install_tox() -> None:
     normal user (local testing without spread), uses the default user-local
     paths (~/.local/bin).
     """
+    if not shutil.which("uv"):
+        msg = "uv not found — install with: sudo snap install astral-uv --classic"
+        raise ConfigurationError(msg)
+    if shutil.which("tox"):
+        status("tox already installed")
+        return
     env: dict[str, str] | None = None
     if os.getuid() == 0:
         env = {
@@ -96,3 +115,46 @@ def install_concierge() -> None:
     snap_cmd = [] if os.getuid() == 0 else ["sudo"]
     with step("Installing concierge"):
         run_command([*snap_cmd, "snap", "install", "concierge", "--classic"])
+
+
+def install_lxd() -> None:
+    """Install and initialise LXD, and add the current user to the lxd group.
+
+    LXD is required for the spread local backend.  Initialisation
+    (``lxd init --auto``) is skipped if LXD is already present to avoid
+    overwriting an existing configuration.  The user is added to the
+    ``lxd`` group only if not already a member; a new login session is
+    needed for the membership to take effect.
+    """
+    root = os.getuid() == 0
+    snap_cmd = [] if root else ["sudo"]
+
+    if not shutil.which("lxd"):
+        with step("Installing LXD"):
+            run_command([*snap_cmd, "snap", "install", "lxd"])
+        with step("Initialising LXD"):
+            run_command([*snap_cmd, "lxd", "init", "--auto"])
+    else:
+        status("lxd already installed")
+
+    user = os.environ.get("SUDO_USER") or os.environ.get("USER") or ""
+    if user:
+        try:
+            lxd_group = grp.getgrnam("lxd")
+            if user not in lxd_group.gr_mem:
+                with step(f"Adding {user} to lxd group"):
+                    run_command(["sudo", "usermod", "-aG", "lxd", user])
+        except KeyError:
+            pass  # lxd group not yet created; snap post-install hook will create it
+
+
+def _warn_if_local_bin_not_on_path() -> None:
+    """Print a warning when ~/.local/bin is missing from PATH."""
+    local_bin = str(Path.home() / ".local" / "bin")
+    path_dirs = os.environ.get("PATH", "").split(":")
+    if local_bin not in path_dirs:
+        print(
+            f"\nWarning: {local_bin} is not on PATH.\n"
+            f"Add this line to your ~/.bashrc or ~/.zshrc:\n"
+            f'  export PATH="{local_bin}:$PATH"'
+        )
