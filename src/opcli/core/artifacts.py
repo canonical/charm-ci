@@ -13,6 +13,7 @@ import glob as globmod
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import time
@@ -106,6 +107,11 @@ _FILE_EXISTS_KEYWORDS = ("file exists",)
 
 # Conclusions that mean the artifact will never arrive — bail immediately.
 _BAIL_CONCLUSIONS: frozenset[str] = frozenset({"failure", "cancelled"})
+
+# Matches "Build {charm|rock|snap} {name} ({arch})" — the job naming convention
+# from build-artifacts.yml.  Used to identify actual artifact build jobs and
+# exclude support jobs like "Build matrix".
+_BUILD_JOB_RE: re.Pattern[str] = re.compile(r"^Build (?:charm|rock|snap) ")
 
 # Special arch value meaning "all architectures".
 _ARCH_ALL = "all"
@@ -1869,21 +1875,22 @@ def _gh_download_with_wait(  # noqa: PLR0913
             )
 
         if run_id and repo:
-            conclusion = _check_run_conclusion(run_id, repo)
+            conclusion = _check_build_jobs_conclusion(run_id, repo)
             if conclusion in _BAIL_CONCLUSIONS:
                 msg = (
-                    f"CI run {run_id!r} {conclusion} before the artifact was uploaded. "
+                    f"CI run {run_id!r} build jobs {conclusion} before the artifact was uploaded. "
                     "Check the build job logs."
                 )
                 raise ConfigurationError(msg)
-            # Do NOT bail on "success" here.  A download failure while the run
-            # is already "success" could be a transient network error — we
-            # cannot distinguish that from a genuinely skipped build job.
+            # Do NOT bail on "success" here.  A download failure while all builds
+            # are "success" could be a transient network error — we cannot
+            # distinguish that from a genuinely skipped build job.
             # Retry until the deadline; the timeout message below hints at skipped jobs.
 
         remaining = deadline - time.monotonic()
         if attempt < max_attempts and remaining > 0:
-            time.sleep(min(_WAIT_SLEEP_SECONDS, remaining))
+            jitter = random.uniform(0.8, 1.2)  # noqa: S311
+            time.sleep(min(_WAIT_SLEEP_SECONDS * jitter, remaining))
 
     last_msg = last_exc.stderr.strip() if last_exc else ""
     msg = (
@@ -1964,19 +1971,17 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
                 ", ".join(missing[:5]),
             )
 
-        # Check the run's overall conclusion to bail early on permanent failures.
-        # NOTE: in the integration-test spread path, run_id is GITHUB_RUN_ID of
-        # the *current* workflow run, which contains both build and test jobs.
-        # The overall conclusion stays null while the test job itself is running,
-        # so the bail branches below are effectively inactive there.  They work
-        # correctly in the publish workflow path (where run_id is a completed
-        # build-only run) and for post-run diagnostics.  This is a known
-        # limitation; the _check_run_conclusion approach is still useful for the
-        # publish path and does no harm in the test path.
-        conclusion = _check_run_conclusion(run_id, repo)
+        # Check build job conclusions to bail early on permanent failures.
+        # Using job-level conclusions (rather than the overall run conclusion)
+        # detects build failures while the workflow is still in progress — which
+        # is the common case when test VMs run concurrently with build jobs in
+        # the same workflow run.  The overall run conclusion stays null until
+        # every job (including this test job) finishes, so it cannot signal
+        # build failure while we're waiting.
+        conclusion = _check_build_jobs_conclusion(run_id, repo)
         if conclusion in _BAIL_CONCLUSIONS:
             msg = (
-                f"CI run {run_id!r} {conclusion} before all build artifacts were uploaded. "
+                f"CI run {run_id!r} build jobs {conclusion} before all artifacts were uploaded. "
                 "Check the build job logs."
             )
             raise ConfigurationError(msg)
@@ -1988,7 +1993,7 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
             missing_now = _missing_partial_names(partial_dir, expected_names)
             if missing_now:
                 msg = (
-                    f"CI run {run_id!r} completed successfully but "
+                    f"CI run {run_id!r} build jobs succeeded but "
                     f"{len(missing_now)} partial manifest(s) were never uploaded: "
                     f"{', '.join(missing_now[:5])}. "
                     "Some matrix jobs may have been skipped."
@@ -1997,14 +2002,15 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
             return
 
         logger.info(
-            "Retrying in %ds (attempt %d/%d)...",
+            "Retrying in ~%ds (attempt %d/%d)...",
             _WAIT_SLEEP_SECONDS,
             attempt,
             max_attempts,
         )
         remaining = deadline - time.monotonic()
         if attempt < max_attempts and remaining > 0:
-            time.sleep(min(_WAIT_SLEEP_SECONDS, remaining))
+            jitter = random.uniform(0.8, 1.2)  # noqa: S311
+            time.sleep(min(_WAIT_SLEEP_SECONDS * jitter, remaining))
 
     last_msg = last_exc.stderr.strip() if last_exc else "Some partial manifests still missing."
     msg = (
@@ -2097,17 +2103,31 @@ def _run_gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None
         run_command(cmd, cwd=cwd)
 
 
-def _check_run_conclusion(run_id: str, repo: str) -> str | None:
-    """Return the overall conclusion of a GitHub Actions run, or ``None``.
+def _check_build_jobs_conclusion(run_id: str, repo: str) -> str | None:  # noqa: PLR0911
+    """Return the worst conclusion across build jobs in a CI run, or ``None``.
 
-    Returns the conclusion string (e.g. ``"success"``, ``"failure"``,
-    ``"cancelled"``) when the run has finished, or ``None`` when the run is
-    still in progress or the API call fails.  Callers should treat ``None``
-    as "don't know yet — keep retrying".
+    Queries all jobs whose name matches ``"Build (charm|rock|snap) ..."`` — the
+    naming convention used by ``build-artifacts.yml``
+    (``"Build {type} {name} ({arch})"``).  This correctly excludes support jobs
+    such as ``"Build matrix"``.
+
+    Returns:
+    - ``"failure"`` if any build job has concluded with ``failure``.
+    - ``"cancelled"`` if any build job has been cancelled (and none failed).
+    - ``"success"`` if **all** build jobs have concluded with ``success``.
+    - ``None`` if any build job is still running, the API call fails, or no
+      build jobs are found yet.
+
+    Callers should treat ``None`` as "don't know yet — keep retrying".
+
+    Checking individual job conclusions (rather than the overall run conclusion)
+    lets callers detect build failures **while the workflow is still in progress**
+    — which is the common case when test VMs run concurrently with build jobs in
+    the same workflow run.
     """
     try:
         result = run_command(
-            ["gh", "run", "view", run_id, "--repo", repo, "--json", "conclusion"],
+            ["gh", "run", "view", run_id, "--repo", repo, "--json", "jobs"],
             stream=False,
         )
     except Exception:
@@ -2120,10 +2140,34 @@ def _check_run_conclusion(run_id: str, repo: str) -> str | None:
 
     if not isinstance(data, dict):
         return None
-    conclusion = data.get("conclusion")
-    if not isinstance(conclusion, str):
+    jobs = data.get("jobs")
+    if not isinstance(jobs, list):
         return None
-    return conclusion or None
+
+    # Match "Build {charm|rock|snap} {name} ({arch})" — the naming convention
+    # from build-artifacts.yml.  This excludes "Build matrix" (the matrix
+    # generation job) and any other "Build ..." jobs not part of the artifact build.
+    build_conclusions = [
+        j.get("conclusion")
+        for j in jobs
+        if isinstance(j, dict)
+        and isinstance(j.get("name"), str)
+        and _BUILD_JOB_RE.match(j["name"])
+    ]
+
+    if not build_conclusions:
+        return None
+    if "failure" in build_conclusions:
+        return "failure"
+    if "cancelled" in build_conclusions:
+        return "cancelled"
+    # None or empty string means the job is still running.
+    if any(not c for c in build_conclusions):
+        return None
+    if all(c == "success" for c in build_conclusions):
+        return "success"
+    # Other conclusions (e.g. "skipped") — treat as unknown.
+    return None
 
 
 def _gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None:

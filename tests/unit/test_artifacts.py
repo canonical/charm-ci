@@ -1915,7 +1915,7 @@ class TestArtifactsFetch:
                 "opcli.core.artifacts.run_command",
                 side_effect=self._make_side_effect(tmp_path, results),
             ),
-            patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
             patch("opcli.core.artifacts.time.sleep"),
         ):
             artifacts_fetch(
@@ -1957,7 +1957,7 @@ class TestArtifactsFetch:
         two_attempt_timeout = _artifacts_mod._WAIT_SLEEP_SECONDS * 2
         with (
             patch("opcli.core.artifacts.run_command", side_effect=not_ready),
-            patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
             patch("opcli.core.artifacts.time.sleep"),
             pytest.raises(ConfigurationError, match="Timed out"),
         ):
@@ -1980,7 +1980,7 @@ class TestArtifactsFetch:
         with (
             patch("opcli.core.artifacts.run_command", side_effect=not_ready),
             patch(
-                "opcli.core.artifacts._check_run_conclusion",
+                "opcli.core.artifacts._check_build_jobs_conclusion",
                 return_value=conclusion,
             ),
             patch("opcli.core.artifacts.time.sleep") as mock_sleep,
@@ -2015,7 +2015,7 @@ class TestArtifactsFetch:
 
         with (
             patch("opcli.core.artifacts.run_command", side_effect=partial_side_effect),
-            patch("opcli.core.artifacts._check_run_conclusion", return_value="success"),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value="success"),
             patch("opcli.core.artifacts.time.sleep") as mock_sleep,
             pytest.raises(ConfigurationError, match="skipped"),
         ):
@@ -2039,7 +2039,7 @@ class TestArtifactsFetch:
         with (
             patch("opcli.core.artifacts._gh_download", side_effect=not_ready),
             patch("opcli.core.artifacts._run_gh_download", side_effect=not_ready),
-            patch("opcli.core.artifacts._check_run_conclusion", return_value="success"),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value="success"),
             patch("opcli.core.artifacts.time.sleep"),
             patch("opcli.core.artifacts.time.monotonic", side_effect=[0.0] * 200),
             pytest.raises(ConfigurationError, match="Timed out"),
@@ -2093,7 +2093,7 @@ class TestArtifactsFetch:
 
         with (
             patch("opcli.core.artifacts.run_command", side_effect=single_arch_side_effect),
-            patch("opcli.core.artifacts._check_run_conclusion", return_value="success"),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value="success"),
             patch("opcli.core.artifacts.time.sleep"),
         ):
             artifacts_fetch(
@@ -2211,7 +2211,7 @@ class TestArtifactsFetch:
             ),
             # "success" on first attempt (transient failure) — should not bail
             patch(
-                "opcli.core.artifacts._check_run_conclusion",
+                "opcli.core.artifacts._check_build_jobs_conclusion",
                 side_effect=["success", None, None],
             ),
             patch("opcli.core.artifacts.time.sleep"),
@@ -2236,7 +2236,7 @@ class TestArtifactsFetch:
                 side_effect=self._make_side_effect(tmp_path, results),
             ),
             patch(
-                "opcli.core.artifacts._check_run_conclusion",
+                "opcli.core.artifacts._check_build_jobs_conclusion",
                 return_value=None,
             ),
             patch("opcli.core.artifacts.time.sleep"),
@@ -2253,7 +2253,7 @@ class TestArtifactsFetch:
 
         with (
             patch("opcli.core.artifacts.run_command", side_effect=not_ready),
-            patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
             patch(
                 "opcli.core.artifacts.time.sleep",
                 side_effect=sleep_calls.append,
@@ -2286,7 +2286,7 @@ class TestArtifactsFetch:
                 "opcli.core.artifacts.run_command",
                 side_effect=self._make_side_effect(tmp_path, results),
             ),
-            patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
             patch("opcli.core.artifacts.time.sleep"),
         ):
             # wait=False but wait_timeout is not None → should retry (any value)
@@ -2313,7 +2313,7 @@ class TestArtifactsFetch:
                 "opcli.core.artifacts.run_command",
                 side_effect=self._make_side_effect(tmp_path, results),
             ),
-            patch("opcli.core.artifacts._check_run_conclusion", return_value=None),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
             patch("opcli.core.artifacts.time.sleep"),
         ):
             # Even passing exactly the default value enables waiting (not None → wait)
@@ -2327,64 +2327,107 @@ class TestArtifactsFetch:
             )
 
 
-class TestCheckRunConclusion:
-    """Unit tests for _check_run_conclusion."""
+class TestCheckBuildJobsConclusion:
+    """Unit tests for _check_build_jobs_conclusion."""
 
-    def _gh_result(self, stdout: str) -> SubprocessResult:
-        return SubprocessResult(stdout=stdout, stderr="", returncode=0)
+    def _gh_result(self, jobs: list[dict[str, object]]) -> SubprocessResult:
+        return SubprocessResult(stdout=json.dumps({"jobs": jobs}), stderr="", returncode=0)
 
-    def test_returns_conclusion_when_run_finished(self) -> None:
-        """Returns the conclusion string when the run has completed."""
-        data = json.dumps({"conclusion": "success"})
-        result = SubprocessResult(stdout=data, stderr="", returncode=0)
-        with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_run_conclusion("123", "owner/repo")
+    def _build_job(self, name: str, conclusion: str | None) -> dict[str, object]:
+        return {"name": name, "conclusion": conclusion}
+
+    def test_returns_success_when_all_build_jobs_succeed(self) -> None:
+        """Returns 'success' when all Build jobs have succeeded."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build charm my-charm (arm64)", "success"),
+        ]
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
         assert conclusion == "success"
 
-    def test_returns_failure_conclusion(self) -> None:
-        """Returns 'failure' when the run failed."""
-        data = json.dumps({"conclusion": "failure"})
-        result = SubprocessResult(stdout=data, stderr="", returncode=0)
-        with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_run_conclusion("123", "owner/repo")
+    def test_returns_failure_when_any_build_job_fails(self) -> None:
+        """Returns 'failure' when at least one Build job has failed."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build charm my-charm (arm64)", "failure"),
+        ]
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
         assert conclusion == "failure"
 
-    def test_returns_cancelled_conclusion(self) -> None:
-        """Returns 'cancelled' when the run was cancelled."""
-        data = json.dumps({"conclusion": "cancelled"})
-        result = SubprocessResult(stdout=data, stderr="", returncode=0)
-        with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_run_conclusion("123", "owner/repo")
+    def test_returns_cancelled_when_build_job_cancelled_no_failure(self) -> None:
+        """Returns 'cancelled' when a Build job is cancelled and none failed."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build charm my-charm (arm64)", "cancelled"),
+        ]
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
         assert conclusion == "cancelled"
 
-    def test_returns_none_when_conclusion_is_null(self) -> None:
-        """Returns None when the run is still in progress (conclusion is null)."""
-        data = json.dumps({"conclusion": None})
-        result = SubprocessResult(stdout=data, stderr="", returncode=0)
-        with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_run_conclusion("123", "owner/repo")
+    def test_failure_takes_priority_over_cancelled(self) -> None:
+        """'failure' takes priority over 'cancelled'."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "failure"),
+            self._build_job("Build charm my-charm (arm64)", "cancelled"),
+        ]
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+        assert conclusion == "failure"
+
+    def test_returns_none_when_build_job_still_running(self) -> None:
+        """Returns None when at least one Build job is still running (conclusion null)."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build charm my-charm (arm64)", None),
+        ]
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+        assert conclusion is None
+
+    def test_ignores_non_build_jobs(self) -> None:
+        """'Build matrix' and other support jobs are excluded from the check."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build matrix", "success"),  # excluded — no type prefix
+            self._build_job("Test integration", "failure"),  # excluded — not a build job
+        ]
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
+        assert conclusion == "success"
+
+    def test_returns_none_when_no_build_jobs_found(self) -> None:
+        """Returns None when no Build (charm|rock|snap) jobs exist yet."""
+        jobs = [
+            self._build_job("Build matrix", "success"),  # matrix job — excluded
+            self._build_job("Test integration", None),  # not a build job
+        ]
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
         assert conclusion is None
 
     def test_returns_none_when_gh_command_fails(self) -> None:
         """Returns None if the gh API call fails (don't know yet — keep retrying)."""
         error = SubprocessError(["gh"], 1, "API error")
         with patch("opcli.core.artifacts.run_command", side_effect=error):
-            conclusion = _artifacts_mod._check_run_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
         assert conclusion is None
 
     def test_returns_none_on_invalid_json(self) -> None:
         """Returns None if gh returns non-JSON output."""
         result = SubprocessResult(stdout="not-json", stderr="", returncode=0)
         with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_run_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo")
         assert conclusion is None
 
     def test_uses_correct_gh_command(self) -> None:
-        """Calls gh run view with --json conclusion."""
-        data = json.dumps({"conclusion": "success"})
-        result = SubprocessResult(stdout=data, stderr="", returncode=0)
-        with patch("opcli.core.artifacts.run_command", return_value=result) as mock_run:
-            _artifacts_mod._check_run_conclusion("456", "owner/myrepo")
+        """Calls gh run view with --json jobs."""
+        jobs = [self._build_job("Build charm x (amd64)", "success")]
+        with patch(
+            "opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)
+        ) as mock_run:
+            _artifacts_mod._check_build_jobs_conclusion("456", "owner/myrepo")
         cmd = mock_run.call_args.args[0]
         assert cmd == [
             "gh",
@@ -2394,7 +2437,7 @@ class TestCheckRunConclusion:
             "--repo",
             "owner/myrepo",
             "--json",
-            "conclusion",
+            "jobs",
         ]
 
 
