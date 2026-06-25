@@ -36,9 +36,6 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 - [uv](https://docs.astral.sh/uv/) (`sudo snap install astral-uv --classic`)
 - [charmcraft](https://charmcraft.io/) (`sudo snap install charmcraft --classic`)
 - [rockcraft](https://rockcraft.io/) (`sudo snap install rockcraft --classic`) — if building rocks
-- [LXD](https://canonical.com/lxd) (`sudo lxd init --auto && sudo usermod -aG lxd $USER`)
-- [spread](https://github.com/canonical/spread) — installed via `opcli install spread` after opcli is set up
-- [concierge](https://github.com/canonical/concierge/) (`sudo snap install concierge --classic`) — for env provisioning
 
 ### Install opcli
 
@@ -50,6 +47,20 @@ opcli --help
 ```
 
 > **Note:** The `[cli]` extra is required for the CLI. The bare `opcli` package (without `[cli]`) installs only the pytest plugin — useful when your project already has a conflicting `typer` pin.
+
+### Install all local dev tools
+
+After opcli is installed, one command installs everything else (gh, spread, uv, concierge, tox, LXD):
+
+```bash
+opcli install all
+```
+
+Idempotent — skips any tool already present. Requires passwordless sudo for snap-based installs when not running as root. To verify your environment afterwards:
+
+```bash
+opcli install doctor
+```
 
 ## Quick start
 
@@ -74,7 +85,7 @@ opcli pytest run --suite k8s-charm/tests/integration/
 ```bash
 opcli artifacts init
 opcli artifacts build
-opcli install tox                                      # install tox + tox-uv
+opcli install all                                      # install gh, spread, uv, concierge, tox, lxd
 opcli env provision                                    # concierge (auto-elevates with sudo)
 opcli artifacts push-images --missing-registry deploy  # push rocks to local registry (k8s only)
 opcli pytest run                                       # run all integration tests via tox
@@ -126,9 +137,10 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 | Command | Description |
 |---|---|
-| `spread` | Install the spread test runner (no-op if already present). |
-| `tox` | Install tox with tox-uv for running integration tests. |
-| `concierge` | Install the concierge snap (no-op if already present). |
+| `all` | Install all local dev tools in one shot: gh, spread (built from source), uv, concierge, tox, LXD. |
+| `doctor` | Print a ✓/✗ status table for all required tools with versions. Exits 1 if any are missing. |
+
+Individual per-tool commands (`gh`, `spread`, `tox`, `concierge`, `lxd`, `uv`) are visible in a grouped panel in `opcli install --help` for use in CI prepare scripts.
 
 ### `opcli env`
 
