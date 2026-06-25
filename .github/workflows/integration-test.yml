@@ -151,6 +151,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.test-matrix.outputs.matrix) }}
+    env:
+      # Give the artifact fetch enough time to outlast the slowest build.
+      # build-timeout-minutes * 60 converts the per-job build ceiling to
+      # seconds; the 600s buffer covers provisioning and startup overhead.
+      OPCLI_FETCH_WAIT_TIMEOUT: ${{ inputs.build-timeout-minutes * 60 + 600 }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}

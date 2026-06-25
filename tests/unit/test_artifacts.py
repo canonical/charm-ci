@@ -1994,11 +1994,26 @@ class TestArtifactsFetch:
     def test_wait_bails_on_success_conclusion_with_missing_partials_all_arch(
         self, tmp_path: Path
     ) -> None:
-        """With arch=all + wait, bails immediately when run is 'success' but partials are missing."""
+        """With arch=all + wait, bails when run='success' AND download succeeded but partials are missing."""
         self._write_plan(tmp_path)
-        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+
+        def partial_side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
+            """Download succeeds but only writes 1 of 4 expected partials."""
+            if "--pattern" in cmd:
+                dir_idx = cmd.index("--dir") + 1
+                partial_dir = Path(cmd[dir_idx])
+                # Write only the rock partial; 3 charm/snap partials remain missing
+                name = "artifacts-build-rock-my-rock-amd64"
+                d = partial_dir / name
+                d.mkdir(parents=True, exist_ok=True)
+                write_file(
+                    d / "artifacts.build.yaml",
+                    self._PARTIAL_FILES["artifacts-build-rock-my-rock-amd64"],
+                )
+            return self._GH_RESULT
+
         with (
-            patch("opcli.core.artifacts.run_command", side_effect=not_ready),
+            patch("opcli.core.artifacts.run_command", side_effect=partial_side_effect),
             patch("opcli.core.artifacts._check_run_conclusion", return_value="success"),
             patch("opcli.core.artifacts.time.sleep") as mock_sleep,
             pytest.raises(ConfigurationError, match="skipped"),
@@ -2028,7 +2043,88 @@ class TestArtifactsFetch:
 
         mock_sleep.assert_not_called()
 
-        """With wait=True, keeps retrying when run conclusion is None (still running)."""
+    def test_gh_flat_extraction_single_artifact(self, tmp_path: Path) -> None:
+        """When --pattern matches one artifact, gh extracts flat; layout is normalised."""
+        # Use a plan with a single charm so --pattern returns exactly one artifact,
+        # triggering gh's flat-extraction layout (partial_dir/artifacts.build.yaml
+        # instead of partial_dir/<name>/artifacts.build.yaml).
+        single_charm_plan = (
+            "version: 1\ncharms:\n- name: my-charm\n  charmcraft-yaml: charmcraft.yaml\n"
+        )
+        write_file(tmp_path / "artifacts.yaml", single_charm_plan)
+
+        single_partial = (
+            "version: 1\n"
+            "rocks: []\n"
+            "charms:\n"
+            "- name: my-charm\n"
+            "  charmcraft-yaml: charmcraft.yaml\n"
+            "  builds:\n"
+            "  - arch: amd64\n"
+            "    artifact: built-charm-my-charm-amd64\n"
+            "    run-id: '99887766'\n"
+            "snaps: []\n"
+        )
+
+        def flat_side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
+            if "--pattern" in cmd:
+                # Simulate gh's flat extraction: write directly into partial_dir
+                dir_idx = cmd.index("--dir") + 1
+                partial_dir = Path(cmd[dir_idx])
+                write_file(partial_dir / "artifacts.build.yaml", single_partial)
+            elif "--name" in cmd:
+                # Archive download: create the charm file
+                dir_idx = cmd.index("--dir") + 1
+                archive_dir = Path(cmd[dir_idx])
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                (archive_dir / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
+            return self._GH_RESULT
+
+        with patch("opcli.core.artifacts.run_command", side_effect=flat_side_effect):
+            result = artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", arch="all")
+
+        assert result == tmp_path / "artifacts.build.yaml"
+        # The normalised partial must be in the expected subdir
+        expected_subdir = (
+            tmp_path
+            / "partial-artifacts-fetch"
+            / "artifacts-build-charm-my-charm-amd64"
+            / "artifacts.build.yaml"
+        )
+        assert expected_subdir.exists()
+
+    def test_wait_success_conclusion_with_transient_download_failure_retries(
+        self, tmp_path: Path
+    ) -> None:
+        """Transient download failure when run='success' retries rather than raising 'skipped'."""
+        self._write_plan(tmp_path)
+        self._make_charm_files(tmp_path)
+        self._make_snap_files(tmp_path)
+
+        not_ready = SubprocessError(["gh"], 1, "network error")
+        gh = self._GH_RESULT
+        # Attempt 1: run_command fails (transient) + conclusion is "success"
+        # Attempt 2: run_command succeeds + all partials present
+        results: list[SubprocessResult | BaseException] = [not_ready, gh, gh, gh, gh]
+        with (
+            patch(
+                "opcli.core.artifacts.run_command",
+                side_effect=self._make_side_effect(tmp_path, results),
+            ),
+            # "success" on first attempt (transient failure) — should not bail
+            patch(
+                "opcli.core.artifacts._check_run_conclusion",
+                side_effect=["success", None, None],
+            ),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            # Should succeed on second attempt, not raise "skipped"
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
+
+    def test_wait_continues_when_run_still_in_progress(self, tmp_path: Path) -> None:
+        """With wait=True and arch=all, keeps retrying when run conclusion is None (still running)."""
         self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
