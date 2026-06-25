@@ -51,16 +51,16 @@ opcli --help
 
 ### Install all local dev tools
 
-After opcli is installed, one command installs everything else (gh, spread, concierge, tox, LXD):
+After opcli is installed, one command installs everything else (gh, spread, uv, concierge, tox, LXD):
 
 ```bash
-opcli install bootstrap
+opcli install all
 ```
 
 Idempotent — skips any tool already present. Requires passwordless sudo for snap-based installs when not running as root. To verify your environment afterwards:
 
 ```bash
-opcli install check
+opcli install doctor
 ```
 
 ## Quick start
@@ -86,7 +86,7 @@ opcli pytest run --suite k8s-charm/tests/integration/
 ```bash
 opcli artifacts init
 opcli artifacts build
-opcli install bootstrap                                # install gh, spread, concierge, tox, lxd
+opcli install all                                      # install gh, spread, uv, concierge, tox, lxd
 opcli env provision                                    # concierge (auto-elevates with sudo)
 opcli artifacts push-images --missing-registry deploy  # push rocks to local registry (k8s only)
 opcli pytest run                                       # run all integration tests via tox
@@ -138,10 +138,10 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 | Command | Description |
 |---|---|
-| `bootstrap` | Install all local dev tools in one shot: gh, spread (built from source), concierge, tox, LXD. |
-| `check` | Print a ✓/✗ status table for all required tools. Exits 1 if any are missing. |
+| `all` | Install all local dev tools in one shot: gh, spread (built from source), uv, concierge, tox, LXD. |
+| `doctor` | Print a ✓/✗ status table for all required tools with versions. Exits 1 if any are missing. |
 
-Individual commands (`gh`, `spread`, `tox`, `concierge`, `lxd`) are available for scripting and CI prepare scripts but hidden from `--help`.
+Individual per-tool commands (`gh`, `spread`, `tox`, `concierge`, `lxd`, `uv`) are visible in a grouped panel in `opcli install --help` for use in CI prepare scripts.
 
 ### `opcli env`
 
