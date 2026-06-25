@@ -173,13 +173,22 @@ def install_concierge() -> None:
         run_command([*snap_cmd, "snap", "install", "concierge", "--classic"])
 
 
+def _lxd_is_initialised(snap_cmd: list[str]) -> bool:
+    """Return True if LXD has been initialised (has at least one storage pool)."""
+    result = run_command(
+        [*snap_cmd, "lxc", "storage", "list", "-f", "csv"], check=False, stream=False
+    )
+    return bool(result.stdout.strip())
+
+
 def install_lxd() -> None:
     """Install and initialise LXD, and add the current user to the lxd group.
 
     LXD is required for the spread local backend.  Initialisation
-    (``lxd init --auto``) is skipped if LXD is already present to avoid
-    overwriting an existing configuration.  The user is added to the
-    ``lxd`` group only if not already a member.
+    (``lxd init --auto``) is run whenever LXD has no storage pools configured,
+    regardless of whether the snap was just installed or was already present
+    (e.g. pre-installed on Ubuntu 24.04 multipass VMs).  The user is added to
+    the ``lxd`` group only if not already a member.
 
     Note: membership in the ``lxd`` group is equivalent to root access on
     the host.  A new login session is needed for membership to take effect.
@@ -190,10 +199,12 @@ def install_lxd() -> None:
     if not shutil.which("lxd"):
         with step("Installing LXD"):
             run_command([*snap_cmd, "snap", "install", "lxd"])
-        with step("Initialising LXD"):
-            run_command([*snap_cmd, "lxd", "init", "--auto"])
     else:
         status("lxd already installed")
+
+    if not _lxd_is_initialised(snap_cmd):
+        with step("Initialising LXD"):
+            run_command([*snap_cmd, "lxd", "init", "--auto"])
 
     user = os.environ.get("SUDO_USER") or os.environ.get("USER") or ""
     if user:
