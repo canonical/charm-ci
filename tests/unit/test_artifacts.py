@@ -12,6 +12,7 @@ import pytest
 
 import opcli.core.artifacts as _artifacts_mod
 from opcli.core.artifacts import (
+    _normalize_partial_dir_layout,
     artifacts_build,
     artifacts_collect,
     artifacts_fetch,
@@ -2024,24 +2025,80 @@ class TestArtifactsFetch:
 
         mock_sleep.assert_not_called()
 
-    def test_wait_bails_on_success_conclusion_with_missing_artifact_single_arch(
+    def test_wait_retries_on_success_conclusion_with_missing_artifact_single_arch(
         self, tmp_path: Path
     ) -> None:
-        """With single arch + wait, bails immediately when run is 'success' but artifact is missing."""
+        """With single arch + wait, retries (not immediate abort) when run='success' but artifact missing.
+
+        A download failure when the run is already 'success' could be a transient
+        network error.  We cannot distinguish that from a skipped build job, so we
+        retry until the deadline and surface a timeout error with a hint.
+        """
         self._write_plan(tmp_path)
         not_ready = SubprocessError(["gh"], 1, "artifact not found")
         with (
             patch("opcli.core.artifacts._gh_download", side_effect=not_ready),
             patch("opcli.core.artifacts._run_gh_download", side_effect=not_ready),
             patch("opcli.core.artifacts._check_run_conclusion", return_value="success"),
-            patch("opcli.core.artifacts.time.sleep") as mock_sleep,
-            pytest.raises(ConfigurationError, match="skipped"),
+            patch("opcli.core.artifacts.time.sleep"),
+            patch("opcli.core.artifacts.time.monotonic", side_effect=[0.0] * 200),
+            pytest.raises(ConfigurationError, match="Timed out"),
         ):
             artifacts_fetch(
-                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="amd64"
+                tmp_path,
+                run_id="99887766",
+                repo="owner/my-repo",
+                wait=True,
+                arch="amd64",
+                wait_timeout=60,
             )
 
-        mock_sleep.assert_not_called()
+    def test_wait_success_conclusion_with_transient_single_arch_failure_retries(
+        self, tmp_path: Path
+    ) -> None:
+        """Transient download failure on single-arch path retries and succeeds on second attempt."""
+        self._write_plan(tmp_path)
+        self._make_charm_files(tmp_path)
+        self._make_snap_files(tmp_path)
+
+        not_ready = SubprocessError(["gh"], 1, "network error")
+
+        call_count = 0
+
+        def single_arch_side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
+            nonlocal call_count
+            call_count += 1
+            if "--pattern" not in cmd and "--name" not in cmd:
+                return self._GH_RESULT
+            if "--pattern" in cmd and call_count == 1:
+                raise not_ready
+            # Second call: write partials correctly
+            if "--pattern" in cmd:
+                dir_idx = cmd.index("--dir") + 1
+                partial_dir = Path(cmd[dir_idx])
+                for name, content in self._PARTIAL_FILES.items():
+                    d = partial_dir / name
+                    d.mkdir(parents=True, exist_ok=True)
+                    write_file(d / "artifacts.build.yaml", content)
+            elif "--name" in cmd:
+                dir_idx = cmd.index("--dir") + 1
+                archive_dir = Path(cmd[dir_idx])
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                for fname in [
+                    "my-charm_ubuntu-24.04-amd64.charm",
+                    "my-snap_amd64.snap",
+                ]:
+                    (archive_dir / fname).write_bytes(b"")
+            return self._GH_RESULT
+
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=single_arch_side_effect),
+            patch("opcli.core.artifacts._check_run_conclusion", return_value="success"),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
 
     def test_gh_flat_extraction_single_artifact(self, tmp_path: Path) -> None:
         """When --pattern matches one artifact, gh extracts flat; layout is normalised."""
@@ -2092,6 +2149,47 @@ class TestArtifactsFetch:
             / "artifacts.build.yaml"
         )
         assert expected_subdir.exists()
+
+    def test_normalize_partial_dir_layout_corrupt_yaml_leaves_file(self, tmp_path: Path) -> None:
+        """Corrupted flat-extracted YAML is left in place and reported as missing (triggers retry)."""
+        partial_dir = tmp_path / "partials"
+        partial_dir.mkdir()
+        corrupt = partial_dir / "artifacts.build.yaml"
+        corrupt.write_text(": this is not valid yaml :\n\t: [")
+
+        _normalize_partial_dir_layout(partial_dir)
+
+        # File still at flat location (not moved) because we couldn't infer the name
+        assert corrupt.exists()
+        # No subdirectories were created
+        assert list(partial_dir.iterdir()) == [corrupt]
+
+    def test_normalize_partial_dir_layout_empty_manifest_leaves_file(self, tmp_path: Path) -> None:
+        """Flat-extracted manifest with no builds is left in place (artifact name cannot be inferred)."""
+        partial_dir = tmp_path / "partials"
+        partial_dir.mkdir()
+        empty_manifest = "version: 1\nrocks: []\ncharms: []\nsnaps: []\n"
+        flat = partial_dir / "artifacts.build.yaml"
+        flat.write_text(empty_manifest)
+
+        _normalize_partial_dir_layout(partial_dir)
+
+        # Left in place because no builds → name is None
+        assert flat.exists()
+
+    def test_normalize_partial_dir_layout_already_normalized_no_op(self, tmp_path: Path) -> None:
+        """Already-normalized layout (no flat file) is left unchanged."""
+        partial_dir = tmp_path / "partials"
+        subdir = partial_dir / "artifacts-build-charm-my-charm-amd64"
+        subdir.mkdir(parents=True)
+        manifest = subdir / "artifacts.build.yaml"
+        manifest.write_text("version: 1\nrocks: []\ncharms: []\nsnaps: []\n")
+
+        _normalize_partial_dir_layout(partial_dir)
+
+        # Subdir manifest is untouched; no flat file was moved
+        assert manifest.exists()
+        assert not (partial_dir / "artifacts.build.yaml").exists()
 
     def test_wait_success_conclusion_with_transient_download_failure_retries(
         self, tmp_path: Path

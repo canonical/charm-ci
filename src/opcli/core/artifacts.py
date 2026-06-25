@@ -463,7 +463,10 @@ def artifacts_collect(root: Path, partial_paths: list[Path]) -> Path:
                 msg = (
                     f"Charm '{charm.name}' resource '{res_name}' references rock "
                     f"'{res.rock}' which was not found in the collected partials. "
-                    f"Ensure the rock build job partial is included."
+                    f"Ensure a rock build job exists for '{res.rock}' and that it "
+                    "supports the same architectures as the charm. "
+                    "If fetching for a specific architecture, verify the rock is "
+                    "built for that architecture."
                 )
                 raise ConfigurationError(msg)
 
@@ -1458,6 +1461,7 @@ def _merge_artifact_outputs[T: (GeneratedRock, GeneratedCharm, GeneratedSnap)](
                         "exactly one partial file."
                     )
                     raise ConfigurationError(msg)
+                existing_keys.add(key)
             existing.builds.extend(item.builds)
     return list(merged.values())
 
@@ -1818,8 +1822,10 @@ def _gh_download_with_wait(  # noqa: PLR0913
     Retries every :data:`_WAIT_SLEEP_SECONDS` seconds until *wait_timeout*
     seconds have elapsed.  Fails immediately if the error looks like an
     authentication/permission problem.  When *run_id* and *repo* are provided,
-    bails early if the CI run itself has a terminal conclusion (failure,
-    cancelled, or success-with-missing-artifact).
+    bails early if the CI run has a terminal failure conclusion (failure or
+    cancelled).  A ``success`` conclusion alone is not sufficient to abort —
+    the download failure could be transient; retry until the deadline so that
+    short network blips don't produce a misleading "skipped" error.
 
     Args:
         cmd: Full ``gh run download ...`` command list.
@@ -1836,9 +1842,12 @@ def _gh_download_with_wait(  # noqa: PLR0913
         ConfigurationError: On auth/permission errors or timeout.
         SubprocessError: Propagated for non-retryable failures.
     """
+    deadline = time.monotonic() + wait_timeout
     max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
     last_exc: SubprocessError | None = None
     for attempt in range(1, max_attempts + 1):
+        if attempt > 1 and time.monotonic() >= deadline:
+            break
         try:
             _run_gh_download(cmd, cwd, dest)
             return
@@ -1867,18 +1876,21 @@ def _gh_download_with_wait(  # noqa: PLR0913
                     "Check the build job logs."
                 )
                 raise ConfigurationError(msg)
-            if conclusion == "success":
-                msg = (
-                    f"CI run {run_id!r} completed successfully but the artifact was not found. "
-                    "Some matrix jobs may have been skipped."
-                )
-                raise ConfigurationError(msg)
+            # Do NOT bail on "success" here.  A download failure while the run
+            # is already "success" could be a transient network error — we
+            # cannot distinguish that from a genuinely skipped build job.
+            # Retry until the deadline; the timeout message below hints at skipped jobs.
 
-        if attempt < max_attempts:
-            time.sleep(_WAIT_SLEEP_SECONDS)
+        remaining = deadline - time.monotonic()
+        if attempt < max_attempts and remaining > 0:
+            time.sleep(min(_WAIT_SLEEP_SECONDS, remaining))
 
     last_msg = last_exc.stderr.strip() if last_exc else ""
-    msg = f"Timed out waiting for artifact after {wait_timeout}s. Last error: {last_msg}"
+    msg = (
+        f"Timed out waiting for artifact after {wait_timeout}s. "
+        f"Last error: {last_msg}. "
+        "If the build job was skipped, verify the CI run's matrix configuration."
+    )
     raise ConfigurationError(msg)
 
 
