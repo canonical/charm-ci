@@ -33,15 +33,14 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 ### Prerequisites
 
 - Python 3.12+
-- [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [uv](https://docs.astral.sh/uv/)
 - [charmcraft](https://charmcraft.io/) (`sudo snap install charmcraft --classic`)
 - [rockcraft](https://rockcraft.io/) (`sudo snap install rockcraft --classic`) — if building rocks
 
 ### Install opcli
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.local/bin/env   # add uv to PATH (or open a new terminal)
+sudo snap install astral-uv --classic
 uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git"
 export PATH="$HOME/.local/bin:$PATH"  # or: uv tool update-shell && exec $SHELL
 opcli --help
@@ -49,7 +48,7 @@ opcli --help
 
 > **Note:** The `[cli]` extra is required for the CLI. The bare `opcli` package (without `[cli]`) installs only the pytest plugin — useful when your project already has a conflicting `typer` pin.
 
-> **Note:** The `sudo snap install astral-uv --classic` method works for non-root users but not when running as root (snap confinement prevents wheel installation as root). Use the `curl` method above for both root and non-root.
+> **Root installs:** `uv tool install` from a git URL requires building opcli from source, which can fail when running as root due to snap confinement. For root environments (e.g. spread prepare scripts), install opcli via the workflow-provided mechanism, or transfer and install from a local path: `uv tool install "./opcli[cli]"`.
 
 ### Install all local dev tools
 
