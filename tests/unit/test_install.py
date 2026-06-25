@@ -13,7 +13,6 @@ from opcli.commands.install import app as install_app
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.install import (
     _check_os_prerequisites,
-    _lxd_fix_profile,
     _lxd_is_initialised,
     _warn_if_local_bin_not_on_path,
     install_all,
@@ -236,58 +235,6 @@ def test_lxd_is_initialised_returns_false_when_profile_has_no_root_disk(mocker):
 
 
 # ---------------------------------------------------------------------------
-# _lxd_fix_profile
-# ---------------------------------------------------------------------------
-
-
-def test_lxd_fix_profile_adds_root_disk_with_detected_pool(mocker):
-    storage_result = MagicMock()
-    storage_result.stdout = "mypool,dir,0 volumes,1 used by 0 profiles\n"
-    mock_run = mocker.patch("opcli.core.install.run_command", return_value=storage_result)
-    _lxd_fix_profile(["sudo"])
-    assert (
-        call(
-            [
-                "sudo",
-                "lxc",
-                "profile",
-                "device",
-                "add",
-                "default",
-                "root",
-                "disk",
-                "path=/",
-                "pool=mypool",
-            ]
-        )
-        in mock_run.call_args_list
-    )
-
-
-def test_lxd_fix_profile_falls_back_to_default_pool(mocker):
-    storage_result = MagicMock()
-    storage_result.stdout = ""
-    mock_run = mocker.patch("opcli.core.install.run_command", return_value=storage_result)
-    _lxd_fix_profile([])
-    assert (
-        call(
-            [
-                "lxc",
-                "profile",
-                "device",
-                "add",
-                "default",
-                "root",
-                "disk",
-                "path=/",
-                "pool=default",
-            ]
-        )
-        in mock_run.call_args_list
-    )
-
-
-# ---------------------------------------------------------------------------
 # install_lxd
 # ---------------------------------------------------------------------------
 
@@ -304,49 +251,17 @@ def test_install_lxd_skips_all_when_profile_already_has_root_disk(mocker):
     assert call(["sudo", "lxd", "init", "--auto"]) not in mock_run.call_args_list
 
 
-def test_install_lxd_runs_full_init_when_no_storage(mocker):
-    """Fresh/uninitialised LXD (no storage pools) → lxd init --auto."""
+def test_install_lxd_inits_when_profile_missing_root_disk(mocker):
+    """Pre-installed but uninitialised LXD (e.g. fresh Ubuntu 24.04/26.04 VM)."""
     mocker.patch("shutil.which", return_value="/usr/sbin/lxd")
     mocker.patch("os.getuid", return_value=1000)
     mocker.patch.dict(os.environ, {"USER": "ubuntu"}, clear=False)
     mocker.patch("grp.getgrnam", side_effect=KeyError("lxd"))
     mocker.patch("opcli.core.install._lxd_is_initialised", return_value=False)
-    storage_result = MagicMock()
-    storage_result.stdout = ""
-    mock_run = mocker.patch("opcli.core.install.run_command", return_value=storage_result)
+    mock_run = mocker.patch("opcli.core.install.run_command")
     install_lxd()
+    assert call(["sudo", "snap", "install", "lxd"]) not in mock_run.call_args_list
     assert call(["sudo", "lxd", "init", "--auto"]) in mock_run.call_args_list
-
-
-def test_install_lxd_fixes_profile_when_storage_exists_but_profile_broken(mocker):
-    """Storage exists but default profile has no root disk → fix profile directly."""
-    mocker.patch("shutil.which", return_value="/usr/sbin/lxd")
-    mocker.patch("os.getuid", return_value=1000)
-    mocker.patch.dict(os.environ, {"USER": "ubuntu"}, clear=False)
-    mocker.patch("grp.getgrnam", side_effect=KeyError("lxd"))
-    mocker.patch("opcli.core.install._lxd_is_initialised", return_value=False)
-    storage_result = MagicMock()
-    storage_result.stdout = "default,dir,0 volumes,1 used by 0 profiles\n"
-    mock_run = mocker.patch("opcli.core.install.run_command", return_value=storage_result)
-    install_lxd()
-    assert call(["sudo", "lxd", "init", "--auto"]) not in mock_run.call_args_list
-    assert (
-        call(
-            [
-                "sudo",
-                "lxc",
-                "profile",
-                "device",
-                "add",
-                "default",
-                "root",
-                "disk",
-                "path=/",
-                "pool=default",
-            ]
-        )
-        in mock_run.call_args_list
-    )
 
 
 def test_install_lxd_installs_and_inits_as_root(mocker):
@@ -355,9 +270,7 @@ def test_install_lxd_installs_and_inits_as_root(mocker):
     mocker.patch.dict(os.environ, {"USER": "root"}, clear=False)
     mocker.patch("grp.getgrnam", side_effect=KeyError("lxd"))
     mocker.patch("opcli.core.install._lxd_is_initialised", return_value=False)
-    storage_result = MagicMock()
-    storage_result.stdout = ""
-    mock_run = mocker.patch("opcli.core.install.run_command", return_value=storage_result)
+    mock_run = mocker.patch("opcli.core.install.run_command")
     install_lxd()
     assert call(["snap", "install", "lxd"]) in mock_run.call_args_list
     assert call(["lxd", "init", "--auto"]) in mock_run.call_args_list
@@ -369,9 +282,7 @@ def test_install_lxd_uses_sudo_as_non_root(mocker):
     mocker.patch.dict(os.environ, {"USER": "ubuntu"}, clear=False)
     mocker.patch("grp.getgrnam", side_effect=KeyError("lxd"))
     mocker.patch("opcli.core.install._lxd_is_initialised", return_value=False)
-    storage_result = MagicMock()
-    storage_result.stdout = ""
-    mock_run = mocker.patch("opcli.core.install.run_command", return_value=storage_result)
+    mock_run = mocker.patch("opcli.core.install.run_command")
     install_lxd()
     assert call(["sudo", "snap", "install", "lxd"]) in mock_run.call_args_list
     assert call(["sudo", "lxd", "init", "--auto"]) in mock_run.call_args_list
