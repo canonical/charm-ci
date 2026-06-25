@@ -887,6 +887,7 @@ def _download_partial_manifests(  # noqa: PLR0913
                 repo=repo,
                 dest=dest,
                 wait_timeout=remaining,
+                artifact_name=name,
             )
         else:
             _gh_download(cmd, str(root), dest=dest)
@@ -1830,36 +1831,58 @@ def _wait_bail_or_sleep(  # noqa: PLR0913
     repo: str | None,
     *,
     download_succeeded: bool,
-) -> None:
-    """Check the overall CI run conclusion and sleep between retry iterations.
+    expected_job_names: set[str] | None = None,
+) -> str | None:
+    """Check build job conclusions, sleep between retry iterations, and return conclusion.
 
-    Encapsulates the retry/bail/sleep logic shared by both download-wait loops.
-    Raises :class:`ConfigurationError` immediately when a terminal run failure
-    (failure or cancelled) is detected.  Returns normally when the loop should
-    sleep and retry.
+    Encapsulates the retry/bail/sleep logic shared by both download-wait loops
+    so that changes to retry semantics only need to be made once.
 
-    With ``fail-fast: true`` on the build matrix, a single job failure quickly
-    cancels all other build jobs and transitions the overall run conclusion to
-    ``failure``, keeping detection delay to ~30-60 seconds.
+    Raises :class:`ConfigurationError` immediately when a terminal build failure
+    (failure or cancelled) is detected.  Returns the observed job conclusion so
+    the caller can react to ``"success"`` (e.g. fast-fail when an artifact is
+    still missing after the build job has succeeded).
+
+    The "success + missing partials" re-download is intentionally *not* handled
+    here — callers perform a fresh re-download before that diagnosis to avoid a
+    download↔conclusion race (see ``_gh_download_all_partials_with_wait`` and
+    ``_gh_download_with_wait``).
 
     Args:
         attempt: Current attempt number (1-based).
-        max_attempts: Maximum loop iterations.
+        max_attempts: Maximum loop iterations (used to skip the sleep on the
+            final attempt).
         deadline: Monotonic clock deadline for the whole wait operation.
-        run_id: GitHub Actions run ID.  Pass ``None`` to skip conclusion checks.
-        repo: Repository in ``owner/name`` format.  Pass ``None`` to skip.
-        download_succeeded: Reserved for future use; kept for API symmetry.
+        run_id: GitHub Actions run ID used for conclusion polling.  Pass
+            ``None`` to skip conclusion checks.
+        repo: Repository in ``owner/name`` format.  Pass ``None`` to skip
+            conclusion checks.
+        download_succeeded: Reserved for future use; currently unused but kept
+            for API symmetry with callers that track download state.
+        expected_job_names: Exact workflow job names to check conclusions for.
+            Derived from artifact names via
+            :func:`_artifact_name_to_build_job_name`.  When ``None`` (or empty)
+            conclusion checks are skipped.
+
+    Returns:
+        The conclusion string from :func:`_check_build_jobs_conclusion`
+        (``"success"``, ``"failure"``, ``"cancelled"``, or ``None``), or
+        ``None`` when conclusion checks are skipped.
     """
     _ = download_succeeded  # see docstring
-    if run_id and repo:
-        conclusion = _check_run_conclusion(run_id, repo)
+    conclusion: str | None = None
+    if run_id and repo and expected_job_names:
+        conclusion = _check_build_jobs_conclusion(run_id, repo, expected_job_names)
         if conclusion in _BAIL_CONCLUSIONS:
-            raise ConfigurationError(f"CI run {run_id!r} {conclusion}. Check the build job logs.")
+            raise ConfigurationError(
+                f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
+            )
 
     remaining = deadline - time.monotonic()
     if attempt < max_attempts and remaining > 0:
         jitter = random.uniform(0.8, 1.2)  # noqa: S311
         time.sleep(min(_WAIT_SLEEP_SECONDS * jitter, remaining))
+    return conclusion
 
 
 def _gh_download_with_wait(  # noqa: PLR0913
@@ -1869,14 +1892,19 @@ def _gh_download_with_wait(  # noqa: PLR0913
     repo: str | None = None,
     dest: Path | None = None,
     wait_timeout: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+    artifact_name: str | None = None,
 ) -> None:
     """Run ``gh run download``, retrying until the artifact appears.
 
     Retries every :data:`_WAIT_SLEEP_SECONDS` seconds until *wait_timeout*
-    seconds have elapsed.  Fails immediately on auth/permission errors.  Bails
-    early when the overall CI run has a terminal failure or cancellation.  A
-    ``success`` conclusion alone does not abort — the download failure could
-    be transient; retry until the deadline.
+    seconds have elapsed.  Fails immediately if the error looks like an
+    authentication/permission problem.  When *run_id*, *repo*, and
+    *artifact_name* are provided, bails early if the CI build job has a
+    terminal failure or cancellation.  If the build job concludes ``success``
+    but the artifact still cannot be downloaded, one final re-download is
+    attempted to close the download↔conclusion race window; if still missing,
+    fails fast with a clear "never uploaded" message rather than waiting out
+    the full timeout.
 
     Args:
         cmd: Full ``gh run download ...`` command list.
@@ -1886,8 +1914,18 @@ def _gh_download_with_wait(  # noqa: PLR0913
         dest: Path of the expected output file.  When provided and ``gh``
             reports "file exists", the file is deleted and the download is
             retried once before giving up.
-        wait_timeout: Maximum seconds to keep retrying.
+        wait_timeout: Maximum seconds to keep retrying. Defaults to
+            :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`.
+        artifact_name: The partial artifact name being downloaded (e.g.
+            ``"artifacts-build-charm-my-charm-amd64"``).  Used to derive the
+            expected workflow job name for early-failure and success detection.
+            When ``None``, conclusion checks are still made but match no
+            specific job (and therefore only detect failure once all jobs
+            complete).
     """
+    expected_job_names: set[str] = (
+        {_artifact_name_to_build_job_name(artifact_name)} if artifact_name else set()
+    )
     deadline = time.monotonic() + wait_timeout
     max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
     last_exc: SubprocessError | None = None
@@ -1914,16 +1952,31 @@ def _gh_download_with_wait(  # noqa: PLR0913
                 _WAIT_SLEEP_SECONDS,
             )
 
-        # No "success" bail here — a download failure is ambiguous (transient vs.
-        # genuinely missing), so we retry until deadline.  See _wait_bail_or_sleep.
-        _wait_bail_or_sleep(
+        # When the build job has concluded "success" but the artifact still
+        # cannot be downloaded, the artifact was genuinely never uploaded (e.g.
+        # a matrix job was skipped).  Perform one fresh re-download to close
+        # the download↔conclusion race window, then fail fast with a clear
+        # message instead of waiting out the full timeout.
+        conclusion = _wait_bail_or_sleep(
             attempt,
             max_attempts,
             deadline,
             run_id,
             repo,
             download_succeeded=False,
+            expected_job_names=expected_job_names,
         )
+        if conclusion == "success":
+            try:
+                _run_gh_download(cmd, cwd, dest)
+                return
+            except SubprocessError:
+                pass
+            raise ConfigurationError(
+                f"CI run {run_id!r} build job succeeded but artifact "
+                f"{artifact_name!r} was never uploaded. "
+                "The matrix job may have been skipped or the upload step may have failed."
+            )
 
     last_msg = last_exc.stderr.strip() if last_exc else ""
     msg = (
@@ -1947,9 +2000,7 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
 
     Downloads all ``artifacts-build-*`` partial manifests.  Retries when not
     all expected partials are present yet (some builds still running).  Bails
-    early when the overall CI run has a terminal failure or cancellation.  With
-    ``fail-fast: true`` on the build matrix, the run transitions to ``failure``
-    within ~30-60 seconds of the first build job failing.
+    early when the overall CI run itself has a terminal failure conclusion.
 
     Args:
         cmd: Full ``gh run download --pattern artifacts-build-* ...`` command.
@@ -1958,10 +2009,14 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
         repo: GitHub repository in ``owner/name`` format.
         partial_dir: Directory where partials are downloaded (``--dir`` value).
         expected_names: Artifact names expected from ``artifacts.yaml``.
-        wait_timeout: Maximum seconds to keep retrying.
+        wait_timeout: Maximum seconds to keep retrying. Defaults to
+            :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`.
     """
-    # Use a real wall-clock deadline so that slow API calls don't silently
-    # extend the effective wait beyond wait_timeout.
+    # Derive the exact workflow job names from artifact names once — no regex.
+    expected_job_names = {_artifact_name_to_build_job_name(n) for n in expected_names}
+    # Use a real wall-clock deadline so that slow API calls (run_command,
+    # _check_run_conclusion) don't silently extend the effective wait beyond
+    # wait_timeout.  max_attempts caps the loop as a safety valve.
     deadline = time.monotonic() + wait_timeout
     max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
     last_exc: SubprocessError | None = None
@@ -2001,16 +2056,16 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
                 max_attempts,
                 ", ".join(missing[:5]),
             )
-            # When the overall run is done and partials are still missing, a
+            # When all build jobs are done and partials are still missing, a
             # partial artifact upload could have completed *after* this
             # iteration's ``gh run download`` enumerated the artifact list but
             # *before* the conclusion API call (the download↔conclusion race).
             # Perform one final re-download to close that window before
             # diagnosing a skipped matrix job.
-            conclusion = _check_run_conclusion(run_id, repo)
+            conclusion = _check_build_jobs_conclusion(run_id, repo, expected_job_names)
             if conclusion in _BAIL_CONCLUSIONS:
                 raise ConfigurationError(
-                    f"CI run {run_id!r} {conclusion}. Check the build job logs."
+                    f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
                 )
             if conclusion == "success":
                 if partial_dir.exists():
@@ -2024,7 +2079,7 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
                 if not missing:
                     return
                 raise ConfigurationError(
-                    f"CI run {run_id!r} succeeded but "
+                    f"CI run {run_id!r} build jobs succeeded but "
                     f"{len(missing)} artifact(s) were never uploaded: "
                     f"{', '.join(missing[:5])}. "
                     "Some matrix jobs may have been skipped."
@@ -2039,6 +2094,7 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
             run_id,
             repo,
             download_succeeded=download_succeeded,
+            expected_job_names=expected_job_names,
         )
         logger.info(
             "Retrying in ~%ds (attempt %d/%d)...",
@@ -2074,37 +2130,97 @@ def _run_gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None
         run_command(cmd, cwd=cwd)
 
 
-def _check_run_conclusion(run_id: str, repo: str) -> str | None:
-    """Return the overall CI run conclusion, or ``None`` if still in progress.
+def _artifact_name_to_build_job_name(artifact_name: str) -> str:
+    """Convert a partial artifact name to the corresponding workflow job name.
 
-    Uses ``gh run view --json conclusion`` which reports the run-level result.
-    With ``fail-fast: true`` on the build matrix, a single job failure quickly
-    cancels the remaining build jobs and transitions the run to ``failure``,
-    keeping the detection delay to ~30-60 seconds — negligible compared to
-    typical build and test durations.
+    Both the artifact name and the job name are generated from the same
+    ``build-artifacts.yml`` matrix variables, so the conversion is
+    deterministic:
+
+    ``artifacts-build-charm-my-charm-amd64`` → ``Build charm my-charm (amd64)``
+
+    This function is the canonical coupling point between artifact names
+    (controlled by the ``upload-artifact`` step) and job names (controlled
+    by the matrix ``name:`` field).  Keeping both derivable from the same
+    source removes the need for a hardcoded regex.
+    """
+    rest = artifact_name.removeprefix(f"{_PARTIAL_ARTIFACT_PREFIX}-")
+    # rest = "{type}-{name}-{arch}"  e.g. "charm-my-charm-amd64"
+    parts = rest.split("-")
+    type_ = parts[0]  # "charm" / "rock" / "snap"
+    arch = parts[-1]  # "amd64" / "arm64" / …
+    name = "-".join(parts[1:-1])  # artifact name may contain hyphens
+    return f"Build {type_} {name} ({arch})"
+
+
+def _check_build_jobs_conclusion(  # noqa: PLR0911
+    run_id: str, repo: str, expected_job_names: set[str]
+) -> str | None:
+    """Return the worst conclusion across the expected build jobs in a CI run.
+
+    Looks up each job by its **exact name** (derived from the artifact names
+    via :func:`_artifact_name_to_build_job_name`) rather than a regex.  This
+    avoids coupling to a hardcoded list of artifact types and correctly ignores
+    unrelated jobs like ``"Build matrix"``.
 
     Returns:
-    - ``"failure"`` if the run has failed.
-    - ``"cancelled"`` if the run was cancelled.
-    - ``"success"`` if the run completed successfully.
-    - ``None`` if still in progress, the API call fails, or the response is
-      malformed.  Callers should treat ``None`` as "don't know yet — retry".
+    - ``"failure"`` if any expected build job has concluded with ``failure``.
+    - ``"cancelled"`` if any expected build job has been cancelled (and none
+      failed).
+    - ``"success"`` if **all** expected build jobs have concluded with
+      ``success``.
+    - ``None`` if any expected build job is still running, the API call fails,
+      or none of the expected jobs appear in the response yet.
+
+    Callers should treat ``None`` as "don't know yet — keep retrying".
+
+    Checking individual job conclusions (rather than the overall run conclusion)
+    lets callers detect build failures **while the workflow is still in progress**
+    — which is the common case when test VMs run concurrently with build jobs in
+    the same workflow run.
     """
     try:
         result = run_command(
-            ["gh", "run", "view", run_id, "--repo", repo, "--json", "conclusion"],
+            ["gh", "run", "view", run_id, "--repo", repo, "--json", "jobs"],
             stream=False,
         )
     except Exception:
         return None
+
     try:
         data: object = json.loads(result.stdout)
     except json.JSONDecodeError:
         return None
+
     if not isinstance(data, dict):
         return None
-    conclusion = data.get("conclusion")
-    return conclusion if isinstance(conclusion, str) and conclusion else None
+    jobs = data.get("jobs")
+    if not isinstance(jobs, list):
+        return None
+
+    # Look up each expected job by its exact name — no regex needed because
+    # _artifact_name_to_build_job_name derives the name deterministically from
+    # the artifact name, so both are always in sync.
+    job_by_name = {
+        j["name"]: j.get("conclusion")
+        for j in jobs
+        if isinstance(j, dict) and isinstance(j.get("name"), str)
+    }
+    build_conclusions = [job_by_name[jn] for jn in expected_job_names if jn in job_by_name]
+
+    if not build_conclusions:
+        return None
+    if "failure" in build_conclusions:
+        return "failure"
+    if "cancelled" in build_conclusions:
+        return "cancelled"
+    # None or empty string means the job is still running.
+    if any(not c for c in build_conclusions):
+        return None
+    if all(c == "success" for c in build_conclusions):
+        return "success"
+    # Other conclusions (e.g. "skipped") — treat as unknown.
+    return None
 
 
 def _gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None:
