@@ -218,16 +218,18 @@ def test_install_concierge_uses_sudo_as_non_root(mocker):
 # ---------------------------------------------------------------------------
 
 
-def test_lxd_is_initialised_returns_true_when_storage_pools_present(mocker):
+def test_lxd_is_initialised_returns_true_when_profile_has_root_disk(mocker):
     mock_result = MagicMock()
-    mock_result.stdout = "default,dir,0 volumes,1 used by 0 profiles\n"
+    mock_result.stdout = (
+        "config: {}\ndevices:\n  root:\n    path: /\n    pool: default\n    type: disk\n"
+    )
     mocker.patch("opcli.core.install.run_command", return_value=mock_result)
     assert _lxd_is_initialised([]) is True
 
 
-def test_lxd_is_initialised_returns_false_when_no_storage_pools(mocker):
+def test_lxd_is_initialised_returns_false_when_profile_has_no_root_disk(mocker):
     mock_result = MagicMock()
-    mock_result.stdout = ""
+    mock_result.stdout = "config: {}\ndevices: {}\n"
     mocker.patch("opcli.core.install.run_command", return_value=mock_result)
     assert _lxd_is_initialised([]) is False
 
@@ -237,7 +239,7 @@ def test_lxd_is_initialised_returns_false_when_no_storage_pools(mocker):
 # ---------------------------------------------------------------------------
 
 
-def test_install_lxd_skips_install_when_already_present(mocker):
+def test_install_lxd_skips_all_when_profile_already_has_root_disk(mocker):
     mocker.patch("shutil.which", return_value="/snap/bin/lxd")
     mocker.patch("os.getuid", return_value=1000)
     mocker.patch.dict(os.environ, {}, clear=True)
@@ -249,8 +251,8 @@ def test_install_lxd_skips_install_when_already_present(mocker):
     assert call(["sudo", "lxd", "init", "--auto"]) not in mock_run.call_args_list
 
 
-def test_install_lxd_inits_preinstalled_but_uninitialised_lxd(mocker):
-    """LXD pre-installed (e.g. Ubuntu 24.04 multipass) but not yet initialised."""
+def test_install_lxd_inits_when_profile_missing_root_disk(mocker):
+    """Pre-installed but uninitialised LXD (e.g. fresh Ubuntu 24.04/26.04 VM)."""
     mocker.patch("shutil.which", return_value="/usr/sbin/lxd")
     mocker.patch("os.getuid", return_value=1000)
     mocker.patch.dict(os.environ, {"USER": "ubuntu"}, clear=False)
@@ -293,7 +295,7 @@ def test_install_lxd_adds_user_to_lxd_group(mocker):
     mock_group = mocker.MagicMock()
     mock_group.gr_mem = []
     mocker.patch("grp.getgrnam", return_value=mock_group)
-    mocker.patch("opcli.core.install._lxd_is_initialised", return_value=False)
+    mocker.patch("opcli.core.install._lxd_is_initialised", return_value=True)
     mock_run = mocker.patch("opcli.core.install.run_command")
     install_lxd()
     assert call(["sudo", "usermod", "-aG", "lxd", "ubuntu"]) in mock_run.call_args_list
@@ -306,7 +308,7 @@ def test_install_lxd_skips_group_add_if_already_member(mocker):
     mock_group = mocker.MagicMock()
     mock_group.gr_mem = ["ubuntu"]
     mocker.patch("grp.getgrnam", return_value=mock_group)
-    mocker.patch("opcli.core.install._lxd_is_initialised", return_value=False)
+    mocker.patch("opcli.core.install._lxd_is_initialised", return_value=True)
     mock_run = mocker.patch("opcli.core.install.run_command")
     install_lxd()
     assert call(["sudo", "usermod", "-aG", "lxd", "ubuntu"]) not in mock_run.call_args_list
