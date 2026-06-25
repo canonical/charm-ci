@@ -151,17 +151,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.test-matrix.outputs.matrix) }}
-    env:
-      # Give the artifact fetch enough time to outlast the slowest build.
-      # build-timeout-minutes * 60 converts the per-job build ceiling to
-      # seconds; the 600s buffer covers provisioning and startup overhead.
-      OPCLI_FETCH_WAIT_TIMEOUT: ${{ inputs.build-timeout-minutes * 60 + 600 }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Compute artifact fetch timeout
+        run: |
+          # GHA expressions don't support arithmetic — compute in shell instead.
+          # See build-artifacts.yml for the same pattern.
+          echo "OPCLI_FETCH_WAIT_TIMEOUT=$(( ${{ inputs.build-timeout-minutes }} * 60 + 600 ))" >> "$GITHUB_ENV"
 
       - name: Set up tmate session (self-hosted)
         if: runner.debug == 1 && runner.environment == 'self-hosted'
