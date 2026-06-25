@@ -37,8 +37,6 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 - [charmcraft](https://charmcraft.io/) (`sudo snap install charmcraft --classic`)
 - [rockcraft](https://rockcraft.io/) (`sudo snap install rockcraft --classic`) — if building rocks
 - [LXD](https://canonical.com/lxd) (`sudo lxd init --auto && sudo usermod -aG lxd $USER`)
-- [spread](https://github.com/canonical/spread) — installed via `opcli install spread` after opcli is set up
-- [concierge](https://github.com/canonical/concierge/) (`sudo snap install concierge --classic`) — for env provisioning
 
 ### Install opcli
 
@@ -50,6 +48,16 @@ opcli --help
 ```
 
 > **Note:** The `[cli]` extra is required for the CLI. The bare `opcli` package (without `[cli]`) installs only the pytest plugin — useful when your project already has a conflicting `typer` pin.
+
+### Install all local dev tools
+
+After opcli is installed, one command installs the remaining tools (gh, spread, concierge, tox):
+
+```bash
+opcli install local
+```
+
+This requires passwordless sudo (standard on developer workstations and cloud VMs) for the snap-based installs. Each tool is a no-op if already present.
 
 ## Quick start
 
@@ -126,6 +134,8 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 | Command | Description |
 |---|---|
+| `local` | Install all local dev tools in one shot: gh, spread, concierge, tox. |
+| `gh` | Install the GitHub CLI (gh) snap (no-op if already present). |
 | `spread` | Install the spread test runner (no-op if already present). |
 | `tox` | Install tox with tox-uv for running integration tests. |
 | `concierge` | Install the concierge snap (no-op if already present). |
