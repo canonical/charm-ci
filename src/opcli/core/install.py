@@ -174,11 +174,11 @@ def install_concierge() -> None:
 
 
 def _lxd_is_initialised(snap_cmd: list[str]) -> bool:
-    """Return True if LXD has been initialised (has at least one storage pool)."""
+    """Return True if LXD default profile has a root disk device (what charmcraft checks)."""
     result = run_command(
-        [*snap_cmd, "lxc", "storage", "list", "-f", "csv"], check=False, stream=False
+        [*snap_cmd, "lxc", "profile", "show", "default"], check=False, stream=False
     )
-    return bool(result.stdout.strip())
+    return "path: /" in result.stdout
 
 
 def install_lxd() -> None:
