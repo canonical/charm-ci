@@ -286,3 +286,28 @@ jobs:
       - name: Juju debug-log (on failure)
         if: failure()
         run: sudo -u ubuntu juju debug-log --replay
+  required_status_checks:
+    name: Required Integration Test Status Checks
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - test-matrix
+      - test
+    if: always() && !cancelled()
+    timeout-minutes: 5
+    steps:
+      - name: Check integration-test status
+        run: |
+          FAILED=0
+          for job in build test-matrix test; do
+            case "$job" in
+              build)       RESULT="${{ needs.build.result }}" ;;
+              test-matrix) RESULT="${{ needs.test-matrix.result }}" ;;
+              test)        RESULT="${{ needs.test.result }}" ;;
+            esac
+            if [ "$RESULT" != "success" ] && [ "$RESULT" != "skipped" ]; then
+              echo "$job failed with status: $RESULT"
+              FAILED=1
+            fi
+          done
+          exit $FAILED
