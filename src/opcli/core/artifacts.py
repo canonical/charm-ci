@@ -695,7 +695,6 @@ def _artifacts_fetch_all_arches(
         )
     else:
         run_command(pattern_cmd, cwd=str(root))
-        _normalize_partial_dir_layout(partial_dir)
         missing = _missing_partial_names(partial_dir, all_partial_names)
         if missing:
             msg = (
@@ -2019,8 +2018,6 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913
                 raise ConfigurationError(msg) from exc
             last_exc = exc
         else:
-            # Normalize in case gh used flat extraction (single matching artifact).
-            _normalize_partial_dir_layout(partial_dir)
             # Download succeeded; check if all expected partial files are present.
             missing = _missing_partial_names(partial_dir, expected_names)
             if not missing:
@@ -2067,70 +2064,6 @@ def _missing_partial_names(partial_dir: Path, expected_names: list[str]) -> list
     return [
         name for name in expected_names if not (partial_dir / name / ARTIFACTS_BUILD_YAML).exists()
     ]
-
-
-def _partial_manifest_artifact_name(generated: ArtifactsGenerated) -> str | None:
-    """Infer the partial manifest artifact name from an :class:`ArtifactsGenerated` object.
-
-    A partial manifest produced by a single CI build job contains builds for
-    exactly one artifact (one type, one name, one arch).  Returns the
-    expected artifact name (``artifacts-build-{type}-{name}-{arch}``) for the
-    first non-empty build entry found, or ``None`` if the manifest is empty.
-    """
-    for rock in generated.rocks:
-        for rock_build in rock.builds:
-            return f"{_PARTIAL_ARTIFACT_PREFIX}-rock-{rock.name}-{rock_build.arch}"
-    for charm in generated.charms:
-        for charm_build in charm.builds:
-            return f"{_PARTIAL_ARTIFACT_PREFIX}-charm-{charm.name}-{charm_build.arch}"
-    for snap in generated.snaps:
-        for snap_build in snap.builds:
-            return f"{_PARTIAL_ARTIFACT_PREFIX}-snap-{snap.name}-{snap_build.arch}"
-    return None
-
-
-def _normalize_partial_dir_layout(partial_dir: Path) -> None:
-    """Move a flat-extracted partial manifest into the expected per-name subdir.
-
-    ``gh run download --pattern`` extracts artifacts into
-    ``<dir>/<artifact-name>/`` subdirectories **unless exactly one artifact
-    matches**, in which case it extracts flat into ``<dir>/`` directly.
-    This function detects the flat layout and moves the file into the correct
-    ``partial_dir/<name>/artifacts.build.yaml`` location so that
-    :func:`_missing_partial_names` can find it.
-
-    If the file cannot be parsed or the artifact name cannot be inferred, the
-    function logs a warning and leaves the file in place; the subsequent
-    :func:`_missing_partial_names` check will report it missing and the caller
-    will retry.
-    """
-    flat_yaml = partial_dir / ARTIFACTS_BUILD_YAML
-    if not flat_yaml.exists():
-        return
-    try:
-        generated = load_artifacts_build(flat_yaml)
-        name = _partial_manifest_artifact_name(generated)
-    except Exception as exc:
-        logger.warning(
-            "Could not parse flat-extracted partial manifest %s (%s); will retry on next attempt.",
-            flat_yaml,
-            exc,
-        )
-        return
-    if name is None:
-        logger.warning(
-            "Flat-extracted partial manifest %s contains no builds; ignoring.",
-            flat_yaml,
-        )
-        return
-    dest_dir = partial_dir / name
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    flat_yaml.rename(dest_dir / ARTIFACTS_BUILD_YAML)
-    logger.debug(
-        "Normalized flat-extracted partial %r into %s/",
-        name,
-        dest_dir,
-    )
 
 
 def _run_gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None:

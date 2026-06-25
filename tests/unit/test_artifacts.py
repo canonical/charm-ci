@@ -12,7 +12,6 @@ import pytest
 
 import opcli.core.artifacts as _artifacts_mod
 from opcli.core.artifacts import (
-    _normalize_partial_dir_layout,
     artifacts_build,
     artifacts_collect,
     artifacts_fetch,
@@ -2099,97 +2098,6 @@ class TestArtifactsFetch:
             artifacts_fetch(
                 tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
             )
-
-    def test_gh_flat_extraction_single_artifact(self, tmp_path: Path) -> None:
-        """When --pattern matches one artifact, gh extracts flat; layout is normalised."""
-        # Use a plan with a single charm so --pattern returns exactly one artifact,
-        # triggering gh's flat-extraction layout (partial_dir/artifacts.build.yaml
-        # instead of partial_dir/<name>/artifacts.build.yaml).
-        single_charm_plan = (
-            "version: 1\ncharms:\n- name: my-charm\n  charmcraft-yaml: charmcraft.yaml\n"
-        )
-        write_file(tmp_path / "artifacts.yaml", single_charm_plan)
-
-        single_partial = (
-            "version: 1\n"
-            "rocks: []\n"
-            "charms:\n"
-            "- name: my-charm\n"
-            "  charmcraft-yaml: charmcraft.yaml\n"
-            "  builds:\n"
-            "  - arch: amd64\n"
-            "    artifact: built-charm-my-charm-amd64\n"
-            "    run-id: '99887766'\n"
-            "snaps: []\n"
-        )
-
-        def flat_side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
-            if "--pattern" in cmd:
-                # Simulate gh's flat extraction: write directly into partial_dir
-                dir_idx = cmd.index("--dir") + 1
-                partial_dir = Path(cmd[dir_idx])
-                write_file(partial_dir / "artifacts.build.yaml", single_partial)
-            elif "--name" in cmd:
-                # Archive download: create the charm file
-                dir_idx = cmd.index("--dir") + 1
-                archive_dir = Path(cmd[dir_idx])
-                archive_dir.mkdir(parents=True, exist_ok=True)
-                (archive_dir / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
-            return self._GH_RESULT
-
-        with patch("opcli.core.artifacts.run_command", side_effect=flat_side_effect):
-            result = artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", arch="all")
-
-        assert result == tmp_path / "artifacts.build.yaml"
-        # The normalised partial must be in the expected subdir
-        expected_subdir = (
-            tmp_path
-            / "partial-artifacts-fetch"
-            / "artifacts-build-charm-my-charm-amd64"
-            / "artifacts.build.yaml"
-        )
-        assert expected_subdir.exists()
-
-    def test_normalize_partial_dir_layout_corrupt_yaml_leaves_file(self, tmp_path: Path) -> None:
-        """Corrupted flat-extracted YAML is left in place and reported as missing (triggers retry)."""
-        partial_dir = tmp_path / "partials"
-        partial_dir.mkdir()
-        corrupt = partial_dir / "artifacts.build.yaml"
-        corrupt.write_text(": this is not valid yaml :\n\t: [")
-
-        _normalize_partial_dir_layout(partial_dir)
-
-        # File still at flat location (not moved) because we couldn't infer the name
-        assert corrupt.exists()
-        # No subdirectories were created
-        assert list(partial_dir.iterdir()) == [corrupt]
-
-    def test_normalize_partial_dir_layout_empty_manifest_leaves_file(self, tmp_path: Path) -> None:
-        """Flat-extracted manifest with no builds is left in place (artifact name cannot be inferred)."""
-        partial_dir = tmp_path / "partials"
-        partial_dir.mkdir()
-        empty_manifest = "version: 1\nrocks: []\ncharms: []\nsnaps: []\n"
-        flat = partial_dir / "artifacts.build.yaml"
-        flat.write_text(empty_manifest)
-
-        _normalize_partial_dir_layout(partial_dir)
-
-        # Left in place because no builds → name is None
-        assert flat.exists()
-
-    def test_normalize_partial_dir_layout_already_normalized_no_op(self, tmp_path: Path) -> None:
-        """Already-normalized layout (no flat file) is left unchanged."""
-        partial_dir = tmp_path / "partials"
-        subdir = partial_dir / "artifacts-build-charm-my-charm-amd64"
-        subdir.mkdir(parents=True)
-        manifest = subdir / "artifacts.build.yaml"
-        manifest.write_text("version: 1\nrocks: []\ncharms: []\nsnaps: []\n")
-
-        _normalize_partial_dir_layout(partial_dir)
-
-        # Subdir manifest is untouched; no flat file was moved
-        assert manifest.exists()
-        assert not (partial_dir / "artifacts.build.yaml").exists()
 
     def test_wait_success_conclusion_with_transient_download_failure_retries(
         self, tmp_path: Path
