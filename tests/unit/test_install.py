@@ -21,6 +21,7 @@ from opcli.core.install import (
     install_lxd,
     install_spread,
     install_tox,
+    install_uv,
 )
 
 _RUNNER = CliRunner()
@@ -116,14 +117,46 @@ def test_install_spread_as_non_root_uses_sudo_and_local_bin(mocker, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# install_uv
+# ---------------------------------------------------------------------------
+
+
+def test_install_uv_skips_when_already_present(mocker):
+    mocker.patch("shutil.which", return_value="/snap/bin/uv")
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_uv()
+    mock_run.assert_not_called()
+
+
+def test_install_uv_as_root(mocker):
+    mocker.patch("shutil.which", return_value=None)
+    mocker.patch("os.getuid", return_value=0)
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_uv()
+    mock_run.assert_called_once_with(["snap", "install", "astral-uv", "--classic"])
+
+
+def test_install_uv_as_non_root(mocker):
+    mocker.patch("shutil.which", return_value=None)
+    mocker.patch("os.getuid", return_value=1000)
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_uv()
+    mock_run.assert_called_once_with(["sudo", "snap", "install", "astral-uv", "--classic"])
+
+
+# ---------------------------------------------------------------------------
 # install_tox
 # ---------------------------------------------------------------------------
 
 
-def test_install_tox_raises_if_uv_missing(mocker):
+def test_install_tox_installs_uv_first_if_missing(mocker):
     mocker.patch("shutil.which", return_value=None)
-    with pytest.raises(ConfigurationError, match="uv not found"):
-        install_tox()
+    mocker.patch("os.getuid", return_value=1000)
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_tox()
+    assert mock_run.call_args_list[0] == call(
+        ["sudo", "snap", "install", "astral-uv", "--classic"]
+    )
 
 
 def test_install_tox_installs_as_non_root_with_upgrade(mocker):
@@ -132,7 +165,7 @@ def test_install_tox_installs_as_non_root_with_upgrade(mocker):
     mock_run = mocker.patch("opcli.core.install.run_command")
     install_tox()
     mock_run.assert_called_once_with(
-        ["uv", "tool", "install", "tox", "--with", "tox-uv", "--upgrade", "--quiet"],
+        ["/snap/bin/uv", "tool", "install", "tox", "--with", "tox-uv", "--upgrade", "--quiet"],
         env=None,
     )
 
@@ -143,7 +176,7 @@ def test_install_tox_installs_to_system_dirs_as_root(mocker):
     mock_run = mocker.patch("opcli.core.install.run_command")
     install_tox()
     mock_run.assert_called_once_with(
-        ["uv", "tool", "install", "tox", "--with", "tox-uv", "--upgrade", "--quiet"],
+        ["/snap/bin/uv", "tool", "install", "tox", "--with", "tox-uv", "--upgrade", "--quiet"],
         env={"UV_TOOL_BIN_DIR": "/usr/local/bin", "UV_TOOL_DIR": "/usr/local/share/uv-tools"},
     )
 
@@ -249,12 +282,14 @@ def test_install_all_calls_all_installers_as_root(mocker):
     mock_gh = mocker.patch("opcli.core.install.install_gh")
     mock_spread = mocker.patch("opcli.core.install.install_spread")
     mock_concierge = mocker.patch("opcli.core.install.install_concierge")
+    mock_uv = mocker.patch("opcli.core.install.install_uv")
     mock_tox = mocker.patch("opcli.core.install.install_tox")
     mock_lxd = mocker.patch("opcli.core.install.install_lxd")
     install_all()
     mock_gh.assert_called_once()
     mock_spread.assert_called_once()
     mock_concierge.assert_called_once()
+    mock_uv.assert_called_once()
     mock_tox.assert_called_once()
     mock_lxd.assert_called_once()
 
@@ -268,6 +303,7 @@ def test_install_all_warns_path_for_non_root(mocker, tmp_path, capsys):
     mocker.patch("opcli.core.install.install_gh")
     mocker.patch("opcli.core.install.install_spread")
     mocker.patch("opcli.core.install.install_concierge")
+    mocker.patch("opcli.core.install.install_uv")
     mocker.patch("opcli.core.install.install_tox")
     mocker.patch("opcli.core.install.install_lxd")
     install_all()

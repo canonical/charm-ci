@@ -40,6 +40,7 @@ def install_all() -> None:
     install_gh()
     install_spread()
     install_concierge()
+    install_uv()
     install_tox()
     install_lxd()
 
@@ -72,6 +73,22 @@ def install_gh() -> None:
     snap_cmd = [] if os.getuid() == 0 else ["sudo"]
     with step("Installing gh"):
         run_command([*snap_cmd, "snap", "install", "gh", "--classic"])
+
+
+def install_uv() -> None:
+    """Install uv if not already on PATH.
+
+    uv is required to install tox.  On a developer workstation it is
+    normally already present (the user ran ``uv tool install opcli``);
+    on a fresh root environment (e.g. a spread prepare script) it may
+    be missing and needs to be installed via the snap.
+    """
+    if shutil.which("uv"):
+        status("uv already installed")
+        return
+    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
+    with step("Installing uv"):
+        run_command([*snap_cmd, "snap", "install", "astral-uv", "--classic"])
 
 
 def install_spread() -> None:
@@ -115,9 +132,11 @@ def install_tox() -> None:
     Uses ``--upgrade`` to ensure the entry-point symlink always lands in
     the correct bin directory even if tox was previously installed elsewhere.
     """
-    if not shutil.which("uv"):
-        msg = "uv not found — install with: sudo snap install astral-uv --classic"
-        raise ConfigurationError(msg)
+    uv = shutil.which("uv")
+    if not uv:
+        # snap installs uv to /snap/bin; refresh PATH via shutil after install
+        install_uv()
+        uv = shutil.which("uv") or "uv"
     env: dict[str, str] | None = None
     if os.getuid() == 0:
         env = {
@@ -126,7 +145,7 @@ def install_tox() -> None:
         }
     with step("Installing tox"):
         run_command(
-            ["uv", "tool", "install", "tox", "--with", "tox-uv", "--upgrade", "--quiet"],
+            [uv, "tool", "install", "tox", "--with", "tox-uv", "--upgrade", "--quiet"],
             env=env,
         )
 

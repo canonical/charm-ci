@@ -13,6 +13,7 @@ from opcli.core.install import (
     install_lxd,
     install_spread,
     install_tox,
+    install_uv,
 )
 
 app = typer.Typer(
@@ -90,3 +91,9 @@ def concierge() -> None:
 def lxd() -> None:
     """Install and initialise LXD (no-op if already present)."""
     install_lxd()
+
+
+@app.command(rich_help_panel=_PANEL)
+def uv() -> None:
+    """Install uv via snap (no-op if already present)."""
+    install_uv()
