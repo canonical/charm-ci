@@ -15,10 +15,13 @@ from opcli.core.install import (
     _check_os_prerequisites,
     _warn_if_local_bin_not_on_path,
     install_all,
+    install_charmcraft,
     install_concierge,
     install_doctor,
     install_gh,
     install_lxd,
+    install_rockcraft,
+    install_snapcraft,
     install_spread,
     install_tox,
     install_uv,
@@ -271,6 +274,90 @@ def test_install_lxd_skips_group_add_if_already_member(mocker):
 
 
 # ---------------------------------------------------------------------------
+# install_charmcraft
+# ---------------------------------------------------------------------------
+
+
+def test_install_charmcraft_skips_when_already_present(mocker):
+    mocker.patch("shutil.which", return_value="/snap/bin/charmcraft")
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_charmcraft()
+    mock_run.assert_not_called()
+
+
+def test_install_charmcraft_as_root(mocker):
+    mocker.patch("shutil.which", return_value=None)
+    mocker.patch("os.getuid", return_value=0)
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_charmcraft()
+    mock_run.assert_called_once_with(["snap", "install", "charmcraft", "--classic"])
+
+
+def test_install_charmcraft_uses_sudo_as_non_root(mocker):
+    mocker.patch("shutil.which", return_value=None)
+    mocker.patch("os.getuid", return_value=1000)
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_charmcraft()
+    mock_run.assert_called_once_with(["sudo", "snap", "install", "charmcraft", "--classic"])
+
+
+# ---------------------------------------------------------------------------
+# install_rockcraft
+# ---------------------------------------------------------------------------
+
+
+def test_install_rockcraft_skips_when_already_present(mocker):
+    mocker.patch("shutil.which", return_value="/snap/bin/rockcraft")
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_rockcraft()
+    mock_run.assert_not_called()
+
+
+def test_install_rockcraft_as_root(mocker):
+    mocker.patch("shutil.which", return_value=None)
+    mocker.patch("os.getuid", return_value=0)
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_rockcraft()
+    mock_run.assert_called_once_with(["snap", "install", "rockcraft", "--classic"])
+
+
+def test_install_rockcraft_uses_sudo_as_non_root(mocker):
+    mocker.patch("shutil.which", return_value=None)
+    mocker.patch("os.getuid", return_value=1000)
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_rockcraft()
+    mock_run.assert_called_once_with(["sudo", "snap", "install", "rockcraft", "--classic"])
+
+
+# ---------------------------------------------------------------------------
+# install_snapcraft
+# ---------------------------------------------------------------------------
+
+
+def test_install_snapcraft_skips_when_already_present(mocker):
+    mocker.patch("shutil.which", return_value="/snap/bin/snapcraft")
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_snapcraft()
+    mock_run.assert_not_called()
+
+
+def test_install_snapcraft_as_root(mocker):
+    mocker.patch("shutil.which", return_value=None)
+    mocker.patch("os.getuid", return_value=0)
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_snapcraft()
+    mock_run.assert_called_once_with(["snap", "install", "snapcraft", "--classic"])
+
+
+def test_install_snapcraft_uses_sudo_as_non_root(mocker):
+    mocker.patch("shutil.which", return_value=None)
+    mocker.patch("os.getuid", return_value=1000)
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    install_snapcraft()
+    mock_run.assert_called_once_with(["sudo", "snap", "install", "snapcraft", "--classic"])
+
+
+# ---------------------------------------------------------------------------
 # install_all
 # ---------------------------------------------------------------------------
 
@@ -285,6 +372,9 @@ def test_install_all_calls_all_installers_as_root(mocker):
     mock_uv = mocker.patch("opcli.core.install.install_uv")
     mock_tox = mocker.patch("opcli.core.install.install_tox")
     mock_lxd = mocker.patch("opcli.core.install.install_lxd")
+    mock_charmcraft = mocker.patch("opcli.core.install.install_charmcraft")
+    mock_rockcraft = mocker.patch("opcli.core.install.install_rockcraft")
+    mock_snapcraft = mocker.patch("opcli.core.install.install_snapcraft")
     install_all()
     mock_gh.assert_called_once()
     mock_spread.assert_called_once()
@@ -292,6 +382,9 @@ def test_install_all_calls_all_installers_as_root(mocker):
     mock_uv.assert_called_once()
     mock_tox.assert_called_once()
     mock_lxd.assert_called_once()
+    mock_charmcraft.assert_called_once()
+    mock_rockcraft.assert_called_once()
+    mock_snapcraft.assert_called_once()
 
 
 def test_install_all_warns_path_for_non_root(mocker, tmp_path, capsys):
@@ -306,6 +399,9 @@ def test_install_all_warns_path_for_non_root(mocker, tmp_path, capsys):
     mocker.patch("opcli.core.install.install_uv")
     mocker.patch("opcli.core.install.install_tox")
     mocker.patch("opcli.core.install.install_lxd")
+    mocker.patch("opcli.core.install.install_charmcraft")
+    mocker.patch("opcli.core.install.install_rockcraft")
+    mocker.patch("opcli.core.install.install_snapcraft")
     install_all()
     captured = capsys.readouterr()
     assert "export PATH" in captured.out

@@ -24,9 +24,9 @@ from opcli.core.subprocess import run_command
 def install_all() -> None:
     """Install all tools needed for local charm development.
 
-    Installs gh, spread, concierge, tox, and LXD.  Idempotent — each tool
-    is skipped if already present.  Requires passwordless sudo for snap-based
-    installs when not running as root.
+    Installs gh, spread, concierge, uv, tox, LXD, charmcraft, rockcraft,
+    and snapcraft.  Idempotent — each tool is skipped if already present.
+    Requires passwordless sudo for snap-based installs when not running as root.
     """
     _check_os_prerequisites()
     root = os.getuid() == 0
@@ -43,6 +43,9 @@ def install_all() -> None:
     install_uv()
     install_tox()
     install_lxd()
+    install_charmcraft()
+    install_rockcraft()
+    install_snapcraft()
 
     if not root:
         _warn_if_local_bin_not_on_path(prefix=False)
@@ -51,10 +54,20 @@ def install_all() -> None:
 def install_doctor() -> dict[str, tuple[str | None, str | None]]:
     """Return a mapping of tool name to (path, version) for each required tool.
 
-    Checks gh, spread, concierge, tox, lxd, and uv.
+    Checks gh, spread, concierge, tox, lxd, uv, charmcraft, rockcraft, snapcraft.
     Version is the first line of ``--version`` output, or None if not found.
     """
-    tools = ["gh", "spread", "concierge", "tox", "lxd", "uv"]
+    tools = [
+        "gh",
+        "spread",
+        "concierge",
+        "tox",
+        "lxd",
+        "uv",
+        "charmcraft",
+        "rockcraft",
+        "snapcraft",
+    ]
     result: dict[str, tuple[str | None, str | None]] = {}
     for tool in tools:
         path = shutil.which(tool)
@@ -195,6 +208,36 @@ def install_lxd() -> None:
                 )
         except KeyError:
             pass  # lxd group not yet created; snap post-install hook will create it
+
+
+def install_charmcraft() -> None:
+    """Install the charmcraft snap if not already on PATH."""
+    if shutil.which("charmcraft"):
+        status("charmcraft already installed")
+        return
+    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
+    with step("Installing charmcraft"):
+        run_command([*snap_cmd, "snap", "install", "charmcraft", "--classic"])
+
+
+def install_rockcraft() -> None:
+    """Install the rockcraft snap if not already on PATH."""
+    if shutil.which("rockcraft"):
+        status("rockcraft already installed")
+        return
+    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
+    with step("Installing rockcraft"):
+        run_command([*snap_cmd, "snap", "install", "rockcraft", "--classic"])
+
+
+def install_snapcraft() -> None:
+    """Install the snapcraft snap if not already on PATH."""
+    if shutil.which("snapcraft"):
+        status("snapcraft already installed")
+        return
+    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
+    with step("Installing snapcraft"):
+        run_command([*snap_cmd, "snap", "install", "snapcraft", "--classic"])
 
 
 def _check_os_prerequisites() -> None:

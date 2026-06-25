@@ -7,10 +7,13 @@ import typer
 
 from opcli.core.install import (
     install_all,
+    install_charmcraft,
     install_concierge,
     install_doctor,
     install_gh,
     install_lxd,
+    install_rockcraft,
+    install_snapcraft,
     install_spread,
     install_tox,
     install_uv,
@@ -33,12 +36,15 @@ _PANEL = "Per-tool installers (for CI / prepare scripts)"
 def all_tools() -> None:
     """Install all tools for local charm development in one shot.
 
-    Installs gh, spread (built from source via Go), concierge, tox, and LXD.
+    Installs gh, spread (built from source via Go), concierge, uv, tox, LXD,
+    charmcraft, rockcraft, and snapcraft.
     Idempotent — skips any tool already present.
     Requires passwordless sudo for snap-based installs when not running as root.
     """
     install_all()
-    typer.echo("\n✓ All tools installed: gh, spread, concierge, tox, lxd")
+    typer.echo(
+        "\n✓ All tools installed: gh, spread, concierge, uv, tox, lxd, charmcraft, rockcraft, snapcraft"
+    )
     typer.echo("\nNext steps:")
     typer.echo("  opcli install doctor   # verify your environment")
     typer.echo("  opcli --help           # see what you can do")
@@ -97,3 +103,21 @@ def lxd() -> None:
 def uv() -> None:
     """Install uv via snap (no-op if already present)."""
     install_uv()
+
+
+@app.command(rich_help_panel=_PANEL)
+def charmcraft() -> None:
+    """Install the charmcraft snap (no-op if already present)."""
+    install_charmcraft()
+
+
+@app.command(rich_help_panel=_PANEL)
+def rockcraft() -> None:
+    """Install the rockcraft snap (no-op if already present)."""
+    install_rockcraft()
+
+
+@app.command(rich_help_panel=_PANEL)
+def snapcraft() -> None:
+    """Install the snapcraft snap (no-op if already present)."""
+    install_snapcraft()
