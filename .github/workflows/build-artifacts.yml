@@ -243,6 +243,9 @@ jobs:
       - name: Upload partial build manifest
         uses: actions/upload-artifact@v4
         with:
+          # Name format: artifacts-build-{type}-{name}-{arch}
+          # COUPLING: this pattern must stay in sync with _PARTIAL_ARTIFACT_PREFIX
+          # in src/opcli/core/artifacts.py.
           name: artifacts-build-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
           path: ${{ inputs.working-directory }}/artifacts.build.yaml
           if-no-files-found: error

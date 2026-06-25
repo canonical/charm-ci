@@ -17,6 +17,7 @@ import random
 import re
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -112,6 +113,13 @@ _BAIL_CONCLUSIONS: frozenset[str] = frozenset({"failure", "cancelled"})
 # from build-artifacts.yml.  Used to identify actual artifact build jobs and
 # exclude support jobs like "Build matrix".
 _BUILD_JOB_RE: re.Pattern[str] = re.compile(r"^Build (?:charm|rock|snap) ")
+
+# Prefix for per-arch partial build manifest artifact names.
+# COUPLING: this prefix must stay in sync with the artifact `name:` field in
+# build-artifacts.yml:
+#   name: artifacts-build-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
+# Full name format: artifacts-build-{type}-{name}-{arch}
+_PARTIAL_ARTIFACT_PREFIX = "artifacts-build"
 
 # Special arch value meaning "all architectures".
 _ARCH_ALL = "all"
@@ -670,7 +678,7 @@ def _artifacts_fetch_all_arches(
         "--repo",
         repo,
         "--pattern",
-        "artifacts-build-*",
+        f"{_PARTIAL_ARTIFACT_PREFIX}-*",
         "--dir",
         str(partial_dir),
     ]
@@ -782,13 +790,13 @@ def _all_partial_manifest_names(plan: ArtifactsPlan) -> list[str]:
     names: list[str] = []
     for rock in plan.rocks:
         for b in rock.platforms:
-            names.append(f"artifacts-build-rock-{rock.name}-{b.arch}")
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-rock-{rock.name}-{b.arch}")
     for charm in plan.charms:
         for b in charm.platforms:
-            names.append(f"artifacts-build-charm-{charm.name}-{b.arch}")
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-charm-{charm.name}-{b.arch}")
     for snap in plan.snaps:
         for b in snap.platforms:
-            names.append(f"artifacts-build-snap-{snap.name}-{b.arch}")
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-snap-{snap.name}-{b.arch}")
     return names
 
 
@@ -816,20 +824,20 @@ def _partial_manifest_names_for_arch(
 ) -> list[str]:
     """Return the GitHub artifact names for per-arch partial build manifests.
 
-    The naming convention ``artifacts-build-{type}-{name}-{arch}`` mirrors
-    what ``build-artifacts.yml`` uploads in the ``Upload partial build manifest``
-    step.
+    The naming convention ``{_PARTIAL_ARTIFACT_PREFIX}-{{type}}-{{name}}-{{arch}}``
+    mirrors what ``build-artifacts.yml`` uploads in the
+    ``Upload partial build manifest`` step.
     """
     names: list[str] = []
     for rock in plan.rocks:
         if any(b.arch == arch for b in rock.platforms):
-            names.append(f"artifacts-build-rock-{rock.name}-{arch}")
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-rock-{rock.name}-{arch}")
     for charm in plan.charms:
         if any(b.arch == arch for b in charm.platforms):
-            names.append(f"artifacts-build-charm-{charm.name}-{arch}")
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-charm-{charm.name}-{arch}")
     for snap in plan.snaps:
         if any(b.arch == arch for b in snap.platforms):
-            names.append(f"artifacts-build-snap-{snap.name}-{arch}")
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-snap-{snap.name}-{arch}")
     return names
 
 
@@ -1815,6 +1823,66 @@ def _infer_repo_from_git(root: Path) -> str:
     return m.group(1)
 
 
+def _wait_bail_or_sleep(  # noqa: PLR0913
+    attempt: int,
+    max_attempts: int,
+    deadline: float,
+    run_id: str | None,
+    repo: str | None,
+    *,
+    download_succeeded: bool,
+    skipped_fn: Callable[[], list[str]] | None = None,
+) -> None:
+    """Check build job conclusions and sleep between retry iterations.
+
+    Encapsulates the retry/bail/sleep logic shared by both download-wait loops
+    so that changes to retry semantics only need to be made once.
+
+    Raises :class:`ConfigurationError` immediately when a terminal build failure
+    is detected or when all build jobs succeeded yet partials are still missing
+    (possible skipped matrix job).  Returns normally when the loop should sleep
+    and retry.
+
+    Args:
+        attempt: Current attempt number (1-based).
+        max_attempts: Maximum loop iterations (used to skip the sleep on the
+            final attempt).
+        deadline: Monotonic clock deadline for the whole wait operation.
+        run_id: GitHub Actions run ID used for conclusion polling.  Pass
+            ``None`` to skip conclusion checks.
+        repo: Repository in ``owner/name`` format.  Pass ``None`` to skip
+            conclusion checks.
+        download_succeeded: Whether the download call on this attempt returned
+            without raising.  When ``False`` the skipped check is suppressed —
+            a download failure is ambiguous (transient vs. genuinely missing)
+            so we retry rather than raising a misleading error.
+        skipped_fn: Optional callable returning the list of still-missing
+            artifact names.  Called only when ``conclusion == "success"`` and
+            ``download_succeeded``.  A non-empty result raises
+            ``ConfigurationError`` with a "skipped matrix job" hint.
+    """
+    if run_id and repo:
+        conclusion = _check_build_jobs_conclusion(run_id, repo)
+        if conclusion in _BAIL_CONCLUSIONS:
+            raise ConfigurationError(
+                f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
+            )
+        if conclusion == "success" and download_succeeded and skipped_fn is not None:
+            missing = skipped_fn()
+            if missing:
+                raise ConfigurationError(
+                    f"CI run {run_id!r} build jobs succeeded but "
+                    f"{len(missing)} artifact(s) were never uploaded: "
+                    f"{', '.join(missing[:5])}. "
+                    "Some matrix jobs may have been skipped."
+                )
+
+    remaining = deadline - time.monotonic()
+    if attempt < max_attempts and remaining > 0:
+        jitter = random.uniform(0.8, 1.2)  # noqa: S311
+        time.sleep(min(_WAIT_SLEEP_SECONDS * jitter, remaining))
+
+
 def _gh_download_with_wait(  # noqa: PLR0913
     cmd: list[str],
     cwd: str,
@@ -1874,23 +1942,17 @@ def _gh_download_with_wait(  # noqa: PLR0913
                 _WAIT_SLEEP_SECONDS,
             )
 
-        if run_id and repo:
-            conclusion = _check_build_jobs_conclusion(run_id, repo)
-            if conclusion in _BAIL_CONCLUSIONS:
-                msg = (
-                    f"CI run {run_id!r} build jobs {conclusion} before the artifact was uploaded. "
-                    "Check the build job logs."
-                )
-                raise ConfigurationError(msg)
-            # Do NOT bail on "success" here.  A download failure while all builds
-            # are "success" could be a transient network error — we cannot
-            # distinguish that from a genuinely skipped build job.
-            # Retry until the deadline; the timeout message below hints at skipped jobs.
-
-        remaining = deadline - time.monotonic()
-        if attempt < max_attempts and remaining > 0:
-            jitter = random.uniform(0.8, 1.2)  # noqa: S311
-            time.sleep(min(_WAIT_SLEEP_SECONDS * jitter, remaining))
+        # No "success" bail here — a download failure is ambiguous (transient vs.
+        # genuinely missing), so we retry until deadline.  See _wait_bail_or_sleep.
+        _wait_bail_or_sleep(
+            attempt,
+            max_attempts,
+            deadline,
+            run_id,
+            repo,
+            download_succeeded=False,
+            skipped_fn=None,
+        )
 
     last_msg = last_exc.stderr.strip() if last_exc else ""
     msg = (
@@ -1901,7 +1963,7 @@ def _gh_download_with_wait(  # noqa: PLR0913
     raise ConfigurationError(msg)
 
 
-def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
+def _gh_download_all_partials_with_wait(  # noqa: PLR0913
     cmd: list[str],
     cwd: str,
     run_id: str,
@@ -1971,46 +2033,25 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
                 ", ".join(missing[:5]),
             )
 
-        # Check build job conclusions to bail early on permanent failures.
-        # Using job-level conclusions (rather than the overall run conclusion)
-        # detects build failures while the workflow is still in progress — which
-        # is the common case when test VMs run concurrently with build jobs in
-        # the same workflow run.  The overall run conclusion stays null until
-        # every job (including this test job) finishes, so it cannot signal
-        # build failure while we're waiting.
-        conclusion = _check_build_jobs_conclusion(run_id, repo)
-        if conclusion in _BAIL_CONCLUSIONS:
-            msg = (
-                f"CI run {run_id!r} build jobs {conclusion} before all artifacts were uploaded. "
-                "Check the build job logs."
-            )
-            raise ConfigurationError(msg)
-        # Only diagnose "jobs were skipped" when the download itself succeeded on
-        # this attempt; if the download failed transiently we cannot distinguish
-        # "artifact never uploaded" from "artifact exists but download failed",
-        # so we retry rather than raising a misleading error.
-        if conclusion == "success" and download_succeeded:
-            missing_now = _missing_partial_names(partial_dir, expected_names)
-            if missing_now:
-                msg = (
-                    f"CI run {run_id!r} build jobs succeeded but "
-                    f"{len(missing_now)} partial manifest(s) were never uploaded: "
-                    f"{', '.join(missing_now[:5])}. "
-                    "Some matrix jobs may have been skipped."
-                )
-                raise ConfigurationError(msg)
-            return
-
+        # Delegate conclusion check, skipped diagnosis, and jittered sleep to
+        # the shared helper.  The skipped_fn re-reads the directory: if all
+        # partials appeared between the earlier check and now, skipped_fn
+        # returns [] and no error is raised.
+        _wait_bail_or_sleep(
+            attempt,
+            max_attempts,
+            deadline,
+            run_id,
+            repo,
+            download_succeeded=download_succeeded,
+            skipped_fn=lambda: _missing_partial_names(partial_dir, expected_names),
+        )
         logger.info(
             "Retrying in ~%ds (attempt %d/%d)...",
             _WAIT_SLEEP_SECONDS,
             attempt,
             max_attempts,
         )
-        remaining = deadline - time.monotonic()
-        if attempt < max_attempts and remaining > 0:
-            jitter = random.uniform(0.8, 1.2)  # noqa: S311
-            time.sleep(min(_WAIT_SLEEP_SECONDS * jitter, remaining))
 
     last_msg = last_exc.stderr.strip() if last_exc else "Some partial manifests still missing."
     msg = (
@@ -2038,13 +2079,13 @@ def _partial_manifest_artifact_name(generated: ArtifactsGenerated) -> str | None
     """
     for rock in generated.rocks:
         for rock_build in rock.builds:
-            return f"artifacts-build-rock-{rock.name}-{rock_build.arch}"
+            return f"{_PARTIAL_ARTIFACT_PREFIX}-rock-{rock.name}-{rock_build.arch}"
     for charm in generated.charms:
         for charm_build in charm.builds:
-            return f"artifacts-build-charm-{charm.name}-{charm_build.arch}"
+            return f"{_PARTIAL_ARTIFACT_PREFIX}-charm-{charm.name}-{charm_build.arch}"
     for snap in generated.snaps:
         for snap_build in snap.builds:
-            return f"artifacts-build-snap-{snap.name}-{snap_build.arch}"
+            return f"{_PARTIAL_ARTIFACT_PREFIX}-snap-{snap.name}-{snap_build.arch}"
     return None
 
 
