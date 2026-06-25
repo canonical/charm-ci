@@ -14,7 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cli = [
-    "typer>=0.15",
+    "typer>=0.15,<0.22",
     "jinja2>=3.1",
 ]
 
