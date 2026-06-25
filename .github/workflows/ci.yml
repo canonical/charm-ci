@@ -53,7 +53,7 @@ jobs:
       - run: shellcheck .github/scripts/*.sh
 
   required-status-checks:
-    name: Required Status Checks
+    name: Required Test Status Checks
     needs: [license-check, lint, type-check, test, shellcheck]
     runs-on: ubuntu-latest
     if: always() && !cancelled()
