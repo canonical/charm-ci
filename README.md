@@ -34,8 +34,6 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) (`sudo snap install astral-uv --classic`)
-- [charmcraft](https://charmcraft.io/) (`sudo snap install charmcraft --classic`)
-- [rockcraft](https://rockcraft.io/) (`sudo snap install rockcraft --classic`) — if building rocks
 
 ### Install opcli
 
@@ -50,7 +48,7 @@ opcli --help
 
 ### Install all local dev tools
 
-After opcli is installed, one command installs everything else (gh, spread, uv, concierge, tox, LXD):
+After opcli is installed, one command installs everything else (gh, spread, uv, concierge, tox, LXD, charmcraft, rockcraft, snapcraft):
 
 ```bash
 opcli install all
@@ -85,7 +83,7 @@ opcli pytest run --suite k8s-charm/tests/integration/
 ```bash
 opcli artifacts init
 opcli artifacts build
-opcli install all                                      # install gh, spread, uv, concierge, tox, lxd
+opcli install all                                      # install gh, spread, uv, concierge, tox, lxd, charmcraft, rockcraft, snapcraft
 opcli env provision                                    # concierge (auto-elevates with sudo)
 opcli artifacts push-images --missing-registry deploy  # push rocks to local registry (k8s only)
 opcli pytest run                                       # run all integration tests via tox
@@ -137,10 +135,10 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 | Command | Description |
 |---|---|
-| `all` | Install all local dev tools in one shot: gh, spread (built from source), uv, concierge, tox, LXD. |
+| `all` | Install all local dev tools in one shot: gh, spread (built from source), uv, concierge, tox, LXD, charmcraft, rockcraft, snapcraft. |
 | `doctor` | Print a ✓/✗ status table for all required tools with versions. Exits 1 if any are missing. |
 
-Individual per-tool commands (`gh`, `spread`, `tox`, `concierge`, `lxd`, `uv`) are visible in a grouped panel in `opcli install --help` for use in CI prepare scripts.
+Individual per-tool commands (`gh`, `spread`, `tox`, `concierge`, `lxd`, `uv`, `charmcraft`, `rockcraft`, `snapcraft`) are visible in a grouped panel in `opcli install --help` for use in CI prepare scripts.
 
 ### `opcli env`
 
