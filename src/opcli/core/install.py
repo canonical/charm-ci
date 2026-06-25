@@ -181,14 +181,41 @@ def _lxd_is_initialised(snap_cmd: list[str]) -> bool:
     return "path: /" in result.stdout
 
 
+def _lxd_fix_profile(snap_cmd: list[str]) -> None:
+    """Add root disk to the default LXD profile when storage exists but profile is broken."""
+    storage = run_command(
+        [*snap_cmd, "lxc", "storage", "list", "-f", "csv"], check=False, stream=False
+    )
+    pool = (
+        storage.stdout.strip().splitlines()[0].split(",")[0]
+        if storage.stdout.strip()
+        else "default"
+    )
+    run_command(
+        [
+            *snap_cmd,
+            "lxc",
+            "profile",
+            "device",
+            "add",
+            "default",
+            "root",
+            "disk",
+            "path=/",
+            f"pool={pool}",
+        ]
+    )
+
+
 def install_lxd() -> None:
     """Install and initialise LXD, and add the current user to the lxd group.
 
-    LXD is required for the spread local backend.  Initialisation
-    (``lxd init --auto``) is run whenever LXD has no storage pools configured,
-    regardless of whether the snap was just installed or was already present
-    (e.g. pre-installed on Ubuntu 24.04 multipass VMs).  The user is added to
-    the ``lxd`` group only if not already a member.
+    LXD is required for the spread local backend.  If the default profile is
+    missing a root disk device (what charmcraft validates), this function either
+    runs ``lxd init --auto`` (when no storage pools exist) or manually adds
+    the root disk to the default profile (when storage exists but the profile
+    is broken).  The user is added to the ``lxd`` group only if not already a
+    member.
 
     Note: membership in the ``lxd`` group is equivalent to root access on
     the host.  A new login session is needed for membership to take effect.
@@ -203,8 +230,18 @@ def install_lxd() -> None:
         status("lxd already installed")
 
     if not _lxd_is_initialised(snap_cmd):
-        with step("Initialising LXD"):
-            run_command([*snap_cmd, "lxd", "init", "--auto"])
+        storage = run_command(
+            [*snap_cmd, "lxc", "storage", "list", "-f", "csv"], check=False, stream=False
+        )
+        if storage.stdout.strip():
+            # Storage exists but default profile missing root disk (e.g. profile
+            # was cleared or not set up by a previous partial init).
+            with step("Fixing LXD default profile"):
+                _lxd_fix_profile(snap_cmd)
+        else:
+            # No storage at all — fully uninitialised LXD (fresh install).
+            with step("Initialising LXD"):
+                run_command([*snap_cmd, "lxd", "init", "--auto"])
 
     user = os.environ.get("SUDO_USER") or os.environ.get("USER") or ""
     if user:
