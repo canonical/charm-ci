@@ -160,10 +160,12 @@ class TestProvisionLoad:
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path)
 
-        assert pushed == ["localhost:32000/myrock:amd64"]
+        assert pushed == ["localhost:32000/myrock:amd64-20260101-120000"]
         mock_run.assert_called_once_with(
             [
                 "sudo",
@@ -172,7 +174,7 @@ class TestProvisionLoad:
                 "copy",
                 "--dest-tls-verify=false",
                 "oci-archive:rock_dir/myrock.rock",
-                "docker://localhost:32000/myrock:amd64",
+                "docker://localhost:32000/myrock:amd64-20260101-120000",
             ],
             cwd=str(tmp_path),
         )
@@ -183,10 +185,12 @@ class TestProvisionLoad:
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path, registry="myregistry:5000")
 
-        assert pushed == ["myregistry:5000/myrock:amd64"]
+        assert pushed == ["myregistry:5000/myrock:amd64-20260101-120000"]
         mock_run.assert_called_once_with(
             [
                 "sudo",
@@ -195,24 +199,27 @@ class TestProvisionLoad:
                 "copy",
                 "--dest-tls-verify=false",
                 "oci-archive:rock_dir/myrock.rock",
-                "docker://myregistry:5000/myrock:amd64",
+                "docker://myregistry:5000/myrock:amd64-20260101-120000",
             ],
             cwd=str(tmp_path),
         )
 
-    def test_repushes_when_existing_image_differs_from_target(self, tmp_path: Path) -> None:
+    def test_pushes_even_with_stale_image_ref(self, tmp_path: Path) -> None:
+        """Rock with a stale image ref (e.g. after concierge restore) is always pushed."""
         write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_STALE_IMAGE)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path)
 
-        assert pushed == ["localhost:32000/myrock:amd64"]
+        assert pushed == ["localhost:32000/myrock:amd64-20260101-120000"]
         mock_run.assert_called_once()
         updated = load_artifacts_build(tmp_path / "artifacts.build.yaml")
-        assert updated.rocks[0].builds[0].image == "localhost:32000/myrock:amd64"
+        assert updated.rocks[0].builds[0].image == "localhost:32000/myrock:amd64-20260101-120000"
 
     def test_pushes_multiple_local_rocks(self, tmp_path: Path) -> None:
         write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_MULTIPLE_LOCAL_ROCKS)
@@ -220,12 +227,14 @@ class TestProvisionLoad:
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path)
 
         assert pushed == [
-            "localhost:32000/myrock:amd64",
-            "localhost:32000/otherrock:arm64",
+            "localhost:32000/myrock:amd64-20260101-120000",
+            "localhost:32000/otherrock:arm64-20260101-120000",
         ]
         assert mock_run.call_count == len(pushed)
         assert mock_run.call_args_list[0].args == (
@@ -236,7 +245,7 @@ class TestProvisionLoad:
                 "copy",
                 "--dest-tls-verify=false",
                 "oci-archive:rock_dir/myrock.rock",
-                "docker://localhost:32000/myrock:amd64",
+                "docker://localhost:32000/myrock:amd64-20260101-120000",
             ],
         )
         assert mock_run.call_args_list[0].kwargs == {"cwd": str(tmp_path)}
@@ -248,7 +257,7 @@ class TestProvisionLoad:
                 "copy",
                 "--dest-tls-verify=false",
                 "oci-archive:other_dir/otherrock.rock",
-                "docker://localhost:32000/otherrock:arm64",
+                "docker://localhost:32000/otherrock:arm64-20260101-120000",
             ],
         )
         assert mock_run.call_args_list[1].kwargs == {"cwd": str(tmp_path)}
@@ -300,18 +309,20 @@ class TestProvisionLoad:
         assert "--dest-tls-verify=false" in cmd
 
     def test_updates_artifacts_build_with_image_ref(self, tmp_path: Path) -> None:
-        """After pushing, rock.builds.image is set and file is preserved."""
+        """After pushing, rock.builds.image is set to timestamped ref and file is preserved."""
         write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command"),
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             provision_load(tmp_path)
 
         updated = load_artifacts_build(tmp_path / "artifacts.build.yaml")
         myrock = next(r for r in updated.rocks if r.name == "myrock")
-        assert myrock.builds[0].image == "localhost:32000/myrock:amd64"
+        assert myrock.builds[0].image == "localhost:32000/myrock:amd64-20260101-120000"
         assert myrock.builds[0].file == "./rock_dir/myrock.rock"
 
     def test_updates_charm_resources_for_pushed_rock(self, tmp_path: Path) -> None:
@@ -324,35 +335,41 @@ class TestProvisionLoad:
         with (
             patch("opcli.core.provision.run_command"),
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             provision_load(tmp_path)
 
         updated = load_artifacts_build(tmp_path / "artifacts.build.yaml")
         myrock = next(r for r in updated.rocks if r.name == "myrock")
-        assert myrock.builds[0].image == "localhost:32000/myrock:amd64"
+        assert myrock.builds[0].image == "localhost:32000/myrock:amd64-20260101-120000"
         charm = updated.charms[0]
         assert charm.resources is not None
         assert charm.resources["myrock-image"].rock == "myrock"
         assert charm.resources["other-res"].rock == "otherrock"
 
-    def test_idempotent_skips_already_loaded_rock(self, tmp_path: Path) -> None:
-        """Rock with image already set to the target ref is skipped."""
+    def test_pushes_even_when_previously_loaded(self, tmp_path: Path) -> None:
+        """Rock with an existing image ref (e.g. after concierge restore wipes registry)
+        is always pushed — no stale image ref can silently skip a push.
+        """
         write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n"
             "  builds:\n  - arch: amd64\n    file: ./rock_dir/myrock.rock\n"
-            "    image: localhost:32000/myrock:amd64\n",
+            "    image: localhost:32000/myrock:amd64-20250101-090000\n",
         )
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path)
 
-        assert pushed == []
-        mock_run.assert_not_called()
+        assert pushed == ["localhost:32000/myrock:amd64-20260101-120000"]
+        mock_run.assert_called_once()
 
     def test_no_writeback_when_nothing_pushed(self, tmp_path: Path) -> None:
         """artifacts.build.yaml is not written when no rocks are pushed."""
