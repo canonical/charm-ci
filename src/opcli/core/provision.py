@@ -18,6 +18,7 @@ NodePort Service on port 32000.  This is a local-only operation — in CI
 images are served from GHCR.
 """
 
+import datetime
 import logging
 import os
 import shutil
@@ -130,6 +131,14 @@ def provision_load(
     ``file`` output, converts the ``.rock`` archive to an OCI image and
     pushes it to the target registry using ``skopeo``.
 
+    A unique timestamp tag (``{arch}-{YYYYMMDD}-{HHMMSS}``) is generated
+    once per call and applied to every pushed image.  This ensures:
+
+    - **After** ``concierge restore`` + ``prepare`` the fresh empty registry
+      is always populated (no stale ``build.image`` ref can silently skip a push).
+    - **After** repacking a rock the new image gets a distinct tag so Kubernetes
+      will pull it even when ``imagePullPolicy: IfNotPresent``.
+
     Args:
         root: Project root directory.
         registry: Target image registry address.
@@ -163,6 +172,7 @@ def provision_load(
         return []
 
     pushed: list[str] = []
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     for rock in generated.rocks:
         for build in rock.builds:
@@ -170,14 +180,14 @@ def provision_load(
                 continue
 
             rock_path = Path(build.file)
-            image_ref = f"{registry}/{rock.name}:{build.arch}"
-
-            if build.image == image_ref:
-                logger.info("Already loaded %s, skipping", image_ref)
-                continue
+            image_ref = f"{registry}/{rock.name}:{build.arch}-{timestamp}"
 
             # Push directly from .rock archive to registry in one step — no Docker
             # daemon needed (avoids failures in MicroK8s-only environments).
+            # A unique timestamp tag is used on every invocation so that:
+            #   1. a freshly provisioned (empty) registry is always populated, and
+            #   2. rebuilt rocks get a new image ref that Kubernetes will pull even
+            #      with imagePullPolicy: IfNotPresent.
             status(f"Pushing '{rock.name}' ({build.arch}) → {image_ref}")
             run_command(
                 [
