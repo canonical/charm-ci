@@ -821,6 +821,10 @@ def _build_concrete_backend(
             "GITHUB_REPOSITORY": '$(HOST: echo "${GITHUB_REPOSITORY:-}")',
             "GITHUB_WORKSPACE": '$(HOST: echo "${GITHUB_WORKSPACE:-}")',
             "DOCKERHUB_MIRROR": '$(HOST: echo "${DOCKERHUB_MIRROR:-}")',
+            # Configures the fetch wait timeout inside the spread task.
+            # Defaults to _DEFAULT_WAIT_TIMEOUT_SECONDS if not set.
+            # integration-test.yml sets this to build-timeout-minutes * 60 + 600.
+            "OPCLI_FETCH_WAIT_TIMEOUT": '$(HOST: echo "${OPCLI_FETCH_WAIT_TIMEOUT:-}")',
             **existing_env,
         }
         if isinstance(systems, list):
@@ -1004,10 +1008,18 @@ _CI_PREPARE_AFTER_USER = """\
 export HOME=/root
 if [ -n "${GITHUB_RUN_ID:-}" ]; then
   export GH_TOKEN="${GITHUB_TOKEN}"
+  # Build OPCLI_FETCH_WAIT_TIMEOUT into --wait-timeout when provided by the
+  # workflow.  This allows slow builds (e.g. 45-min rocks) to be waited for
+  # without hitting the hard-coded 1800s default.
+  WAIT_TIMEOUT_ARG=""
+  if [ -n "${OPCLI_FETCH_WAIT_TIMEOUT:-}" ]; then
+    WAIT_TIMEOUT_ARG="--wait-timeout ${OPCLI_FETCH_WAIT_TIMEOUT}"
+  fi
   cd "${SPREAD_PATH}" && opcli artifacts fetch \
     --run-id "${GITHUB_RUN_ID}" \
     --repo "${GITHUB_REPOSITORY}" \
-    --wait
+    --wait \
+    ${WAIT_TIMEOUT_ARG}
 fi
 opcli artifacts push-images --missing-registry deploy
 chown -R ubuntu:ubuntu "${SPREAD_PATH}"

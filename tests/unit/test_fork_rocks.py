@@ -231,7 +231,16 @@ class TestArtifactsFetchRocks:
 
     def test_fetch_includes_rocks_with_artifact_field(self, tmp_path: Path) -> None:
         """Rocks with artifact: should be downloaded alongside charms/snaps."""
-        generated_yaml = """\
+        plan_yaml = """\
+version: 1
+rocks:
+- name: my-rock
+  rockcraft-yaml: rockcraft.yaml
+charms: []
+snaps: []
+"""
+        # Partial content — rock with artifact: field (produced by CI build job).
+        partial_content = """\
 version: 1
 rocks:
 - name: my-rock
@@ -242,20 +251,25 @@ rocks:
     artifact: built-rock-my-rock-amd64
     run-id: "12345"
 charms: []
+snaps: []
 """
-        write_file(tmp_path / "artifacts.build.yaml", generated_yaml)
-
+        write_file(tmp_path / "artifacts.yaml", plan_yaml)
         download_calls: list[list[str]] = []
 
         def fake_run(cmd: list[str], **_kwargs: object) -> None:
             download_calls.append(cmd)
+            if "--pattern" in cmd:
+                dir_idx = cmd.index("--dir") + 1
+                partial_dir = Path(cmd[dir_idx]) / "artifacts-build-rock-my-rock-amd64"
+                partial_dir.mkdir(parents=True, exist_ok=True)
+                write_file(partial_dir / "artifacts.build.yaml", partial_content)
 
         with (
             patch("opcli.core.artifacts.run_command", side_effect=fake_run),
             patch("opcli.core.artifacts._infer_repo_from_git", return_value="org/repo"),
             patch("opcli.core.artifacts.artifacts_localize", return_value=0),
         ):
-            artifacts_fetch(tmp_path, run_id="12345", repo="org/repo")
+            artifacts_fetch(tmp_path, run_id="12345", repo="org/repo", arch="all")
 
         # Should have called gh run download for the rock artifact
         artifact_downloads = [

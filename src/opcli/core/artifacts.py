@@ -13,7 +13,9 @@ import glob as globmod
 import json
 import logging
 import os
+import random
 import re
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +39,7 @@ from opcli.core.yaml_io import (
     load_artifacts_plan,
 )
 from opcli.models.artifacts import (
+    ArtifactsPlan,
     CharmArtifact,
     RockArtifact,
     SnapArtifact,
@@ -102,13 +105,26 @@ _AUTH_ERROR_KEYWORDS = (
 # Keywords that indicate the destination file already exists; we delete it and retry.
 _FILE_EXISTS_KEYWORDS = ("file exists",)
 
-# Job name (or substring) that uploads the merged artifacts-build artifact.
-# In reusable-workflow runs the API prefixes this with the caller job name
-# (e.g. "build / Collect artifacts"), so we use a substring match.
-_COLLECT_JOB_NAME = "Collect artifacts"
-
 # Conclusions that mean the artifact will never arrive — bail immediately.
-_BAIL_CONCLUSIONS: frozenset[str] = frozenset({"skipped", "failure", "cancelled"})
+_BAIL_CONCLUSIONS: frozenset[str] = frozenset({"failure", "cancelled"})
+
+
+# Sentinel used by _check_build_jobs_conclusion to distinguish "job not found
+# in API yet" (return None/keep waiting) from "job found with null conclusion"
+# (job is registered but still running).
+class _SENTINEL:  # noqa: N801, RUF100
+    pass
+
+
+# Prefix for per-arch partial build manifest artifact names.
+# COUPLING: this prefix must stay in sync with the artifact `name:` field in
+# build-artifacts.yml:
+#   name: artifacts-build-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
+# Full name format: artifacts-build-{type}-{name}-{arch}
+_PARTIAL_ARTIFACT_PREFIX = "artifacts-build"
+
+# Special arch value meaning "all architectures".
+_ARCH_ALL = "all"
 
 
 def artifacts_init(root: Path, *, force: bool = False) -> Path:
@@ -415,9 +431,10 @@ def artifacts_collect(root: Path, partial_paths: list[Path]) -> Path:
 
     In CI, each matrix build job produces a partial file containing only the
     artifact it built.  This function merges all partials into a single
-    ``artifacts.build.yaml`` and re-fills charm resource ``file``/``image``
-    references from the merged rock outputs (rocks and charms build in parallel
-    so charm partials have ``null`` resource refs at build time).
+    ``artifacts.build.yaml`` by concatenating per-arch build entries for each
+    artifact type, then validates that every charm resource's referenced rock
+    is present in the merged output.  Image refs on rocks are not resolved
+    here — they are resolved lazily at publish time (``opcli artifacts publish``).
 
     Args:
         root: Repository root; the merged file is written here.
@@ -462,7 +479,10 @@ def artifacts_collect(root: Path, partial_paths: list[Path]) -> Path:
                 msg = (
                     f"Charm '{charm.name}' resource '{res_name}' references rock "
                     f"'{res.rock}' which was not found in the collected partials. "
-                    f"Ensure the rock build job partial is included."
+                    f"Ensure a rock build job exists for '{res.rock}' and that it "
+                    "supports the same architectures as the charm. "
+                    "If fetching for a specific architecture, verify the rock is "
+                    "built for that architecture."
                 )
                 raise ConfigurationError(msg)
 
@@ -527,109 +547,387 @@ def artifacts_localize(root: Path) -> int:
     return updated
 
 
-def artifacts_fetch(  # noqa: C901, PLR0912
+def artifacts_fetch(  # noqa: PLR0913
     root: Path,
     run_id: str,
     repo: str | None = None,
     *,
     wait: bool = False,
     wait_timeout: int | None = None,
+    arch: str | None = None,
 ) -> Path:
     """Download a CI run's artifacts and prepare for local testing.
 
-    Steps:
-    1. Infer ``owner/repo`` from the local git remote if *repo* is not given.
-    2. Download ``artifacts.build.yaml`` from the named GitHub Actions
-       artifact.  When *wait* is ``True`` (or *wait_timeout* is provided),
-       retries until the artifact appears or the timeout is exceeded.
-    3. For every charm/snap/rock that carries a CI artifact reference,
-       download the corresponding artifact archive.
-    4. Call :func:`artifacts_localize` to rewrite ``artifacts.build.yaml``
-       with the local ``.charm`` / ``.snap`` file paths.
+    The *arch* parameter selects what to download:
 
-    Rock artifacts with ``image:`` references (GHCR) need no download.
+    - ``arch=None`` (default) — auto-detects the current machine's
+      architecture via :func:`~opcli.core.env.current_arch`.
+    - ``arch="amd64"`` (or any specific arch) — download only that arch.
+    - ``arch="all"`` — download artifacts for every architecture.
+
+    For single-arch modes, per-arch partial build manifests are downloaded
+    directly and merged locally.  For ``arch="all"``, all partial build
+    manifests matching ``artifacts-build-*`` are downloaded and merged.
+
+    Rock artifacts with ``image:`` references (GHCR) are never downloaded.
     Rock artifacts with ``artifact:`` references (fork-PR mode) are
     downloaded alongside charms and snaps.
+
+    Steps:
+    1. Infer ``owner/repo`` from the local git remote if *repo* is not given.
+    2. Resolve *arch* (auto-detect if ``None``).
+    3. Download build manifest partial(s) for the resolved arch.
+    4. For every charm/snap/rock that carries a CI artifact reference,
+       download the archive (filtered to *arch* unless ``arch="all"``).
+    5. Call :func:`artifacts_localize` to rewrite ``artifacts.build.yaml``
+       with local ``.charm`` / ``.snap`` file paths.
 
     Args:
         root: Working directory; all artifacts are downloaded here.
         run_id: GitHub Actions workflow run ID.
         repo: GitHub repository in ``owner/name`` format.  Inferred from the
             local git remote when ``None``.
-        wait: When ``True``, retry the initial ``artifacts-build`` download
-            until it succeeds.  Specifying *wait_timeout* also enables
-            waiting.  Fails immediately on authentication/permission errors.
-        wait_timeout: Maximum seconds to wait for the artifact to appear.
+        wait: When ``True``, retry the manifest download(s) until they
+            appear.  Specifying *wait_timeout* also enables waiting.
+            Fails immediately on authentication/permission errors.
+        wait_timeout: Maximum seconds to wait for artifacts to appear.
             When ``None`` (default), uses :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`
             (1800 s / 30 min). Providing any value enables waiting even when
             *wait* is ``False``.
+        arch: Architecture to fetch.  ``None`` auto-detects the current
+            machine.  ``"all"`` fetches every architecture.
 
     Returns:
         Path to the updated ``artifacts.build.yaml``.
 
     Raises:
-        ConfigurationError: If the repo cannot be inferred, the yaml is
-            missing after download, or the wait timeout is exceeded.
+        ConfigurationError: If the repo cannot be inferred, ``artifacts.yaml``
+            is missing (required for partial-manifest discovery), no artifacts
+            are defined for the requested arch, or the wait timeout is exceeded.
         SubprocessError: If ``gh run download`` fails non-transiently.
     """
     if repo is None:
         repo = _infer_repo_from_git(root)
 
-    generated_cmd = [
+    effective_timeout = wait_timeout if wait_timeout is not None else _DEFAULT_WAIT_TIMEOUT_SECONDS
+    # Providing wait_timeout also enables waiting.
+    enable_wait = wait or wait_timeout is not None
+
+    if arch == _ARCH_ALL:
+        return _artifacts_fetch_all_arches(
+            root, run_id, repo, wait=enable_wait, wait_timeout=effective_timeout
+        )
+
+    effective_arch = arch if arch is not None else current_arch()
+    autodetected = arch is None
+    if autodetected:
+        status(f"Fetching artifacts for arch: {effective_arch} (auto-detected)")
+    else:
+        status(f"Fetching artifacts for arch: {effective_arch}")
+    return _artifacts_fetch_by_arch(
+        root, run_id, repo, arch=effective_arch, wait=enable_wait, wait_timeout=effective_timeout
+    )
+
+
+def _artifacts_fetch_all_arches(
+    root: Path,
+    run_id: str,
+    repo: str,
+    *,
+    wait: bool,
+    wait_timeout: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> Path:
+    """Fetch artifacts for all architectures by downloading all partial manifests.
+
+    Downloads every ``artifacts-build-*`` partial using a glob pattern,
+    merges them locally, then downloads all artifact archives.  This
+    replaces the old ``Collect artifacts`` CI job — no merged
+    ``artifacts-build`` artifact is required.
+
+    With *wait*, retries until all expected partial manifests from
+    ``artifacts.yaml`` are present; bails early if the run itself fails.
+    """
+    status("Fetching artifacts for all architectures")
+
+    plan_path = root / ARTIFACTS_YAML
+    if not plan_path.exists():
+        msg = (
+            f"{ARTIFACTS_YAML} not found.  Fetching all arches requires "
+            "artifacts.yaml to discover the expected partial manifests."
+        )
+        raise ConfigurationError(msg)
+    plan = load_artifacts_plan(plan_path)
+
+    all_partial_names = _all_partial_manifest_names(plan)
+    if not all_partial_names:
+        msg = f"No artifacts are defined in {ARTIFACTS_YAML}."
+        raise ConfigurationError(msg)
+
+    partial_dir = root / "partial-artifacts-fetch"
+    # Always start clean so stale partials from a previous fetch (e.g. a
+    # different run_id or an earlier single-arch fetch) can never corrupt
+    # the merge.  The wait path also clears before each retry; doing it here
+    # guarantees both branches are safe.
+    if partial_dir.exists():
+        shutil.rmtree(partial_dir)
+    partial_dir.mkdir(parents=True)
+
+    pattern_cmd = [
         "gh",
         "run",
         "download",
         run_id,
         "--repo",
         repo,
-        "--name",
-        "artifacts-build",
+        "--pattern",
+        f"{_PARTIAL_ARTIFACT_PREFIX}-*",
         "--dir",
-        str(root),
+        str(partial_dir),
     ]
-    gen_path = root / ARTIFACTS_BUILD_YAML
-    # Providing wait_timeout always enables waiting, regardless of the wait flag.
-    if wait or wait_timeout is not None:
-        _gh_download_with_wait(
-            generated_cmd,
+
+    if wait:
+        _gh_download_all_partials_with_wait(
+            pattern_cmd,
             str(root),
             run_id,
             repo,
-            dest=gen_path,
-            wait_timeout=wait_timeout
-            if wait_timeout is not None
-            else _DEFAULT_WAIT_TIMEOUT_SECONDS,
+            partial_dir,
+            all_partial_names,
+            wait_timeout=wait_timeout,
         )
     else:
-        _gh_download(generated_cmd, str(root), dest=gen_path)
+        run_command(pattern_cmd, cwd=str(root))
+        missing = _missing_partial_names(partial_dir, all_partial_names)
+        if missing:
+            msg = (
+                f"{len(missing)} partial build manifest(s) were not available: "
+                f"{', '.join(missing[:5])}. "
+                "The build may still be running — use --wait to retry until all "
+                "partials are present."
+            )
+            raise ConfigurationError(msg)
 
-    if not gen_path.exists():
+    # Collect all downloaded partial files.
+    partial_paths = sorted(partial_dir.rglob(ARTIFACTS_BUILD_YAML))
+    if not partial_paths:
         msg = (
-            f"{ARTIFACTS_BUILD_YAML} not found after download. "
-            "Ensure the CI run completed its build phase."
+            f"No {ARTIFACTS_BUILD_YAML} files found under {partial_dir} after download. "
+            "Ensure the CI run has completed its build phase."
         )
         raise ConfigurationError(msg)
 
-    generated = load_artifacts_build(gen_path)
+    gen_path = artifacts_collect(root, partial_paths)
 
-    # Download each charm / snap / rock artifact archive (deduplicated).
-    # Rocks with artifact: are fork-PR builds that were uploaded as GH artifacts
-    # instead of pushed to GHCR.
-    seen_artifacts: set[str] = set()
+    # Download all artifact archives (all arches).
+    generated = load_artifacts_build(gen_path)
+    seen_artifacts = _all_artifact_archives(generated)
+    _download_artifact_archives(root, run_id, repo, seen_artifacts)
+
+    artifacts_localize(root)
+    return gen_path
+
+
+def _artifacts_fetch_by_arch(  # noqa: PLR0913
+    root: Path,
+    run_id: str,
+    repo: str,
+    *,
+    arch: str,
+    wait: bool,
+    wait_timeout: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> Path:
+    """Fetch artifacts for a single architecture.
+
+    Downloads per-arch partial build manifests, merges them locally, then
+    downloads the arch-specific artifact archives.  Does not depend on the
+    ``Collect artifacts`` CI job.
+    """
+    plan_path = root / ARTIFACTS_YAML
+    if not plan_path.exists():
+        msg = (
+            f"{ARTIFACTS_YAML} not found.  Arch-filtered fetch requires "
+            "artifacts.yaml to discover the expected partial manifests."
+        )
+        raise ConfigurationError(msg)
+    plan = load_artifacts_plan(plan_path)
+
+    partial_names = _partial_manifest_names_for_arch(plan, arch)
+    if not partial_names:
+        available = _all_defined_arches(plan)
+        available_str = ", ".join(sorted(available)) if available else "(none)"
+        msg = (
+            f"No artifacts are defined for arch '{arch}' in {ARTIFACTS_YAML}. "
+            f"Available: {available_str}."
+        )
+        raise ConfigurationError(msg)
+
+    partial_paths = _download_partial_manifests(
+        partial_names, root, run_id, repo, wait=wait, wait_timeout=wait_timeout
+    )
+    gen_path = artifacts_collect(root, partial_paths)
+
+    generated = load_artifacts_build(gen_path)
+    seen_artifacts = _arch_artifact_archives(generated, arch)
+    _download_artifact_archives(root, run_id, repo, seen_artifacts)
+
+    artifacts_localize(root)
+    return gen_path
+
+
+def _all_defined_arches(plan: ArtifactsPlan) -> set[str]:
+    """Return the set of all architectures declared in an artifacts plan."""
+    arches: set[str] = set()
+    for rock in plan.rocks:
+        arches.update(b.arch for b in rock.platforms)
+    for charm in plan.charms:
+        arches.update(b.arch for b in charm.platforms)
+    for snap in plan.snaps:
+        arches.update(b.arch for b in snap.platforms)
+    return arches
+
+
+def _all_partial_manifest_names(plan: ArtifactsPlan) -> list[str]:
+    """Return all expected partial manifest artifact names across every arch."""
+    names: list[str] = []
+    for rock in plan.rocks:
+        for b in rock.platforms:
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-rock-{rock.name}-{b.arch}")
+    for charm in plan.charms:
+        for b in charm.platforms:
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-charm-{charm.name}-{b.arch}")
+    for snap in plan.snaps:
+        for b in snap.platforms:
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-snap-{snap.name}-{b.arch}")
+    return names
+
+
+def _all_artifact_archives(generated: ArtifactsGenerated) -> set[str]:
+    """Return all GitHub artifact archive names across every architecture."""
+    seen: set[str] = set()
+    for rock in generated.rocks:
+        for rb in rock.builds:
+            if rb.artifact:
+                seen.add(rb.artifact)
+    for charm in generated.charms:
+        for cb in charm.builds:
+            if cb.artifact:
+                seen.add(cb.artifact)
+    for snap in generated.snaps:
+        for sb in snap.builds:
+            if sb.artifact:
+                seen.add(sb.artifact)
+    return seen
+
+
+def _partial_manifest_names_for_arch(
+    plan: ArtifactsPlan,
+    arch: str,
+) -> list[str]:
+    """Return the GitHub artifact names for per-arch partial build manifests.
+
+    The naming convention ``{_PARTIAL_ARTIFACT_PREFIX}-{{type}}-{{name}}-{{arch}}``
+    mirrors what ``build-artifacts.yml`` uploads in the
+    ``Upload partial build manifest`` step.
+    """
+    names: list[str] = []
+    for rock in plan.rocks:
+        if any(b.arch == arch for b in rock.platforms):
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-rock-{rock.name}-{arch}")
+    for charm in plan.charms:
+        if any(b.arch == arch for b in charm.platforms):
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-charm-{charm.name}-{arch}")
+    for snap in plan.snaps:
+        if any(b.arch == arch for b in snap.platforms):
+            names.append(f"{_PARTIAL_ARTIFACT_PREFIX}-snap-{snap.name}-{arch}")
+    return names
+
+
+def _download_partial_manifests(  # noqa: PLR0913
+    partial_names: list[str],
+    root: Path,
+    run_id: str,
+    repo: str,
+    *,
+    wait: bool,
+    wait_timeout: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> list[Path]:
+    """Download per-arch partial ``artifacts.build.yaml`` files from a CI run.
+
+    Each partial is downloaded into
+    ``root/partial-artifacts-fetch/{name}/artifacts.build.yaml``.
+    Returns the list of downloaded file paths (one per name).
+
+    The *wait_timeout* budget is shared across all partials: each call to
+    :func:`_gh_download_with_wait` receives only the *remaining* budget so
+    the total wait is bounded close to *wait_timeout*.  A floor of
+    :data:`_WAIT_SLEEP_SECONDS` guarantees at least one download attempt per
+    partial even when the budget is already spent; the total may therefore
+    marginally exceed *wait_timeout* by one API round-trip per remaining
+    partial.
+    """
+    partial_dir = root / "partial-artifacts-fetch"
+    partial_paths: list[Path] = []
+    deadline = time.monotonic() + wait_timeout
+    for name in partial_names:
+        dest_dir = partial_dir / name
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / ARTIFACTS_BUILD_YAML
+        cmd = [
+            "gh",
+            "run",
+            "download",
+            run_id,
+            "--repo",
+            repo,
+            "--name",
+            name,
+            "--dir",
+            str(dest_dir),
+        ]
+        status(f"Downloading build manifest '{name}'")
+        if wait:
+            remaining = max(_WAIT_SLEEP_SECONDS, int(deadline - time.monotonic()))
+            _gh_download_with_wait(
+                cmd,
+                str(root),
+                run_id=run_id,
+                repo=repo,
+                dest=dest,
+                wait_timeout=remaining,
+                artifact_name=name,
+            )
+        else:
+            _gh_download(cmd, str(root), dest=dest)
+        partial_paths.append(dest)
+    return partial_paths
+
+
+def _arch_artifact_archives(generated: ArtifactsGenerated, arch: str) -> set[str]:
+    """Return the set of GitHub artifact archive names for a given architecture."""
+    seen: set[str] = set()
     for rock in generated.rocks:
         for rock_build in rock.builds:
-            if rock_build.artifact:
-                seen_artifacts.add(rock_build.artifact)
+            if rock_build.artifact and rock_build.arch == arch:
+                seen.add(rock_build.artifact)
     for charm in generated.charms:
         for charm_build in charm.builds:
-            if charm_build.artifact:
-                seen_artifacts.add(charm_build.artifact)
+            if charm_build.artifact and charm_build.arch == arch:
+                seen.add(charm_build.artifact)
     for snap in generated.snaps:
         for snap_build in snap.builds:
-            if snap_build.artifact:
-                seen_artifacts.add(snap_build.artifact)
+            if snap_build.artifact and snap_build.arch == arch:
+                seen.add(snap_build.artifact)
+    return seen
 
-    for name in sorted(seen_artifacts):
+
+def _download_artifact_archives(
+    root: Path,
+    run_id: str,
+    repo: str,
+    artifact_names: set[str],
+) -> None:
+    """Download a set of GitHub Actions artifact archives to *root*."""
+    for name in sorted(artifact_names):
         artifact_dir = _safe_artifact_dir(root, name)
         artifact_dir.mkdir(parents=True, exist_ok=True)
         status(f"Downloading artifact '{name}'")
@@ -649,10 +947,6 @@ def artifacts_fetch(  # noqa: C901, PLR0912
             cwd=str(root),
         )
         logger.info("Downloaded artifact '%s'.", name)
-
-    # Rewrite artifact refs to local file paths
-    artifacts_localize(root)
-    return gen_path
 
 
 def _filter_by_name[T: (RockArtifact, CharmArtifact, SnapArtifact)](
@@ -1188,6 +1482,7 @@ def _merge_artifact_outputs[T: (GeneratedRock, GeneratedCharm, GeneratedSnap)](
                         "exactly one partial file."
                     )
                     raise ConfigurationError(msg)
+                existing_keys.add(key)
             existing.builds.extend(item.builds)
     return list(merged.values())
 
@@ -1535,44 +1830,115 @@ def _infer_repo_from_git(root: Path) -> str:
     return m.group(1)
 
 
+def _wait_bail_or_sleep(  # noqa: PLR0913
+    attempt: int,
+    max_attempts: int,
+    deadline: float,
+    run_id: str | None,
+    repo: str | None,
+    *,
+    download_succeeded: bool,
+    expected_job_names: set[str] | None = None,
+) -> str | None:
+    """Check build job conclusions, sleep between retry iterations, and return conclusion.
+
+    Encapsulates the retry/bail/sleep logic shared by both download-wait loops
+    so that changes to retry semantics only need to be made once.
+
+    Raises :class:`ConfigurationError` immediately when a terminal build failure
+    (failure or cancelled) is detected.  Returns the observed job conclusion so
+    the caller can react to ``"success"`` (e.g. fast-fail when an artifact is
+    still missing after the build job has succeeded).
+
+    The "success + missing partials" re-download is intentionally *not* handled
+    here — callers perform a fresh re-download before that diagnosis to avoid a
+    download↔conclusion race (see ``_gh_download_all_partials_with_wait`` and
+    ``_gh_download_with_wait``).
+
+    Args:
+        attempt: Current attempt number (1-based).
+        max_attempts: Maximum loop iterations (used to skip the sleep on the
+            final attempt).
+        deadline: Monotonic clock deadline for the whole wait operation.
+        run_id: GitHub Actions run ID used for conclusion polling.  Pass
+            ``None`` to skip conclusion checks.
+        repo: Repository in ``owner/name`` format.  Pass ``None`` to skip
+            conclusion checks.
+        download_succeeded: Reserved for future use; currently unused but kept
+            for API symmetry with callers that track download state.
+        expected_job_names: Exact workflow job names to check conclusions for.
+            Derived from artifact names via
+            :func:`_artifact_name_to_build_job_name`.  When ``None`` (or empty)
+            conclusion checks are skipped.
+
+    Returns:
+        The conclusion string from :func:`_check_build_jobs_conclusion`
+        (``"success"``, ``"failure"``, ``"cancelled"``, or ``None``), or
+        ``None`` when conclusion checks are skipped.
+    """
+    _ = download_succeeded  # see docstring
+    conclusion: str | None = None
+    if run_id and repo and expected_job_names:
+        conclusion = _check_build_jobs_conclusion(run_id, repo, expected_job_names)
+        if conclusion in _BAIL_CONCLUSIONS:
+            raise ConfigurationError(
+                f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
+            )
+
+    remaining = deadline - time.monotonic()
+    if attempt < max_attempts and remaining > 0:
+        jitter = random.uniform(0.8, 1.2)  # noqa: S311
+        time.sleep(min(_WAIT_SLEEP_SECONDS * jitter, remaining))
+    return conclusion
+
+
 def _gh_download_with_wait(  # noqa: PLR0913
     cmd: list[str],
     cwd: str,
-    run_id: str,
-    repo: str,
+    run_id: str | None = None,
+    repo: str | None = None,
     dest: Path | None = None,
     wait_timeout: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+    artifact_name: str | None = None,
 ) -> None:
     """Run ``gh run download``, retrying until the artifact appears.
 
     Retries every :data:`_WAIT_SLEEP_SECONDS` seconds until *wait_timeout*
     seconds have elapsed.  Fails immediately if the error looks like an
-    authentication/permission problem, a deterministic failure (e.g. "file
-    exists", handled via delete-and-retry), or if the ``Collect artifacts``
-    job is known to have been skipped, failed, or cancelled (meaning the
-    artifact will never arrive).
+    authentication/permission problem.  When *run_id*, *repo*, and
+    *artifact_name* are provided, bails early if the CI build job has a
+    terminal failure or cancellation.  If the build job concludes ``success``
+    but the artifact still cannot be downloaded, one final re-download is
+    attempted to close the download↔conclusion race window; if still missing,
+    fails fast with a clear "never uploaded" message rather than waiting out
+    the full timeout.
 
     Args:
         cmd: Full ``gh run download ...`` command list.
         cwd: Working directory for the subprocess.
-        run_id: GitHub Actions run ID.
-        repo: GitHub repository in ``owner/name`` format, used to query job
-            status on each retry.
+        run_id: GitHub Actions run ID (used for early-bail conclusion check).
+        repo: GitHub repository in ``owner/name`` format.
         dest: Path of the expected output file.  When provided and ``gh``
             reports "file exists", the file is deleted and the download is
             retried once before giving up.
         wait_timeout: Maximum seconds to keep retrying. Defaults to
             :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`.
-
-    Raises:
-        ConfigurationError: On auth/permission errors, when the
-            ``Collect artifacts`` job has a terminal failure conclusion, or
-            when the timeout is exceeded (includes the last error message).
-        SubprocessError: Propagated for unexpected non-retryable failures.
+        artifact_name: The partial artifact name being downloaded (e.g.
+            ``"artifacts-build-charm-my-charm-amd64"``).  Used to derive the
+            expected workflow job name for early-failure and success detection.
+            When ``None``, conclusion checks are still made but match no
+            specific job (and therefore only detect failure once all jobs
+            complete).
     """
+    expected_job_names: set[str] = (
+        {_artifact_name_to_build_job_name(artifact_name)} if artifact_name else set()
+    )
+    deadline = time.monotonic() + wait_timeout
     max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
     last_exc: SubprocessError | None = None
     for attempt in range(1, max_attempts + 1):
+        if attempt > 1 and time.monotonic() >= deadline:
+            break
         try:
             _run_gh_download(cmd, cwd, dest)
             return
@@ -1580,20 +1946,11 @@ def _gh_download_with_wait(  # noqa: PLR0913
             stderr_lower = exc.stderr.lower()
             if any(kw in stderr_lower for kw in _AUTH_ERROR_KEYWORDS):
                 msg = (
-                    f"Authentication/permission error downloading artifact "
-                    f"from run {run_id!r}. Check GH_TOKEN and repository "
-                    f"permissions.\n{exc.stderr.strip()}"
+                    f"Authentication/permission error downloading artifact. "
+                    f"Check GH_TOKEN and repository permissions.\n{exc.stderr.strip()}"
                 )
                 raise ConfigurationError(msg) from exc
             last_exc = exc
-            conclusion = _check_collect_job_conclusion(run_id, repo)
-            if conclusion in _BAIL_CONCLUSIONS:
-                msg = (
-                    f"Build artifacts were not collected — the "
-                    f"'{_COLLECT_JOB_NAME}' job {conclusion}. "
-                    f"Check the build job logs."
-                )
-                raise ConfigurationError(msg) from exc
             logger.info(
                 "Artifact not yet available (attempt %d/%d): %s — retrying in %ds...",
                 attempt,
@@ -1601,15 +1958,172 @@ def _gh_download_with_wait(  # noqa: PLR0913
                 exc.stderr.strip(),
                 _WAIT_SLEEP_SECONDS,
             )
-            time.sleep(_WAIT_SLEEP_SECONDS)
+
+        # When the build job has concluded "success" but the artifact still
+        # cannot be downloaded, the artifact was genuinely never uploaded (e.g.
+        # a matrix job was skipped).  Perform one fresh re-download to close
+        # the download↔conclusion race window, then fail fast with a clear
+        # message instead of waiting out the full timeout.
+        conclusion = _wait_bail_or_sleep(
+            attempt,
+            max_attempts,
+            deadline,
+            run_id,
+            repo,
+            download_succeeded=False,
+            expected_job_names=expected_job_names,
+        )
+        if conclusion == "success":
+            try:
+                _run_gh_download(cmd, cwd, dest)
+                return
+            except SubprocessError:
+                pass
+            raise ConfigurationError(
+                f"CI run {run_id!r} build job succeeded but artifact "
+                f"{artifact_name!r} was never uploaded. "
+                "The matrix job may have been skipped or the upload step may have failed."
+            )
 
     last_msg = last_exc.stderr.strip() if last_exc else ""
     msg = (
-        f"Timed out waiting for artifacts-build artifact from run "
-        f"{run_id!r} after {max_attempts * _WAIT_SLEEP_SECONDS}s. "
+        f"Timed out waiting for artifact after {wait_timeout}s. "
+        f"Last error: {last_msg}. "
+        "If the build job was skipped, verify the CI run's matrix configuration."
+    )
+    raise ConfigurationError(msg)
+
+
+def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
+    cmd: list[str],
+    cwd: str,
+    run_id: str,
+    repo: str,
+    partial_dir: Path,
+    expected_names: list[str],
+    wait_timeout: int = _DEFAULT_WAIT_TIMEOUT_SECONDS,
+) -> None:
+    """Run ``gh run download --pattern artifacts-build-*``, retrying until all expected partials appear.
+
+    Downloads all ``artifacts-build-*`` partial manifests.  Retries when not
+    all expected partials are present yet (some builds still running).  Bails
+    early when the overall CI run itself has a terminal failure conclusion.
+
+    Args:
+        cmd: Full ``gh run download --pattern artifacts-build-* ...`` command.
+        cwd: Working directory for the subprocess.
+        run_id: GitHub Actions run ID (used to check run conclusion).
+        repo: GitHub repository in ``owner/name`` format.
+        partial_dir: Directory where partials are downloaded (``--dir`` value).
+        expected_names: Artifact names expected from ``artifacts.yaml``.
+        wait_timeout: Maximum seconds to keep retrying. Defaults to
+            :data:`_DEFAULT_WAIT_TIMEOUT_SECONDS`.
+    """
+    # Derive the exact workflow job names from artifact names once — no regex.
+    expected_job_names = {_artifact_name_to_build_job_name(n) for n in expected_names}
+    # Use a real wall-clock deadline so that slow API calls (run_command,
+    # _check_build_jobs_conclusion) don't silently extend the effective wait beyond
+    # wait_timeout.  max_attempts caps the loop as a safety valve.
+    deadline = time.monotonic() + wait_timeout
+    max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
+    last_exc: SubprocessError | None = None
+    for attempt in range(1, max_attempts + 1):
+        # Short-circuit once the wall-clock budget is spent (only after at
+        # least one attempt so wait_timeout=0 still makes one try).
+        if attempt > 1 and time.monotonic() >= deadline:
+            break
+        # Clear stale partials before each attempt so "file exists" never
+        # blocks progress and stale files from prior runs cannot corrupt merges.
+        if partial_dir.exists():
+            shutil.rmtree(partial_dir)
+        partial_dir.mkdir(parents=True, exist_ok=True)
+
+        download_succeeded = False
+        try:
+            run_command(cmd, cwd=cwd)
+            download_succeeded = True
+        except SubprocessError as exc:
+            stderr_lower = exc.stderr.lower()
+            if any(kw in stderr_lower for kw in _AUTH_ERROR_KEYWORDS):
+                msg = (
+                    "Authentication/permission error downloading artifacts. "
+                    f"Check GH_TOKEN and repository permissions.\n{exc.stderr.strip()}"
+                )
+                raise ConfigurationError(msg) from exc
+            last_exc = exc
+        else:
+            # Download succeeded; check if all expected partial files are present.
+            missing = _missing_partial_names(partial_dir, expected_names)
+            if not missing:
+                return
+            logger.info(
+                "Waiting for %d partial manifest(s) (attempt %d/%d): %s",
+                len(missing),
+                attempt,
+                max_attempts,
+                ", ".join(missing[:5]),
+            )
+            # When all build jobs are done and partials are still missing, a
+            # partial artifact upload could have completed *after* this
+            # iteration's ``gh run download`` enumerated the artifact list but
+            # *before* the conclusion API call (the download↔conclusion race).
+            # Perform one final re-download to close that window before
+            # diagnosing a skipped matrix job.
+            conclusion = _check_build_jobs_conclusion(run_id, repo, expected_job_names)
+            if conclusion in _BAIL_CONCLUSIONS:
+                raise ConfigurationError(
+                    f"CI run {run_id!r} build jobs {conclusion}. Check the build job logs."
+                )
+            if conclusion == "success":
+                if partial_dir.exists():
+                    shutil.rmtree(partial_dir)
+                partial_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    run_command(cmd, cwd=cwd)
+                    missing = _missing_partial_names(partial_dir, expected_names)
+                except SubprocessError:
+                    missing = list(expected_names)
+                if not missing:
+                    return
+                raise ConfigurationError(
+                    f"CI run {run_id!r} build jobs succeeded but "
+                    f"{len(missing)} artifact(s) were never uploaded: "
+                    f"{', '.join(missing[:5])}. "
+                    "Some matrix jobs may have been skipped."
+                )
+
+        # Delegate conclusion check (failure/cancelled bail) and jittered sleep
+        # to the shared helper.
+        _wait_bail_or_sleep(
+            attempt,
+            max_attempts,
+            deadline,
+            run_id,
+            repo,
+            download_succeeded=download_succeeded,
+            expected_job_names=expected_job_names,
+        )
+        logger.info(
+            "Retrying in ~%ds (attempt %d/%d)...",
+            _WAIT_SLEEP_SECONDS,
+            attempt,
+            max_attempts,
+        )
+
+    last_msg = last_exc.stderr.strip() if last_exc else "Some partial manifests still missing."
+    msg = (
+        f"Timed out waiting for all partial build manifests from run "
+        f"{run_id!r} after {wait_timeout}s. "
         f"Last error: {last_msg}"
     )
     raise ConfigurationError(msg)
+
+
+def _missing_partial_names(partial_dir: Path, expected_names: list[str]) -> list[str]:
+    """Return expected partial manifest names whose files have not been downloaded yet."""
+    return [
+        name for name in expected_names if not (partial_dir / name / ARTIFACTS_BUILD_YAML).exists()
+    ]
 
 
 def _run_gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None:
@@ -1623,19 +2137,65 @@ def _run_gh_download(cmd: list[str], cwd: str, dest: Path | None = None) -> None
         run_command(cmd, cwd=cwd)
 
 
-def _check_collect_job_conclusion(run_id: str, repo: str) -> str | None:
-    """Return the conclusion of the ``Collect artifacts`` job, or ``None``.
+def _artifact_name_to_build_job_name(artifact_name: str) -> str:
+    """Convert a partial artifact name to the corresponding workflow job name.
 
-    Queries ``gh run view --json jobs`` and searches for any job whose name
-    contains :data:`_COLLECT_JOB_NAME` (a substring match handles the
-    ``"build / Collect artifacts"`` prefix that GitHub prepends in
-    reusable-workflow runs).
+    Both the artifact name and the job name are generated from the same
+    ``build-artifacts.yml`` matrix variables, so the conversion is
+    deterministic:
 
-    Returns the conclusion string (e.g. ``"success"``, ``"skipped"``,
-    ``"failure"``, ``"cancelled"``) when found and the job has finished, or
-    ``None`` when the job is still running (``conclusion`` is ``null``), the
-    job is not yet listed, or the API call fails for any reason.  The caller
-    should treat ``None`` as "don't know yet — keep retrying".
+    ``artifacts-build-charm-my-charm-amd64`` → ``Build charm my-charm (amd64)``
+
+    This function is the canonical coupling point between artifact names
+    (controlled by the ``upload-artifact`` step) and job names (controlled
+    by the matrix ``name:`` field).  Keeping both derivable from the same
+    source removes the need for a hardcoded regex.
+    """
+    rest = artifact_name.removeprefix(f"{_PARTIAL_ARTIFACT_PREFIX}-")
+    # rest = "{type}-{name}-{arch}"  e.g. "charm-my-charm-amd64"
+    parts = rest.split("-")
+    type_ = parts[0]  # "charm" / "rock" / "snap"
+    arch = parts[-1]  # "amd64" / "arm64" / …
+    name = "-".join(parts[1:-1])  # artifact name may contain hyphens
+    return f"Build {type_} {name} ({arch})"
+
+
+def _check_build_jobs_conclusion(  # noqa: PLR0911, C901
+    run_id: str, repo: str, expected_job_names: set[str]
+) -> str | None:
+    """Return the worst conclusion across the expected build jobs in a CI run.
+
+    Looks up each expected job by a **suffix match** on its name.  When
+    ``build-artifacts.yml`` is invoked as a nested reusable workflow, GitHub
+    prefixes every job name with the caller-job chain, e.g.::
+
+        integration-test / build / Build charm my-charm (amd64)
+
+    The bare name ``Build charm my-charm (amd64)`` (derived from the artifact
+    name via :func:`_artifact_name_to_build_job_name`) is always the final
+    segment, so a ``"/ {bare_name}"`` suffix match handles both bare names
+    (local/single-workflow runs) and prefixed names (nested reusable workflows).
+
+    Returns ``"success"`` only when **all** expected build jobs are accounted
+    for and all have concluded ``"success"``.  Returns ``None`` if any expected
+    job has not appeared in the response yet, so callers do not prematurely
+    declare success while some jobs are still registering.
+
+    Returns:
+    - ``"failure"`` if any expected build job has concluded with ``failure``.
+    - ``"cancelled"`` if any expected build job has been cancelled (and none
+      failed).
+    - ``"success"`` if **all** expected build jobs are present and concluded
+      ``"success"``.
+    - ``None`` if any expected build job is still running or not yet registered,
+      the API call fails, or none of the expected jobs appear in the response.
+
+    Callers should treat ``None`` as "don't know yet — keep retrying".
+
+    Checking individual job conclusions (rather than the overall run conclusion)
+    lets callers detect build failures **while the workflow is still in progress**
+    — which is the common case when test VMs run concurrently with build jobs in
+    the same workflow run.
     """
     try:
         result = run_command(
@@ -1655,15 +2215,46 @@ def _check_collect_job_conclusion(run_id: str, repo: str) -> str | None:
     jobs = data.get("jobs")
     if not isinstance(jobs, list):
         return None
-    for job in jobs:
-        if not isinstance(job, dict):
-            continue
-        name = job.get("name")
-        if not isinstance(name, str):
-            continue
-        if _COLLECT_JOB_NAME in name:
-            conclusion = job.get("conclusion")
-            return conclusion if isinstance(conclusion, str) else None
+
+    # Build a name→conclusion map.  API names may carry a caller-job prefix
+    # (e.g. "integration-test / build / Build charm my-charm (amd64)") when
+    # build-artifacts.yml is invoked as a nested reusable workflow.  Match
+    # each expected bare name by exact equality OR by "/ {bare_name}" suffix.
+    api_names: dict[str, str | None] = {
+        j["name"]: j.get("conclusion")
+        for j in jobs
+        if isinstance(j, dict) and isinstance(j.get("name"), str)
+    }
+
+    def _find_conclusion(bare_name: str) -> str | None | type[_SENTINEL]:
+        if bare_name in api_names:
+            return api_names[bare_name]
+        suffix = f" / {bare_name}"
+        for api_name, conclusion in api_names.items():
+            if api_name.endswith(suffix):
+                return conclusion
+        return _SENTINEL
+
+    build_conclusions = []
+    for jn in expected_job_names:
+        conclusion = _find_conclusion(jn)
+        if conclusion is _SENTINEL:
+            # Job not yet registered in the API — treat as still running.
+            return None
+        build_conclusions.append(conclusion)
+
+    if not build_conclusions:
+        return None
+    if "failure" in build_conclusions:
+        return "failure"
+    if "cancelled" in build_conclusions:
+        return "cancelled"
+    # None or empty string means the job is still running.
+    if any(not c for c in build_conclusions):
+        return None
+    if all(c == "success" for c in build_conclusions):
+        return "success"
+    # Other conclusions (e.g. "skipped") — treat as unknown.
     return None
 
 

@@ -5,6 +5,10 @@ rocks:
 charms:
   - name: machine-charm
     charmcraft-yaml: machine-charm/charmcraft.yaml
+    platforms:
+      - arch: amd64
+      - arch: arm64
+        runner: [ubuntu-24.04-arm]
   - name: k8s-charm
     charmcraft-yaml: k8s-charm/charmcraft.yaml
     resources:
