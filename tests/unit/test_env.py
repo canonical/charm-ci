@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from opcli.commands.env import app as env_app
 from opcli.core.env import current_arch
-from opcli.core.exceptions import ConfigurationError
+from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.provision import provision_load, provision_prepare, provision_registry
 from opcli.core.yaml_io import load_artifacts_build
 from tests.conftest import write_file
@@ -417,6 +417,32 @@ class TestProvisionRegistry:
         assert result == "skipped"
         mock_run.assert_not_called()
 
+    def test_skipped_when_kubectl_exists_but_no_cluster(self, tmp_path: Path) -> None:
+        with (
+            patch("opcli.core.provision._is_port_open", return_value=False),
+            patch(
+                "opcli.core.provision.shutil.which",
+                side_effect=self._which_for("kubectl"),
+            ),
+            patch(
+                "opcli.core.provision.run_command",
+                side_effect=SubprocessError(
+                    cmd=["sudo", "kubectl", "cluster-info", "--request-timeout=5s"],
+                    returncode=1,
+                    stderr="connection refused",
+                ),
+            ) as mock_run,
+        ):
+            result = provision_registry(tmp_path)
+
+        assert result == "skipped"
+        mock_run.assert_called_once_with(
+            ["sudo", "kubectl", "cluster-info", "--request-timeout=5s"],
+            stream=False,
+            quiet=True,
+            timeout=10,
+        )
+
     def test_already_running_skips_deployment(self, tmp_path: Path) -> None:
         with (
             patch("opcli.core.provision._is_port_open", return_value=True),
@@ -455,17 +481,21 @@ class TestProvisionRegistry:
             result = provision_registry(tmp_path)
 
         assert result == "deployed"
-        assert mock_run.call_count == 3  # noqa: PLR2004
+        assert mock_run.call_count == 4  # noqa: PLR2004
 
-        wait_cmd = mock_run.call_args_list[0].args[0]
+        detect_call = mock_run.call_args_list[0]
+        assert detect_call.args[0] == [*expected_prefix, "cluster-info", "--request-timeout=5s"]
+        assert detect_call.kwargs == {"stream": False, "quiet": True, "timeout": 10}
+
+        wait_cmd = mock_run.call_args_list[1].args[0]
         assert wait_cmd[: len(expected_prefix) + 1] == [*expected_prefix, "wait"]
         assert "--for=condition=Ready" in wait_cmd
 
-        apply_call = mock_run.call_args_list[1]
+        apply_call = mock_run.call_args_list[2]
         assert apply_call.args[0] == [*expected_prefix, "apply", "-f", "-"]
         assert apply_call.kwargs["stdin"]
 
-        rollout_cmd = mock_run.call_args_list[2].args[0]
+        rollout_cmd = mock_run.call_args_list[3].args[0]
         assert rollout_cmd[: len(expected_prefix) + 1] == [*expected_prefix, "rollout"]
         assert "status" in rollout_cmd
         assert "deployment/registry" in rollout_cmd
@@ -483,9 +513,52 @@ class TestProvisionRegistry:
         ):
             result = provision_registry(tmp_path)
         assert result == "deployed"
-        assert mock_run.call_args_list[0].args[0][:4] == [
+        assert mock_run.call_args_list[1].args[0][:4] == [
             "sudo",
             "microk8s",
+            "kubectl",
+            "wait",
+        ]
+
+    def test_falls_back_to_next_kubectl_when_first_cluster_unreachable(
+        self, tmp_path: Path
+    ) -> None:
+        """If the first kubectl candidate has no cluster, try the next one."""
+
+        def fake_run(cmd: list[str], **kwargs: object) -> None:
+            if cmd == ["sudo", "microk8s", "kubectl", "cluster-info", "--request-timeout=5s"]:
+                raise SubprocessError(cmd=cmd, returncode=1, stderr="unreachable")
+
+        with (
+            patch("opcli.core.provision._is_port_open", return_value=False),
+            patch(
+                "opcli.core.provision.shutil.which",
+                side_effect=self._which_for("microk8s", "k8s"),
+            ),
+            patch("opcli.core.provision.run_command", side_effect=fake_run) as mock_run,
+        ):
+            result = provision_registry(tmp_path)
+
+        assert result == "deployed"
+        assert mock_run.call_args_list[0].args[0] == [
+            "sudo",
+            "microk8s",
+            "kubectl",
+            "cluster-info",
+            "--request-timeout=5s",
+        ]
+        assert mock_run.call_args_list[0].kwargs == {"stream": False, "quiet": True, "timeout": 10}
+        assert mock_run.call_args_list[1].args[0] == [
+            "sudo",
+            "k8s",
+            "kubectl",
+            "cluster-info",
+            "--request-timeout=5s",
+        ]
+        assert mock_run.call_args_list[1].kwargs == {"stream": False, "quiet": True, "timeout": 10}
+        assert mock_run.call_args_list[2].args[0][:4] == [
+            "sudo",
+            "k8s",
             "kubectl",
             "wait",
         ]
