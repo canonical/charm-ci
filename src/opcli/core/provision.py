@@ -47,6 +47,23 @@ _REGISTRY_NAMESPACE = "container-registry"
 _IMAGE_REGISTRY_PROVIDERS: frozenset[str] = frozenset({"microk8s", "k8s"})
 
 
+def _skopeo_binary() -> str:
+    """Return the skopeo binary to use for OCI image operations.
+
+    Prefers ``rockcraft.skopeo`` (bundled with the rockcraft snap) when
+    available, then falls back to the system ``skopeo`` (e.g. installed via
+    apt).  Raises :class:`ConfigurationError` if neither is found.
+    """
+    for binary in ("rockcraft.skopeo", "skopeo"):
+        if shutil.which(binary):
+            return binary
+    msg = (
+        "Neither 'rockcraft.skopeo' nor 'skopeo' is available. "
+        "Install skopeo (e.g. 'apt install skopeo') or the rockcraft snap."
+    )
+    raise ConfigurationError(msg)
+
+
 def provision_prepare(
     root: Path,
     *,
@@ -192,7 +209,7 @@ def provision_load(
             run_command(
                 [
                     "sudo",
-                    "rockcraft.skopeo",
+                    _skopeo_binary(),
                     "--insecure-policy",
                     "copy",
                     "--dest-tls-verify=false",
