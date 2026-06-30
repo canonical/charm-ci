@@ -9,7 +9,11 @@ from unittest.mock import call, patch
 import pytest
 
 from opcli.core.exceptions import ConfigurationError
-from opcli.core.provision import _patch_concierge_image_registry, provision_prepare
+from opcli.core.provision import (
+    _patch_concierge_image_registry,
+    _skopeo_binary,
+    provision_prepare,
+)
 from opcli.core.yaml_io import load_yaml
 
 
@@ -206,3 +210,25 @@ class TestProvisionPrepareImageRegistry:
             ["concierge", "prepare", "-c", str(concierge)],
             cwd=str(tmp_path),
         )
+
+
+class TestSkopeoBinary:
+    """Tests for _skopeo_binary."""
+
+    def test_prefers_rockcraft_skopeo_when_available(self) -> None:
+        """Returns 'rockcraft.skopeo' when it is on PATH."""
+        with patch("shutil.which", side_effect=lambda b: b if b == "rockcraft.skopeo" else None):
+            assert _skopeo_binary() == "rockcraft.skopeo"
+
+    def test_falls_back_to_skopeo_when_rockcraft_absent(self) -> None:
+        """Returns 'skopeo' when rockcraft.skopeo is not available."""
+        with patch("shutil.which", side_effect=lambda b: b if b == "skopeo" else None):
+            assert _skopeo_binary() == "skopeo"
+
+    def test_raises_when_neither_available(self) -> None:
+        """Raises ConfigurationError when neither binary is on PATH."""
+        with (
+            patch("shutil.which", return_value=None),
+            pytest.raises(ConfigurationError, match="skopeo"),
+        ):
+            _skopeo_binary()

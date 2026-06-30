@@ -10,3 +10,7 @@ providers:
     bootstrap: true
     addons:
       - hostpath-storage
+
+host:
+  packages:
+    - skopeo

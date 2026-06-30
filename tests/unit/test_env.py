@@ -138,6 +138,15 @@ class TestProvisionPrepare:
 class TestProvisionLoad:
     """Tests for provision_load()."""
 
+    @pytest.fixture(autouse=True)
+    def mock_skopeo_which(self) -> object:
+        """Make shutil.which find rockcraft.skopeo so _skopeo_binary() doesn't raise."""
+        with patch(
+            "opcli.core.provision.shutil.which",
+            side_effect=lambda b: b if b == "rockcraft.skopeo" else None,
+        ) as m:
+            yield m
+
     def test_missing_generated_returns_empty(self, tmp_path: Path) -> None:
         result = provision_load(tmp_path)
         assert result == []
