@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 from opcli.core.constants import ARTIFACTS_BUILD_YAML
-from opcli.core.exceptions import ConfigurationError
+from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.progress import status
 from opcli.core.subprocess import run_command
 from opcli.core.yaml_io import dump_artifacts_build, dump_yaml, load_artifacts_build, load_yaml
@@ -376,12 +376,23 @@ def _detect_kubectl() -> list[str] | None:
 
     Detection order: microk8s → k8s → standalone kubectl.
     Returns the command prefix (e.g. ``["sudo", "microk8s", "kubectl"]``)
-    or ``None`` if no k8s tooling is found.
+    only if the corresponding k8s cluster is actually reachable.
+    Returns ``None`` if no k8s tooling is found or no cluster is running.
     """
+    candidates: list[list[str]] = []
     if shutil.which("microk8s"):
-        return ["sudo", "microk8s", "kubectl"]
+        candidates.append(["sudo", "microk8s", "kubectl"])
     if shutil.which("k8s"):
-        return ["sudo", "k8s", "kubectl"]
+        candidates.append(["sudo", "k8s", "kubectl"])
     if shutil.which("kubectl"):
-        return ["sudo", "kubectl"]
+        candidates.append(["sudo", "kubectl"])
+    for cmd in candidates:
+        try:
+            run_command(
+                [*cmd, "cluster-info", "--request-timeout=5s"],
+                stream=False,
+            )
+            return cmd
+        except SubprocessError:
+            continue  # binary exists but no cluster is running
     return None
