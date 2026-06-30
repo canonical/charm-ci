@@ -69,6 +69,7 @@ def run_command(  # noqa: PLR0913
     interactive: bool = False,
     stdin: str | None = None,
     env: dict[str, str] | None = None,
+    quiet: bool = False,
 ) -> SubprocessResult:
     """Execute *cmd* and return captured output.
 
@@ -81,8 +82,8 @@ def run_command(  # noqa: PLR0913
             non-zero exit codes.
         stream: If ``True`` (default), echo stdout/stderr to the terminal
             in real time while still capturing them. If ``False``, buffer
-            all output silently (useful for commands whose stdout is
-            consumed programmatically, like ``opcli pytest expand``).
+            all output without echoing it (useful for commands whose stdout
+            is consumed programmatically, like ``opcli pytest expand``).
         interactive: If ``True``, inherit the parent's stdin/stdout/stderr
             so the subprocess has full TTY access. Required for commands
             like ``spread -shell``. Output is not captured in this mode.
@@ -94,6 +95,10 @@ def run_command(  # noqa: PLR0913
             current process environment.  The subprocess inherits all of
             ``os.environ``; any key in *env* overrides the corresponding
             inherited value.
+        quiet: If ``True``, suppress the ``$ cmd`` log line that is normally
+            printed to stderr before the subprocess runs.  Useful for
+            background probe commands where logging would be misleading.
+            Only effective when *stream* is ``False``.
 
     Raises:
         SubprocessError: If the command fails and *check* is ``True``.
@@ -110,7 +115,9 @@ def run_command(  # noqa: PLR0913
         return _run_streaming(
             cmd, cwd=cwd, timeout=timeout, check=check, stdin=stdin, env=merged_env
         )
-    return _run_captured(cmd, cwd=cwd, timeout=timeout, check=check, stdin=stdin, env=merged_env)
+    return _run_captured(
+        cmd, cwd=cwd, timeout=timeout, check=check, stdin=stdin, env=merged_env, quiet=quiet
+    )
 
 
 def _run_interactive(
@@ -283,9 +290,11 @@ def _run_captured(  # noqa: PLR0913
     check: bool = True,
     stdin: str | None = None,
     env: dict[str, str] | None = None,
+    quiet: bool = False,
 ) -> SubprocessResult:
     """Run *cmd* with fully buffered output (no terminal echo)."""
-    _log_command(cmd, cwd, err=True)
+    if not quiet:
+        _log_command(cmd, cwd, err=True)
     try:
         proc = subprocess.run(
             cmd,
