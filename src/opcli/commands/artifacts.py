@@ -109,34 +109,48 @@ def fetch(
         bool,
         typer.Option(
             "--wait/--no-wait",
-            help="Retry until artifacts-build appears (use when the build "
-            "job may still be running). Automatically enabled when "
-            "--wait-timeout is provided.",
+            help="Retry until artifacts appear (use when the build job may still be running). "
+            "Automatically enabled when --wait-timeout is provided.",
         ),
     ] = False,
     wait_timeout: Annotated[
         int | None,
         typer.Option(
             "--wait-timeout",
-            help="Maximum seconds to wait for the artifacts-build artifact "
-            "to appear. Specifying this option automatically enables waiting "
-            f"(equivalent to --wait). Default: {_DEFAULT_WAIT_TIMEOUT_SECONDS}s "
+            help="Maximum seconds to wait for artifacts to appear. Specifying this option "
+            "automatically enables waiting (equivalent to --wait). "
+            f"Default: {_DEFAULT_WAIT_TIMEOUT_SECONDS}s "
             f"({_DEFAULT_WAIT_TIMEOUT_SECONDS // 60} min) when waiting is active.",
+        ),
+    ] = None,
+    arch: Annotated[
+        str | None,
+        typer.Option(
+            "--arch",
+            help=(
+                "Architecture to fetch. Defaults to the current machine's arch (auto-detected). "
+                "Use 'all' to download every architecture (e.g. for publish workflows). "
+                "Requires artifacts.yaml in the working directory."
+            ),
         ),
     ] = None,
 ) -> None:
     """Download artifacts from a CI run and prepare for local testing.
 
-    Downloads artifacts.build.yaml, then downloads all charm/snap artifact
-    archives. Rock artifacts are GHCR images and require no download.
-    Finally rewrites artifacts.build.yaml with local file paths so that
-    ``opcli pytest run`` and ``opcli spread run`` work without a local build.
+    By default, auto-detects the current machine's architecture and downloads
+    only the matching artifacts. Use --arch all to fetch every architecture
+    (needed for publish workflows that upload all arch variants).
 
-    Use ``--wait`` (or ``--wait-timeout``) when the build job may still be
-    running — the command will retry until the artifact appears.
+    Use --wait (or --wait-timeout) when the build job may still be running —
+    the command will retry until the artifacts appear.
+
+    Reads artifacts.yaml to discover which partial build manifests to download,
+    merges them locally, downloads the artifact archives, then rewrites
+    artifacts.build.yaml with local file paths so that ``opcli pytest run``
+    and ``opcli spread run`` work without a local build.
     """
     path = artifacts_fetch(
-        Path.cwd(), run_id=run_id, repo=repo, wait=wait, wait_timeout=wait_timeout
+        Path.cwd(), run_id=run_id, repo=repo, wait=wait, wait_timeout=wait_timeout, arch=arch
     )
     typer.echo(f"Fetched artifacts and updated {path}")
 
