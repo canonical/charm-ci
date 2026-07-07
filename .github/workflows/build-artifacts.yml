@@ -226,7 +226,10 @@ jobs:
         run: |
           opcli artifacts build \
             --${{ matrix.type }} ${{ matrix.name }} \
-            --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 ))
+            --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 )) \
+            || opcli artifacts build \
+               --${{ matrix.type }} ${{ matrix.name }} \
+               --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 ))
         env:
           OPCLI_ROCK_UPLOAD: ${{ needs.build-matrix.outputs.rock-upload-mode }}
 
