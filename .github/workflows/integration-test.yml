@@ -67,6 +67,14 @@ on:
         description: "Maximum minutes allowed for each spread test job."
         type: number
         default: 120
+      charmcraft-channel:
+        description: "Snap channel to install charmcraft from when building charms. Passed to build-artifacts."
+        type: string
+        default: "latest/stable"
+      rockcraft-channel:
+        description: "Snap channel to install rockcraft from when building rocks. Passed to build-artifacts."
+        type: string
+        default: "latest/stable"
 
 jobs:
   # ── Job 1: build all artifacts ──────────────────────────────────────────────
@@ -77,6 +85,8 @@ jobs:
       upload-image: ${{ inputs.upload-image }}
       pre-build-rock-script: ${{ inputs.pre-build-rock-script }}
       build-timeout-minutes: ${{ inputs.build-timeout-minutes }}
+      charmcraft-channel: ${{ inputs.charmcraft-channel }}
+      rockcraft-channel: ${{ inputs.rockcraft-channel }}
     permissions:
       contents: read
       packages: write

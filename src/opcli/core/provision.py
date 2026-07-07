@@ -18,6 +18,7 @@ NodePort Service on port 32000.  This is a local-only operation — in CI
 images are served from GHCR.
 """
 
+import datetime
 import logging
 import os
 import shutil
@@ -26,7 +27,7 @@ import time
 from pathlib import Path
 
 from opcli.core.constants import ARTIFACTS_BUILD_YAML
-from opcli.core.exceptions import ConfigurationError
+from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.progress import status
 from opcli.core.subprocess import run_command
 from opcli.core.yaml_io import dump_artifacts_build, dump_yaml, load_artifacts_build, load_yaml
@@ -44,6 +45,23 @@ _REGISTRY_NAMESPACE = "container-registry"
 # Concierge providers that support the image-registry config (container runtimes
 # that pull from Docker Hub).  LXD doesn't use OCI images from Docker Hub.
 _IMAGE_REGISTRY_PROVIDERS: frozenset[str] = frozenset({"microk8s", "k8s"})
+
+
+def _skopeo_binary() -> str:
+    """Return the skopeo binary to use for OCI image operations.
+
+    Prefers ``rockcraft.skopeo`` (bundled with the rockcraft snap) when
+    available, then falls back to the system ``skopeo`` (e.g. installed via
+    apt).  Raises :class:`ConfigurationError` if neither is found.
+    """
+    for binary in ("rockcraft.skopeo", "skopeo"):
+        if shutil.which(binary):
+            return binary
+    msg = (
+        "Neither 'rockcraft.skopeo' nor 'skopeo' is available. "
+        "Install skopeo (e.g. 'apt install skopeo') or the rockcraft snap."
+    )
+    raise ConfigurationError(msg)
 
 
 def provision_prepare(
@@ -130,6 +148,14 @@ def provision_load(
     ``file`` output, converts the ``.rock`` archive to an OCI image and
     pushes it to the target registry using ``skopeo``.
 
+    A unique timestamp tag (``{arch}-{YYYYMMDD}-{HHMMSS}``) is generated
+    once per call and applied to every pushed image.  This ensures:
+
+    - **After** ``concierge restore`` + ``prepare`` the fresh empty registry
+      is always populated (no stale ``build.image`` ref can silently skip a push).
+    - **After** repacking a rock the new image gets a distinct tag so Kubernetes
+      will pull it even when ``imagePullPolicy: IfNotPresent``.
+
     Args:
         root: Project root directory.
         registry: Target image registry address.
@@ -163,6 +189,7 @@ def provision_load(
         return []
 
     pushed: list[str] = []
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     for rock in generated.rocks:
         for build in rock.builds:
@@ -170,19 +197,19 @@ def provision_load(
                 continue
 
             rock_path = Path(build.file)
-            image_ref = f"{registry}/{rock.name}:{build.arch}"
-
-            if build.image == image_ref:
-                logger.info("Already loaded %s, skipping", image_ref)
-                continue
+            image_ref = f"{registry}/{rock.name}:{build.arch}-{timestamp}"
 
             # Push directly from .rock archive to registry in one step — no Docker
             # daemon needed (avoids failures in MicroK8s-only environments).
+            # A unique timestamp tag is used on every invocation so that:
+            #   1. a freshly provisioned (empty) registry is always populated, and
+            #   2. rebuilt rocks get a new image ref that Kubernetes will pull even
+            #      with imagePullPolicy: IfNotPresent.
             status(f"Pushing '{rock.name}' ({build.arch}) → {image_ref}")
             run_command(
                 [
                     "sudo",
-                    "rockcraft.skopeo",
+                    _skopeo_binary(),
                     "--insecure-policy",
                     "copy",
                     "--dest-tls-verify=false",
@@ -349,12 +376,25 @@ def _detect_kubectl() -> list[str] | None:
 
     Detection order: microk8s → k8s → standalone kubectl.
     Returns the command prefix (e.g. ``["sudo", "microk8s", "kubectl"]``)
-    or ``None`` if no k8s tooling is found.
+    only if the corresponding k8s cluster is actually reachable.
+    Returns ``None`` if no k8s tooling is found or no cluster is running.
     """
+    candidates: list[list[str]] = []
     if shutil.which("microk8s"):
-        return ["sudo", "microk8s", "kubectl"]
+        candidates.append(["sudo", "microk8s", "kubectl"])
     if shutil.which("k8s"):
-        return ["sudo", "k8s", "kubectl"]
+        candidates.append(["sudo", "k8s", "kubectl"])
     if shutil.which("kubectl"):
-        return ["sudo", "kubectl"]
+        candidates.append(["sudo", "kubectl"])
+    for cmd in candidates:
+        try:
+            run_command(
+                [*cmd, "cluster-info", "--request-timeout=5s"],
+                stream=False,
+                quiet=True,
+                timeout=10,
+            )
+            return cmd
+        except SubprocessError:
+            continue  # binary exists but no cluster is running
     return None

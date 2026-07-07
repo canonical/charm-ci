@@ -41,6 +41,14 @@ on:
         description: "Maximum minutes allowed for each individual artifact build job. Also passed as --build-timeout to opcli artifacts build so the subprocess timeout tracks the job timeout."
         type: number
         default: 60
+      charmcraft-channel:
+        description: "Snap channel to install charmcraft from when building charms."
+        type: string
+        default: "latest/stable"
+      rockcraft-channel:
+        description: "Snap channel to install rockcraft from when building rocks."
+        type: string
+        default: "latest/stable"
 
 jobs:
   # ── Job 1: produce the build matrix ────────────────────────────────────────
@@ -194,11 +202,11 @@ jobs:
 
       - name: Install charmcraft
         if: matrix.type == 'charm'
-        run: sudo snap install charmcraft --classic
+        run: sudo snap install charmcraft --classic --channel=${{ inputs.charmcraft-channel }}
 
       - name: Install rockcraft
         if: matrix.type == 'rock' && steps.restore-rock-cache.outputs.cache-hit != 'true'
-        run: sudo snap install rockcraft --classic
+        run: sudo snap install rockcraft --classic --channel=${{ inputs.rockcraft-channel }}
 
       - name: Install snapcraft
         if: matrix.type == 'snap'
@@ -218,7 +226,10 @@ jobs:
         run: |
           opcli artifacts build \
             --${{ matrix.type }} ${{ matrix.name }} \
-            --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 ))
+            --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 )) \
+            || opcli artifacts build \
+               --${{ matrix.type }} ${{ matrix.name }} \
+               --build-timeout $(( ${{ inputs.build-timeout-minutes }} * 60 ))
         env:
           OPCLI_ROCK_UPLOAD: ${{ needs.build-matrix.outputs.rock-upload-mode }}
 

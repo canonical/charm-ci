@@ -116,6 +116,15 @@ class TestRockBuildArtifactMode:
 class TestPushImagesMissingRegistryPolicy:
     """Test push-images --missing-registry policy behavior."""
 
+    @pytest.fixture(autouse=True)
+    def mock_skopeo_which(self) -> object:
+        """Make shutil.which find rockcraft.skopeo so _skopeo_binary() doesn't raise."""
+        with patch(
+            "opcli.core.provision.shutil.which",
+            side_effect=lambda b: b if b == "rockcraft.skopeo" else None,
+        ) as m:
+            yield m
+
     _GENERATED_WITH_FILE_ROCK = """\
 version: 1
 rocks:

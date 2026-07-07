@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from opcli.commands.env import app as env_app
 from opcli.core.env import current_arch
-from opcli.core.exceptions import ConfigurationError
+from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.provision import provision_load, provision_prepare, provision_registry
 from opcli.core.yaml_io import load_artifacts_build
 from tests.conftest import write_file
@@ -138,6 +138,15 @@ class TestProvisionPrepare:
 class TestProvisionLoad:
     """Tests for provision_load()."""
 
+    @pytest.fixture(autouse=True)
+    def mock_skopeo_which(self) -> object:
+        """Make shutil.which find rockcraft.skopeo so _skopeo_binary() doesn't raise."""
+        with patch(
+            "opcli.core.provision.shutil.which",
+            side_effect=lambda b: b if b == "rockcraft.skopeo" else None,
+        ) as m:
+            yield m
+
     def test_missing_generated_returns_empty(self, tmp_path: Path) -> None:
         result = provision_load(tmp_path)
         assert result == []
@@ -160,10 +169,12 @@ class TestProvisionLoad:
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path)
 
-        assert pushed == ["localhost:32000/myrock:amd64"]
+        assert pushed == ["localhost:32000/myrock:amd64-20260101-120000"]
         mock_run.assert_called_once_with(
             [
                 "sudo",
@@ -172,7 +183,7 @@ class TestProvisionLoad:
                 "copy",
                 "--dest-tls-verify=false",
                 "oci-archive:rock_dir/myrock.rock",
-                "docker://localhost:32000/myrock:amd64",
+                "docker://localhost:32000/myrock:amd64-20260101-120000",
             ],
             cwd=str(tmp_path),
         )
@@ -183,10 +194,12 @@ class TestProvisionLoad:
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path, registry="myregistry:5000")
 
-        assert pushed == ["myregistry:5000/myrock:amd64"]
+        assert pushed == ["myregistry:5000/myrock:amd64-20260101-120000"]
         mock_run.assert_called_once_with(
             [
                 "sudo",
@@ -195,24 +208,27 @@ class TestProvisionLoad:
                 "copy",
                 "--dest-tls-verify=false",
                 "oci-archive:rock_dir/myrock.rock",
-                "docker://myregistry:5000/myrock:amd64",
+                "docker://myregistry:5000/myrock:amd64-20260101-120000",
             ],
             cwd=str(tmp_path),
         )
 
-    def test_repushes_when_existing_image_differs_from_target(self, tmp_path: Path) -> None:
+    def test_pushes_even_with_stale_image_ref(self, tmp_path: Path) -> None:
+        """Rock with a stale image ref (e.g. after concierge restore) is always pushed."""
         write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_STALE_IMAGE)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path)
 
-        assert pushed == ["localhost:32000/myrock:amd64"]
+        assert pushed == ["localhost:32000/myrock:amd64-20260101-120000"]
         mock_run.assert_called_once()
         updated = load_artifacts_build(tmp_path / "artifacts.build.yaml")
-        assert updated.rocks[0].builds[0].image == "localhost:32000/myrock:amd64"
+        assert updated.rocks[0].builds[0].image == "localhost:32000/myrock:amd64-20260101-120000"
 
     def test_pushes_multiple_local_rocks(self, tmp_path: Path) -> None:
         write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_MULTIPLE_LOCAL_ROCKS)
@@ -220,12 +236,14 @@ class TestProvisionLoad:
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path)
 
         assert pushed == [
-            "localhost:32000/myrock:amd64",
-            "localhost:32000/otherrock:arm64",
+            "localhost:32000/myrock:amd64-20260101-120000",
+            "localhost:32000/otherrock:arm64-20260101-120000",
         ]
         assert mock_run.call_count == len(pushed)
         assert mock_run.call_args_list[0].args == (
@@ -236,7 +254,7 @@ class TestProvisionLoad:
                 "copy",
                 "--dest-tls-verify=false",
                 "oci-archive:rock_dir/myrock.rock",
-                "docker://localhost:32000/myrock:amd64",
+                "docker://localhost:32000/myrock:amd64-20260101-120000",
             ],
         )
         assert mock_run.call_args_list[0].kwargs == {"cwd": str(tmp_path)}
@@ -248,7 +266,7 @@ class TestProvisionLoad:
                 "copy",
                 "--dest-tls-verify=false",
                 "oci-archive:other_dir/otherrock.rock",
-                "docker://localhost:32000/otherrock:arm64",
+                "docker://localhost:32000/otherrock:arm64-20260101-120000",
             ],
         )
         assert mock_run.call_args_list[1].kwargs == {"cwd": str(tmp_path)}
@@ -300,18 +318,20 @@ class TestProvisionLoad:
         assert "--dest-tls-verify=false" in cmd
 
     def test_updates_artifacts_build_with_image_ref(self, tmp_path: Path) -> None:
-        """After pushing, rock.builds.image is set and file is preserved."""
+        """After pushing, rock.builds.image is set to timestamped ref and file is preserved."""
         write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command"),
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             provision_load(tmp_path)
 
         updated = load_artifacts_build(tmp_path / "artifacts.build.yaml")
         myrock = next(r for r in updated.rocks if r.name == "myrock")
-        assert myrock.builds[0].image == "localhost:32000/myrock:amd64"
+        assert myrock.builds[0].image == "localhost:32000/myrock:amd64-20260101-120000"
         assert myrock.builds[0].file == "./rock_dir/myrock.rock"
 
     def test_updates_charm_resources_for_pushed_rock(self, tmp_path: Path) -> None:
@@ -324,35 +344,41 @@ class TestProvisionLoad:
         with (
             patch("opcli.core.provision.run_command"),
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             provision_load(tmp_path)
 
         updated = load_artifacts_build(tmp_path / "artifacts.build.yaml")
         myrock = next(r for r in updated.rocks if r.name == "myrock")
-        assert myrock.builds[0].image == "localhost:32000/myrock:amd64"
+        assert myrock.builds[0].image == "localhost:32000/myrock:amd64-20260101-120000"
         charm = updated.charms[0]
         assert charm.resources is not None
         assert charm.resources["myrock-image"].rock == "myrock"
         assert charm.resources["other-res"].rock == "otherrock"
 
-    def test_idempotent_skips_already_loaded_rock(self, tmp_path: Path) -> None:
-        """Rock with image already set to the target ref is skipped."""
+    def test_pushes_even_when_previously_loaded(self, tmp_path: Path) -> None:
+        """Rock with an existing image ref (e.g. after concierge restore wipes registry)
+        is always pushed — no stale image ref can silently skip a push.
+        """
         write_file(
             tmp_path / "artifacts.build.yaml",
             "version: 1\n"
             "rocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n"
             "  builds:\n  - arch: amd64\n    file: ./rock_dir/myrock.rock\n"
-            "    image: localhost:32000/myrock:amd64\n",
+            "    image: localhost:32000/myrock:amd64-20250101-090000\n",
         )
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
             patch("opcli.core.provision._is_port_open", return_value=True),
+            patch("opcli.core.provision.datetime") as mock_dt,
         ):
+            mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             pushed = provision_load(tmp_path)
 
-        assert pushed == []
-        mock_run.assert_not_called()
+        assert pushed == ["localhost:32000/myrock:amd64-20260101-120000"]
+        mock_run.assert_called_once()
 
     def test_no_writeback_when_nothing_pushed(self, tmp_path: Path) -> None:
         """artifacts.build.yaml is not written when no rocks are pushed."""
@@ -390,6 +416,32 @@ class TestProvisionRegistry:
             result = provision_registry(tmp_path)
         assert result == "skipped"
         mock_run.assert_not_called()
+
+    def test_skipped_when_kubectl_exists_but_no_cluster(self, tmp_path: Path) -> None:
+        with (
+            patch("opcli.core.provision._is_port_open", return_value=False),
+            patch(
+                "opcli.core.provision.shutil.which",
+                side_effect=self._which_for("kubectl"),
+            ),
+            patch(
+                "opcli.core.provision.run_command",
+                side_effect=SubprocessError(
+                    cmd=["sudo", "kubectl", "cluster-info", "--request-timeout=5s"],
+                    returncode=1,
+                    stderr="connection refused",
+                ),
+            ) as mock_run,
+        ):
+            result = provision_registry(tmp_path)
+
+        assert result == "skipped"
+        mock_run.assert_called_once_with(
+            ["sudo", "kubectl", "cluster-info", "--request-timeout=5s"],
+            stream=False,
+            quiet=True,
+            timeout=10,
+        )
 
     def test_already_running_skips_deployment(self, tmp_path: Path) -> None:
         with (
@@ -429,17 +481,21 @@ class TestProvisionRegistry:
             result = provision_registry(tmp_path)
 
         assert result == "deployed"
-        assert mock_run.call_count == 3  # noqa: PLR2004
+        assert mock_run.call_count == 4  # noqa: PLR2004
 
-        wait_cmd = mock_run.call_args_list[0].args[0]
+        detect_call = mock_run.call_args_list[0]
+        assert detect_call.args[0] == [*expected_prefix, "cluster-info", "--request-timeout=5s"]
+        assert detect_call.kwargs == {"stream": False, "quiet": True, "timeout": 10}
+
+        wait_cmd = mock_run.call_args_list[1].args[0]
         assert wait_cmd[: len(expected_prefix) + 1] == [*expected_prefix, "wait"]
         assert "--for=condition=Ready" in wait_cmd
 
-        apply_call = mock_run.call_args_list[1]
+        apply_call = mock_run.call_args_list[2]
         assert apply_call.args[0] == [*expected_prefix, "apply", "-f", "-"]
         assert apply_call.kwargs["stdin"]
 
-        rollout_cmd = mock_run.call_args_list[2].args[0]
+        rollout_cmd = mock_run.call_args_list[3].args[0]
         assert rollout_cmd[: len(expected_prefix) + 1] == [*expected_prefix, "rollout"]
         assert "status" in rollout_cmd
         assert "deployment/registry" in rollout_cmd
@@ -457,9 +513,52 @@ class TestProvisionRegistry:
         ):
             result = provision_registry(tmp_path)
         assert result == "deployed"
-        assert mock_run.call_args_list[0].args[0][:4] == [
+        assert mock_run.call_args_list[1].args[0][:4] == [
             "sudo",
             "microk8s",
+            "kubectl",
+            "wait",
+        ]
+
+    def test_falls_back_to_next_kubectl_when_first_cluster_unreachable(
+        self, tmp_path: Path
+    ) -> None:
+        """If the first kubectl candidate has no cluster, try the next one."""
+
+        def fake_run(cmd: list[str], **kwargs: object) -> None:
+            if cmd == ["sudo", "microk8s", "kubectl", "cluster-info", "--request-timeout=5s"]:
+                raise SubprocessError(cmd=cmd, returncode=1, stderr="unreachable")
+
+        with (
+            patch("opcli.core.provision._is_port_open", return_value=False),
+            patch(
+                "opcli.core.provision.shutil.which",
+                side_effect=self._which_for("microk8s", "k8s"),
+            ),
+            patch("opcli.core.provision.run_command", side_effect=fake_run) as mock_run,
+        ):
+            result = provision_registry(tmp_path)
+
+        assert result == "deployed"
+        assert mock_run.call_args_list[0].args[0] == [
+            "sudo",
+            "microk8s",
+            "kubectl",
+            "cluster-info",
+            "--request-timeout=5s",
+        ]
+        assert mock_run.call_args_list[0].kwargs == {"stream": False, "quiet": True, "timeout": 10}
+        assert mock_run.call_args_list[1].args[0] == [
+            "sudo",
+            "k8s",
+            "kubectl",
+            "cluster-info",
+            "--request-timeout=5s",
+        ]
+        assert mock_run.call_args_list[1].kwargs == {"stream": False, "quiet": True, "timeout": 10}
+        assert mock_run.call_args_list[2].args[0][:4] == [
+            "sudo",
+            "k8s",
             "kubectl",
             "wait",
         ]
