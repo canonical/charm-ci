@@ -827,7 +827,12 @@ def _build_charm(
         with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
         step(f"Building charm '{charm.name}' (charmcraft pack)"),
     ):
-        run_command([*_PACK_COMMANDS["charm"]], cwd=str(pack_dir), env=_CHARMCRAFT_ENV, timeout=build_timeout)
+        run_command(
+            [*_PACK_COMMANDS["charm"]],
+            cwd=str(pack_dir),
+            env=_CHARMCRAFT_ENV,
+            timeout=build_timeout,
+        )
     after = _snapshot_outputs(pack_dir, "charm")
     new_outputs = _pick_new_charm_outputs(after, pack_dir, charm.name, attributed)
     attributed.update(new_outputs)
