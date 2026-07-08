@@ -64,19 +64,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up tmate session (self-hosted)
-        if: runner.debug == 1 && runner.environment == 'self-hosted'
-        uses: canonical/action-tmate@main
-        with:
-          detached: true
-          timeout-minutes: 60
-
-      - name: Set up tmate session (GitHub-hosted)
-        if: runner.debug == 1 && runner.environment == 'github-hosted'
-        uses: mxschmitt/action-tmate@v3
-        with:
-          detached: true
-
       - name: Get workflow version
         id: workflow-version
         uses: canonical/get-workflow-version-action@v1
