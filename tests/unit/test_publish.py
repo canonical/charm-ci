@@ -1612,6 +1612,123 @@ charms:
             artifacts_publish(root, channel="latest/edge")
 
 
+_WARNING_EXIT_REVISION = 56
+
+_CHARM_BUILD_YAML_NO_RESOURCES = """\
+version: 1
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: my-charm/my-charm_ubuntu-24.04-amd64.charm
+"""
+
+
+def _make_charm_fixture(root: Path) -> None:
+    """Write minimal charm files under *root* for no-resources publish tests."""
+    (root / "artifacts.build.yaml").write_text(_CHARM_BUILD_YAML_NO_RESOURCES)
+    charm_subdir = root / "my-charm"
+    charm_subdir.mkdir()
+    (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+    (charm_subdir / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"fake")
+
+
+class TestExperimentalExtensionsEnvVar:
+    """charmcraft upload/upload-resource must be called with CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS=1.
+
+    Without this env var, charmcraft raises ExtensionError for charms that use
+    experimental extensions (e.g. go-framework on ubuntu@24.04) during a
+    post-upload unpublished-libs check.  The exception fires BEFORE
+    emit.message({"revision": N}) is called, so stdout is empty and charmcraft
+    exits 1 — making the upload result unrecoverable.
+
+    Setting the env var converts the exception into a harmless progress message
+    so the command exits 0 and emits the JSON revision normally.
+    """
+
+    def test_upload_passes_experimental_extensions_env(self, tmp_path: Path) -> None:
+        """Charmcraft upload is called with CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS=1."""
+        _make_charm_fixture(tmp_path)
+
+        upload_envs: list[dict[str, str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            # "upload" in cmd uses list element equality; "upload-resource" is a
+            # distinct element and will never match "upload", so no guard needed.
+            if "upload" in cmd:
+                env = kwargs.get("env") or {}
+                upload_envs.append(dict(env) if isinstance(env, dict) else {})
+                return _mock_result(stdout=json.dumps({"revision": _WARNING_EXIT_REVISION}))
+            return _mock_result()
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(tmp_path, channel="latest/edge")
+
+        assert len(upload_envs) == 1, f"Expected exactly 1 upload call, got: {len(upload_envs)}"
+        assert upload_envs[0].get("CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS") == "1", (
+            f"Expected env var in upload call, got: {upload_envs[0]}"
+        )
+
+    def test_upload_resource_passes_experimental_extensions_env(self, tmp_path: Path) -> None:
+        """Charmcraft upload-resource is also called with CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS=1."""
+        build_yaml = """\
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:latest
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: built-charm/my-charm_amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        built = root / "built-charm"
+        built.mkdir()
+        (built / "my-charm_amd64.charm").write_bytes(b"fake")
+
+        upload_resource_calls: list[tuple[list[str], dict[str, str]]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                env = kwargs.get("env") or {}
+                upload_resource_calls.append(
+                    (list(cmd), dict(env) if isinstance(env, dict) else {})
+                )
+                return _mock_result(stdout=json.dumps({"revision": 1}))
+            if "upload" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": _WARNING_EXIT_REVISION}))
+            return _mock_result()
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge")
+
+        assert len(upload_resource_calls) == 1, (
+            f"Expected exactly 1 upload-resource call, got: {len(upload_resource_calls)}"
+        )
+        cmd_used, env_used = upload_resource_calls[0]
+        assert "my-charm" in cmd_used, f"Expected charm name in cmd: {cmd_used}"
+        assert "my-rock-image" in cmd_used, f"Expected resource name in cmd: {cmd_used}"
+        assert env_used.get("CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS") == "1", (
+            f"Expected env var in upload-resource call, got: {env_used}"
+        )
+
+
 class TestDuplicateUploadWithResources:
     """Duplicate digest reuse for charms with resources (_upload_charm_no_release)."""
 

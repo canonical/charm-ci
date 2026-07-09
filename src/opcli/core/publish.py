@@ -572,7 +572,12 @@ def _read_upstream_source(yaml_path: Path, resource_name: str) -> str | None:
 def _do_upload_resource(charm_name: str, resource_name: str, image_ref: str, root: Path) -> int:
     """Call charmcraft upload-resource and return the revision number."""
     cmd = _build_upload_resource_cmd(charm_name, resource_name, image_ref)
-    result = run_command(cmd, cwd=str(root), stream=False)
+    result = run_command(
+        cmd,
+        cwd=str(root),
+        stream=False,
+        env={"CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS": "1"},
+    )
     revision = _parse_revision(result.stdout, cmd)
     status(f"Uploaded resource '{resource_name}' → revision {revision}")
     return revision
@@ -620,7 +625,13 @@ def _upload_charm_no_release(
 
     cmd = ["charmcraft", "upload", charm_abs, "--format=json"]
     with with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir):
-        result = run_command(cmd, cwd=str(pack_dir), stream=False, check=False)
+        result = run_command(
+            cmd,
+            cwd=str(pack_dir),
+            stream=False,
+            check=False,
+            env={"CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS": "1"},
+        )
 
     if result.returncode != 0:
         dup_revision = _parse_duplicate_revision(result.stdout)
