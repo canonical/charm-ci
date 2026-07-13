@@ -254,6 +254,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # COUPLING: this jq regex mirrors the job-name format "Build {type} {name} ({arch})"
+          # produced by build-artifacts.yml.  The Python equivalent is
+          # _check_build_jobs_conclusion() in src/opcli/core/artifacts.py.
+          # If the job naming convention changes, update both places.
           conclusion=$(gh run view "${{ github.run_id }}" \
             --repo "${{ github.repository }}" \
             --json jobs \

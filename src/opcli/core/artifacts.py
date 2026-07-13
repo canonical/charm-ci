@@ -12,6 +12,7 @@
 import glob as globmod
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -1940,7 +1941,7 @@ def _gh_download_with_wait(  # noqa: PLR0913
         {_artifact_name_to_build_job_name(artifact_name)} if artifact_name else set()
     )
     deadline = time.monotonic() + wait_timeout
-    max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
+    max_attempts = max(1, math.ceil(wait_timeout / _WAIT_SLEEP_SECONDS))
     last_exc: SubprocessError | None = None
     for attempt in range(1, max_attempts + 1):
         if attempt > 1 and time.monotonic() >= deadline:
@@ -2031,7 +2032,7 @@ def _gh_download_all_partials_with_wait(  # noqa: PLR0913, C901
     # _check_build_jobs_conclusion) don't silently extend the effective wait beyond
     # wait_timeout.  max_attempts caps the loop as a safety valve.
     deadline = time.monotonic() + wait_timeout
-    max_attempts = max(1, wait_timeout // _WAIT_SLEEP_SECONDS)
+    max_attempts = max(1, math.ceil(wait_timeout / _WAIT_SLEEP_SECONDS))
     last_exc: SubprocessError | None = None
     for attempt in range(1, max_attempts + 1):
         # Short-circuit once the wall-clock budget is spent (only after at
