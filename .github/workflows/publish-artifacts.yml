@@ -151,6 +151,7 @@ jobs:
 
           opcli artifacts fetch \
             --run-id "${{ needs.resolve-run.outputs.run-id }}" \
+            --arch all \
             --wait
 
       - name: Add version file to charms

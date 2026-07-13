@@ -90,21 +90,12 @@ jobs:
             sudo ip6tables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
           fi
 
-      # --wait polls until artifacts-build appears (build may still be running).
-      # Bail out early if the build has already failed.
+      # --wait polls until the runner-arch partial build manifests appear (build may still be running).
+      # Auto-detection picks up the current runner's arch (amd64 on ubuntu-latest).
       - name: Fetch CI artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Check if the build's Collect step already failed
-          conclusion=$(gh run view "${{ github.run_id }}" \
-            --repo "${{ github.repository }}" \
-            --json jobs \
-            --jq '.jobs[] | select(.name | contains("Collect artifacts")) | .conclusion' || true)
-          if [[ "$conclusion" =~ ^(skipped|failure|cancelled)$ ]]; then
-            echo "::error::Build failed — 'Collect artifacts' conclusion is '$conclusion'."
-            exit 1
-          fi
           opcli artifacts fetch \
             --run-id "${{ github.run_id }}" \
             --repo "${{ github.repository }}" \

@@ -168,6 +168,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Compute artifact fetch timeout
+        run: |
+          # GHA expressions don't support arithmetic — compute in shell instead.
+          # See build-artifacts.yml for the same pattern.
+          echo "OPCLI_FETCH_WAIT_TIMEOUT=$(( ${{ inputs.build-timeout-minutes }} * 60 + 600 ))" >> "$GITHUB_ENV"
+
       - name: Set up tmate session (self-hosted)
         if: runner.debug == 1 && runner.environment == 'self-hosted'
         uses: canonical/action-tmate@main
@@ -235,20 +241,35 @@ jobs:
 
       # ── Early bail-out if the build already failed ─────────────────────────
       # The test job starts without waiting for the build (by design — provisioning
-      # runs in parallel).  However, if the build has already failed by the time we
-      # reach this point, there is no reason to continue.  The "Collect artifacts"
-      # job in the build workflow is skipped/failed/cancelled when a build fails,
-      # so we use its conclusion as the signal.
+      # runs in parallel).  However, if a build job has already failed by the time
+      # we reach this point, there is no reason to continue.
+      # We check individual build job conclusions (not the overall run conclusion).
+      # The overall run conclusion stays null while any job is running, so it
+      # cannot signal build failure while the test VM is still executing.
+      # Build jobs are named "Build {type} {name} ({arch})" per build-artifacts.yml,
+      # but when build-artifacts.yml is called as a nested reusable workflow GitHub
+      # prefixes names with the caller chain (e.g. "integration-test / build / Build ..."),
+      # so we match by regex instead of startswith.
       - name: Abort if build failed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # COUPLING: this jq regex mirrors the job-name format "Build {type} {name} ({arch})"
+          # produced by build-artifacts.yml.  The Python equivalent is
+          # _check_build_jobs_conclusion() in src/opcli/core/artifacts.py.
+          # If the job naming convention changes, update both places.
           conclusion=$(gh run view "${{ github.run_id }}" \
             --repo "${{ github.repository }}" \
             --json jobs \
-            --jq '.jobs[] | select(.name | contains("Collect artifacts")) | .conclusion')
-          if [[ "$conclusion" =~ ^(skipped|failure|cancelled)$ ]]; then
-            echo "::error::Build failed — 'Collect artifacts' job conclusion is '$conclusion'. Skipping test."
+            --jq '
+              [.jobs[] | select(.name | test("(?:^|/ )Build (?:charm|rock|snap) .+ \\(")) | .conclusion] |
+              if any(. == "failure") then "failure"
+              elif any(. == "cancelled") then "cancelled"
+              else empty
+              end
+            ')
+          if [[ "$conclusion" =~ ^(failure|cancelled)$ ]]; then
+            echo "::error::Build failed — build job conclusion is '$conclusion'. Skipping test."
             exit 1
           fi
 

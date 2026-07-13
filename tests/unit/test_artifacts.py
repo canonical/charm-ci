@@ -1596,8 +1596,9 @@ class TestArtifactsLocalize:
 
 
 class TestArtifactsFetch:
-    """Tests for artifacts_fetch()."""
+    """Tests for artifacts_fetch(arch="all") — all-architectures path."""
 
+    # Merged artifacts.build.yaml — matches the union of _PARTIAL_FILES below.
     _GENERATED_CI = (
         "version: 1\n"
         "rocks:\n"
@@ -1628,6 +1629,73 @@ class TestArtifactsFetch:
         "    run-id: '99887766'\n"
     )
 
+    # artifacts.yaml for all four artifact types above (default platform = amd64).
+    _PLAN_YAML: ClassVar[str] = (
+        "version: 1\n"
+        "rocks:\n"
+        "- name: my-rock\n"
+        "  rockcraft-yaml: rock/rockcraft.yaml\n"
+        "charms:\n"
+        "- name: my-charm\n"
+        "  charmcraft-yaml: charmcraft.yaml\n"
+        "- name: other-charm\n"
+        "  charmcraft-yaml: other/charmcraft.yaml\n"
+        "snaps:\n"
+        "- name: my-snap\n"
+        "  snapcraft-yaml: snap/snapcraft.yaml\n"
+    )
+
+    # One partial per artifact; their union equals _GENERATED_CI.
+    _PARTIAL_FILES: ClassVar[dict[str, str]] = {
+        "artifacts-build-rock-my-rock-amd64": (
+            "version: 1\n"
+            "rocks:\n"
+            "- name: my-rock\n"
+            "  rockcraft-yaml: rock/rockcraft.yaml\n"
+            "  builds:\n"
+            "  - arch: amd64\n"
+            "    image: ghcr.io/owner/repo/my-rock:abc1234-amd64\n"
+            "charms: []\n"
+            "snaps: []\n"
+        ),
+        "artifacts-build-charm-my-charm-amd64": (
+            "version: 1\n"
+            "rocks: []\n"
+            "charms:\n"
+            "- name: my-charm\n"
+            "  charmcraft-yaml: charmcraft.yaml\n"
+            "  builds:\n"
+            "  - arch: amd64\n"
+            "    artifact: built-charm-my-charm-amd64\n"
+            "    run-id: '99887766'\n"
+            "snaps: []\n"
+        ),
+        "artifacts-build-charm-other-charm-amd64": (
+            "version: 1\n"
+            "rocks: []\n"
+            "charms:\n"
+            "- name: other-charm\n"
+            "  charmcraft-yaml: other/charmcraft.yaml\n"
+            "  builds:\n"
+            "  - arch: amd64\n"
+            "    artifact: built-charm-other-charm-amd64\n"
+            "    run-id: '99887766'\n"
+            "snaps: []\n"
+        ),
+        "artifacts-build-snap-my-snap-amd64": (
+            "version: 1\n"
+            "rocks: []\n"
+            "charms: []\n"
+            "snaps:\n"
+            "- name: my-snap\n"
+            "  snapcraft-yaml: snap/snapcraft.yaml\n"
+            "  builds:\n"
+            "  - arch: amd64\n"
+            "    artifact: built-snap-my-snap-amd64\n"
+            "    run-id: '99887766'\n"
+        ),
+    }
+
     _GH_RESULT = SubprocessResult(stdout="", stderr="", returncode=0)
     _GIT_RESULT = SubprocessResult(
         stdout="https://github.com/owner/my-repo.git\n",
@@ -1635,13 +1703,17 @@ class TestArtifactsFetch:
         returncode=0,
     )
 
+    def _write_plan(self, tmp_path: Path) -> None:
+        """Write artifacts.yaml so _artifacts_fetch_all_arches can load it."""
+        write_file(tmp_path / "artifacts.yaml", self._PLAN_YAML)
+
     def _make_charm_files(self, tmp_path: Path) -> None:
         """Create dummy .charm files so localize succeeds."""
         d1 = tmp_path / "built-charm-my-charm-amd64"
-        d1.mkdir()
+        d1.mkdir(exist_ok=True)
         (d1 / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
         d2 = tmp_path / "built-charm-other-charm-amd64"
-        d2.mkdir()
+        d2.mkdir(exist_ok=True)
         (d2 / "other-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
 
     def _make_snap_files(self, tmp_path: Path) -> None:
@@ -1650,19 +1722,53 @@ class TestArtifactsFetch:
         d.mkdir(exist_ok=True)
         (d / "my-snap_amd64.snap").write_bytes(b"")
 
+    def _make_side_effect(
+        self,
+        tmp_path: Path,
+        results: list[SubprocessResult | BaseException] | None = None,
+    ) -> object:
+        """Return a ``run_command`` side-effect for all-arches fetch tests.
+
+        When a ``--pattern`` call succeeds it creates all expected partial files
+        under ``partial-artifacts-fetch/`` so that ``rglob`` finds them.
+        If *results* is provided the values are consumed in order; otherwise
+        every call returns ``_GH_RESULT``.
+        """
+        idx = [0]
+
+        def side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
+            if results is None:
+                r: SubprocessResult | BaseException = self._GH_RESULT
+            else:
+                r = results[idx[0]]
+                idx[0] += 1
+            if isinstance(r, BaseException):
+                raise r
+            if "--pattern" in cmd:
+                dir_idx = cmd.index("--dir") + 1
+                partial_dir = Path(cmd[dir_idx])
+                for name, content in self._PARTIAL_FILES.items():
+                    d = partial_dir / name
+                    d.mkdir(parents=True, exist_ok=True)
+                    write_file(d / "artifacts.build.yaml", content)
+            return r
+
+        return side_effect
+
     def test_downloads_generated_and_charm_artifacts(self, tmp_path: Path) -> None:
-        """Downloads artifacts-build + each charm/snap artifact, then localises."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        """Downloads all partials via --pattern + each charm/snap archive, then localises."""
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
         patch_target = "opcli.core.artifacts.run_command"
-        with patch(patch_target, return_value=self._GH_RESULT) as mock_run:
-            result = artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo")
+        with patch(patch_target, side_effect=self._make_side_effect(tmp_path)) as mock_run:
+            result = artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", arch="all")
 
         assert result == tmp_path / "artifacts.build.yaml"
         calls = mock_run.call_args_list
-        # First call: download artifacts-build
+        # First call: download all partial manifests via pattern
+        partial_dir = tmp_path / "partial-artifacts-fetch"
         assert calls[0] == call(
             [
                 "gh",
@@ -1671,15 +1777,15 @@ class TestArtifactsFetch:
                 "99887766",
                 "--repo",
                 "owner/my-repo",
-                "--name",
-                "artifacts-build",
+                "--pattern",
+                "artifacts-build-*",
                 "--dir",
-                str(tmp_path),
+                str(partial_dir),
             ],
             cwd=str(tmp_path),
         )
-        # Subsequent calls: one per charm/snap artifact (rocks are skipped)
-        artifact_names = {c.args[0][7] for c in calls[1:]}
+        # Subsequent calls: one per charm/snap archive (rocks have image refs, not artifacts)
+        artifact_names = {c.args[0][c.args[0].index("--name") + 1] for c in calls[1:]}
         assert artifact_names == {
             "built-charm-my-charm-amd64",
             "built-charm-other-charm-amd64",
@@ -1687,31 +1793,33 @@ class TestArtifactsFetch:
         }
 
     def test_skips_rocks_no_download(self, tmp_path: Path) -> None:
-        """Rock OCI images are not downloaded — only the initial yaml + charms/snaps."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        """Rock OCI images are not downloaded — only pattern + charms/snaps."""
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
-        # 1 artifacts-build + 2 charms + 1 snap = 4; no rock download
+        # 1 pattern download + 2 charms + 1 snap = 4; no rock archive download
         expected_calls = 4
         patch_target = "opcli.core.artifacts.run_command"
-        with patch(patch_target, return_value=self._GH_RESULT) as mock_run:
-            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo")
+        with patch(patch_target, side_effect=self._make_side_effect(tmp_path)) as mock_run:
+            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", arch="all")
 
         assert mock_run.call_count == expected_calls
 
     def test_infers_repo_from_git_remote(self, tmp_path: Path) -> None:
         """Infers owner/repo from git remote when --repo is not given."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
-        # git + artifacts-build + 2 charms + 1 snap = 5 calls
+        # git + pattern + 2 charms + 1 snap = 5 calls
         gh = self._GH_RESULT
-        results = [self._GIT_RESULT, gh, gh, gh, gh]
+        results: list[SubprocessResult | BaseException] = [self._GIT_RESULT, gh, gh, gh, gh]
         patch_target = "opcli.core.artifacts.run_command"
-        with patch(patch_target, side_effect=results) as mock_run:
-            artifacts_fetch(tmp_path, run_id="99887766")
+        with patch(
+            patch_target, side_effect=self._make_side_effect(tmp_path, results)
+        ) as mock_run:
+            artifacts_fetch(tmp_path, run_id="99887766", arch="all")
 
         # First call is git remote get-url
         git_call = mock_run.call_args_list[0]
@@ -1723,7 +1831,7 @@ class TestArtifactsFetch:
 
     def test_infers_repo_from_ssh_remote(self, tmp_path: Path) -> None:
         """Parses SSH-format git remote URLs (git@github.com:owner/repo.git)."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1731,13 +1839,16 @@ class TestArtifactsFetch:
             stdout="git@github.com:owner/my-repo.git\n", stderr="", returncode=0
         )
         gh = self._GH_RESULT
-        results = [ssh_result, gh, gh, gh, gh]
-        with patch("opcli.core.artifacts.run_command", side_effect=results):
-            artifacts_fetch(tmp_path, run_id="99887766")
+        results: list[SubprocessResult | BaseException] = [ssh_result, gh, gh, gh, gh]
+        with patch(
+            "opcli.core.artifacts.run_command",
+            side_effect=self._make_side_effect(tmp_path, results),
+        ):
+            artifacts_fetch(tmp_path, run_id="99887766", arch="all")
 
     def test_infers_repo_strips_trailing_slash(self, tmp_path: Path) -> None:
         """Strips trailing slash from git remote URLs like https://github.com/o/r/."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1745,9 +1856,12 @@ class TestArtifactsFetch:
             stdout="https://github.com/owner/my-repo/\n", stderr="", returncode=0
         )
         gh = self._GH_RESULT
-        results = [trailing_slash, gh, gh, gh, gh]
-        with patch("opcli.core.artifacts.run_command", side_effect=results) as mock_run:
-            artifacts_fetch(tmp_path, run_id="99887766")
+        results: list[SubprocessResult | BaseException] = [trailing_slash, gh, gh, gh, gh]
+        with patch(
+            "opcli.core.artifacts.run_command",
+            side_effect=self._make_side_effect(tmp_path, results),
+        ) as mock_run:
+            artifacts_fetch(tmp_path, run_id="99887766", arch="all")
 
         for c in mock_run.call_args_list[1:]:
             repo_val = c.args[0][c.args[0].index("--repo") + 1]
@@ -1763,16 +1877,18 @@ class TestArtifactsFetch:
             patch("opcli.core.artifacts.run_command", return_value=non_github),
             pytest.raises(ConfigurationError, match="--repo"),
         ):
-            artifacts_fetch(tmp_path, run_id="99887766")
+            artifacts_fetch(tmp_path, run_id="99887766", arch="all")
 
     def test_localises_after_download(self, tmp_path: Path) -> None:
         """artifacts.build.yaml is updated with local file paths after fetch."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
-        with patch("opcli.core.artifacts.run_command", return_value=self._GH_RESULT):
-            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo")
+        with patch(
+            "opcli.core.artifacts.run_command", side_effect=self._make_side_effect(tmp_path)
+        ):
+            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", arch="all")
 
         gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
         for charm in gen.charms:
@@ -1784,188 +1900,373 @@ class TestArtifactsFetch:
             assert snap.builds[0].file.endswith(".snap")
 
     def test_wait_retries_until_artifact_appears(self, tmp_path: Path) -> None:
-        """With wait=True, retries the initial download and succeeds on 2nd attempt."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        """With wait=True, retries the pattern download and succeeds on 2nd attempt."""
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
         not_ready = SubprocessError(["gh"], 1, "artifact not found")
-        # First call fails (not ready), second succeeds, rest succeed
+        # First pattern call fails (not ready), second succeeds + creates partials, then archives
         gh = self._GH_RESULT
-        results = [not_ready, gh, gh, gh, gh]
+        results: list[SubprocessResult | BaseException] = [not_ready, gh, gh, gh, gh]
         with (
-            patch("opcli.core.artifacts.run_command", side_effect=results),
-            patch("opcli.core.artifacts._check_collect_job_conclusion", return_value=None),
+            patch(
+                "opcli.core.artifacts.run_command",
+                side_effect=self._make_side_effect(tmp_path, results),
+            ),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
             patch("opcli.core.artifacts.time.sleep"),
         ):
-            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", wait=True)
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
 
     def test_wait_false_does_not_retry(self, tmp_path: Path) -> None:
         """Without wait=True, a failed download raises immediately (no retry)."""
+        self._write_plan(tmp_path)
         not_ready = SubprocessError(["gh"], 1, "artifact not found")
         with (
             patch("opcli.core.artifacts.run_command", side_effect=not_ready),
             pytest.raises(SubprocessError),
         ):
-            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", wait=False)
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=False, arch="all"
+            )
 
     def test_wait_fails_fast_on_auth_error(self, tmp_path: Path) -> None:
         """With wait=True, fails immediately on authentication errors (no sleep)."""
+        self._write_plan(tmp_path)
         auth_error = SubprocessError(["gh"], 1, "HTTP 401 Unauthorized: bad credentials")
         with (
             patch("opcli.core.artifacts.run_command", side_effect=auth_error),
             patch("opcli.core.artifacts.time.sleep") as mock_sleep,
             pytest.raises(ConfigurationError, match="Authentication"),
         ):
-            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", wait=True)
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
 
         mock_sleep.assert_not_called()
-
-    def test_file_exists_deletes_and_retries(self, tmp_path: Path) -> None:
-        """When gh reports 'file exists', the file is deleted and download retried."""
-        # Use a rocks-only yaml: no charm/snap downloads follow, so run_command
-        # is called exactly twice (fail + retry).
-        rocks_only = (
-            "version: 1\n"
-            "rocks:\n"
-            "- name: my-rock\n"
-            "  rockcraft-yaml: rock/rockcraft.yaml\n"
-            "  builds:\n"
-            "  - arch: amd64\n"
-            "    image: ghcr.io/owner/repo/my-rock:abc1234\n"
-        )
-        write_file(tmp_path / "artifacts.build.yaml", rocks_only)
-        file_exists_error = SubprocessError(
-            ["gh"],
-            1,
-            'error extracting "artifacts.build.yaml": open ...: file exists',
-        )
-        gh = self._GH_RESULT
-        call_count = 0
-
-        def side_effect(cmd: list[str], cwd: str | None = None) -> object:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise file_exists_error
-            write_file(tmp_path / "artifacts.build.yaml", rocks_only)
-            return gh
-
-        with patch("opcli.core.artifacts.run_command", side_effect=side_effect):
-            result = artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo")
-
-        assert result == tmp_path / "artifacts.build.yaml"
-        expected_calls = 2
-        assert call_count == expected_calls
-
-    def test_wait_file_exists_deletes_and_retries(self, tmp_path: Path) -> None:
-        """With wait=True, 'file exists' triggers delete-and-retry (no sleep)."""
-        rocks_only = (
-            "version: 1\n"
-            "rocks:\n"
-            "- name: my-rock\n"
-            "  rockcraft-yaml: rock/rockcraft.yaml\n"
-            "  builds:\n"
-            "  - arch: amd64\n"
-            "    image: ghcr.io/owner/repo/my-rock:abc1234\n"
-        )
-        write_file(tmp_path / "artifacts.build.yaml", rocks_only)
-        file_exists_error = SubprocessError(
-            ["gh"],
-            1,
-            'error extracting "artifacts.build.yaml": open ...: file exists',
-        )
-        gh = self._GH_RESULT
-        call_count = 0
-
-        def side_effect(cmd: list[str], cwd: str | None = None) -> object:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise file_exists_error
-            write_file(tmp_path / "artifacts.build.yaml", rocks_only)
-            return gh
-
-        with (
-            patch("opcli.core.artifacts.run_command", side_effect=side_effect),
-            patch("opcli.core.artifacts.time.sleep") as mock_sleep,
-        ):
-            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", wait=True)
-
-        mock_sleep.assert_not_called()
-        expected_calls = 2
-        assert call_count == expected_calls
 
     def test_wait_times_out_with_last_error(self, tmp_path: Path) -> None:
         """With wait=True, raises ConfigurationError after exhausting all attempts."""
+        self._write_plan(tmp_path)
         not_ready = SubprocessError(["gh"], 1, "no artifact named X in run")
-        _orig = _artifacts_mod._WAIT_MAX_ATTEMPTS
-        try:
-            _artifacts_mod._WAIT_MAX_ATTEMPTS = 2  # speed up the test
-            with (
-                patch("opcli.core.artifacts.run_command", side_effect=not_ready),
-                patch(
-                    "opcli.core.artifacts._check_collect_job_conclusion",
-                    return_value=None,
-                ),
-                patch("opcli.core.artifacts.time.sleep"),
-                pytest.raises(ConfigurationError, match="Timed out"),
-            ):
-                artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", wait=True)
-        finally:
-            _artifacts_mod._WAIT_MAX_ATTEMPTS = _orig
+        # 2 * _WAIT_SLEEP_SECONDS gives exactly 2 attempts (max = timeout // sleep).
+        two_attempt_timeout = _artifacts_mod._WAIT_SLEEP_SECONDS * 2
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=not_ready),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
+            patch("opcli.core.artifacts.time.sleep"),
+            pytest.raises(ConfigurationError, match="Timed out"),
+        ):
+            artifacts_fetch(
+                tmp_path,
+                run_id="99887766",
+                repo="owner/my-repo",
+                wait=True,
+                wait_timeout=two_attempt_timeout,
+                arch="all",
+            )
 
-    @pytest.mark.parametrize("conclusion", ["skipped", "failure", "cancelled"])
-    def test_wait_fails_fast_on_terminal_collect_conclusion(
+    @pytest.mark.parametrize("conclusion", ["failure", "cancelled"])
+    def test_wait_fails_fast_on_terminal_run_conclusion(
         self, tmp_path: Path, conclusion: str
     ) -> None:
-        """With wait=True, bails immediately on a terminal collect job conclusion."""
+        """With wait=True, bails immediately when the run itself has a terminal conclusion."""
+        self._write_plan(tmp_path)
         not_ready = SubprocessError(["gh"], 1, "artifact not found")
         with (
             patch("opcli.core.artifacts.run_command", side_effect=not_ready),
             patch(
-                "opcli.core.artifacts._check_collect_job_conclusion",
+                "opcli.core.artifacts._check_build_jobs_conclusion",
                 return_value=conclusion,
             ),
             patch("opcli.core.artifacts.time.sleep") as mock_sleep,
             pytest.raises(ConfigurationError, match=conclusion),
         ):
-            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", wait=True)
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
 
         mock_sleep.assert_not_called()
 
-    def test_wait_continues_when_collect_job_still_running(self, tmp_path: Path) -> None:
-        """With wait=True, keeps retrying when collect job conclusion is None."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+    def test_wait_bails_on_success_conclusion_with_missing_partials_all_arch(
+        self, tmp_path: Path
+    ) -> None:
+        """With arch=all + wait, raises 'skipped' after one final re-download when run='success' but partials missing.
+
+        When all build jobs succeed but partials are still missing, the loop
+        performs one final re-download to close the download↔conclusion race
+        window.  If partials are still missing after that re-download the
+        error is a genuine missing artifact (skipped matrix job), not a race.
+        """
+        self._write_plan(tmp_path)
+
+        download_call_count = 0
+
+        def partial_side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
+            """Both download attempts return only 1 of 4 expected partials (genuinely missing)."""
+            nonlocal download_call_count
+            if "--pattern" in cmd:
+                download_call_count += 1
+                dir_idx = cmd.index("--dir") + 1
+                partial_dir = Path(cmd[dir_idx])
+                # Write only the rock partial; 3 charm/snap partials remain missing
+                name = "artifacts-build-rock-my-rock-amd64"
+                d = partial_dir / name
+                d.mkdir(parents=True, exist_ok=True)
+                write_file(
+                    d / "artifacts.build.yaml",
+                    self._PARTIAL_FILES["artifacts-build-rock-my-rock-amd64"],
+                )
+            return self._GH_RESULT
+
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=partial_side_effect),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value="success"),
+            patch("opcli.core.artifacts.time.sleep") as mock_sleep,
+            pytest.raises(ConfigurationError, match="skipped"),
+        ):
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
+
+        # Two --pattern downloads: initial attempt + one re-download to close the race
+        assert download_call_count == 2  # noqa: PLR2004
+        mock_sleep.assert_not_called()
+
+    def test_wait_success_race_closes_on_redownload_all_arch(self, tmp_path: Path) -> None:
+        """Race closed: first download misses a partial, re-download after success conclusion gets it.
+
+        Simulates the download↔conclusion race: the first --pattern download
+        misses one partial (upload happened after enumeration), but by the time
+        of the re-download all partials are present.  The fetch should succeed
+        without raising 'skipped'.
+        """
+        self._write_plan(tmp_path)
+        self._make_charm_files(tmp_path)
+        self._make_snap_files(tmp_path)
+
+        download_call_count = 0
+
+        def race_side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
+            nonlocal download_call_count
+            if "--pattern" in cmd:
+                download_call_count += 1
+                dir_idx = cmd.index("--dir") + 1
+                partial_dir = Path(cmd[dir_idx])
+                # First attempt: missing the rock partial (simulates race — upload
+                # completed after this download enumerated the artifact list)
+                # Second attempt (re-download): all partials present
+                names_to_write = list(self._PARTIAL_FILES.keys())
+                if download_call_count == 1:
+                    names_to_write = [n for n in names_to_write if "rock" not in n]
+                for name in names_to_write:
+                    d = partial_dir / name
+                    d.mkdir(parents=True, exist_ok=True)
+                    write_file(d / "artifacts.build.yaml", self._PARTIAL_FILES[name])
+            elif "--name" in cmd:
+                dir_idx = cmd.index("--dir") + 1
+                archive_dir = Path(cmd[dir_idx])
+                archive_dir.mkdir(parents=True, exist_ok=True)
+            return self._GH_RESULT
+
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=race_side_effect),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value="success"),
+            patch("opcli.core.artifacts.time.sleep") as mock_sleep,
+        ):
+            result = artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
+
+        assert result == tmp_path / "artifacts.build.yaml"
+        assert download_call_count == 2  # noqa: PLR2004
+        mock_sleep.assert_not_called()
+
+    def test_wait_fails_fast_on_success_conclusion_with_missing_artifact_single_arch(
+        self, tmp_path: Path
+    ) -> None:
+        """With single arch + wait, fast-fails when build job='success' but artifact never uploaded.
+
+        If the build job concluded 'success' but the artifact still cannot be
+        downloaded after a re-download attempt, the matrix job was skipped or
+        the upload step failed.  We fast-fail with a clear message instead of
+        waiting out the full timeout.
+        """
+        self._write_plan(tmp_path)
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+        with (
+            patch("opcli.core.artifacts._gh_download", side_effect=not_ready),
+            patch("opcli.core.artifacts._run_gh_download", side_effect=not_ready),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value="success"),
+            patch("opcli.core.artifacts.time.sleep"),
+            patch("opcli.core.artifacts.time.monotonic", side_effect=[0.0] * 200),
+            pytest.raises(ConfigurationError, match="never uploaded"),
+        ):
+            artifacts_fetch(
+                tmp_path,
+                run_id="99887766",
+                repo="owner/my-repo",
+                wait=True,
+                arch="amd64",
+                wait_timeout=60,
+            )
+
+    def test_wait_success_race_closes_on_redownload_single_arch(self, tmp_path: Path) -> None:
+        """Race closed on single-arch: first download fails, re-download after 'success' succeeds.
+
+        When the build job concludes 'success' but the first download attempt failed
+        (transient or race window), one re-download attempt is made.  If that succeeds,
+        ``_gh_download_with_wait`` returns without error.
+        """
+        run_gh_call_count = 0
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+
+        def run_gh_side_effect(cmd: list[str], cwd: str, dest: Path | None = None) -> None:
+            nonlocal run_gh_call_count
+            run_gh_call_count += 1
+            if run_gh_call_count == 1:
+                raise not_ready
+            # Re-download succeeds (no exception)
+
+        cmd = [
+            "gh",
+            "run",
+            "download",
+            "--name",
+            "artifacts-build-charm-my-charm-amd64",
+            "--dir",
+            str(tmp_path),
+        ]
+        with (
+            patch("opcli.core.artifacts._run_gh_download", side_effect=run_gh_side_effect),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value="success"),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            # Should return without error — race closed on re-download
+            _artifacts_mod._gh_download_with_wait(
+                cmd,
+                str(tmp_path),
+                run_id="99887766",
+                repo="owner/my-repo",
+                artifact_name="artifacts-build-charm-my-charm-amd64",
+                wait_timeout=60,
+            )
+
+        assert run_gh_call_count == 2  # noqa: PLR2004
+
+    def test_wait_success_conclusion_with_transient_single_arch_failure_retries(
+        self, tmp_path: Path
+    ) -> None:
+        """Transient download failure on single-arch path retries and succeeds on second attempt."""
+        self._write_plan(tmp_path)
+        self._make_charm_files(tmp_path)
+        self._make_snap_files(tmp_path)
+
+        not_ready = SubprocessError(["gh"], 1, "network error")
+
+        call_count = 0
+
+        def single_arch_side_effect(cmd: list[str], **kw: object) -> SubprocessResult:
+            nonlocal call_count
+            call_count += 1
+            if "--pattern" not in cmd and "--name" not in cmd:
+                return self._GH_RESULT
+            if "--pattern" in cmd and call_count == 1:
+                raise not_ready
+            # Second call: write partials correctly
+            if "--pattern" in cmd:
+                dir_idx = cmd.index("--dir") + 1
+                partial_dir = Path(cmd[dir_idx])
+                for name, content in self._PARTIAL_FILES.items():
+                    d = partial_dir / name
+                    d.mkdir(parents=True, exist_ok=True)
+                    write_file(d / "artifacts.build.yaml", content)
+            elif "--name" in cmd:
+                dir_idx = cmd.index("--dir") + 1
+                archive_dir = Path(cmd[dir_idx])
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                for fname in [
+                    "my-charm_ubuntu-24.04-amd64.charm",
+                    "my-snap_amd64.snap",
+                ]:
+                    (archive_dir / fname).write_bytes(b"")
+            return self._GH_RESULT
+
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=single_arch_side_effect),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value="success"),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
+
+    def test_wait_success_conclusion_with_transient_download_failure_retries(
+        self, tmp_path: Path
+    ) -> None:
+        """Transient download failure when run='success' retries rather than raising 'skipped'."""
+        self._write_plan(tmp_path)
+        self._make_charm_files(tmp_path)
+        self._make_snap_files(tmp_path)
+
+        not_ready = SubprocessError(["gh"], 1, "network error")
+        gh = self._GH_RESULT
+        # Attempt 1: run_command fails (transient) + conclusion is "success"
+        # Attempt 2: run_command succeeds + all partials present
+        results: list[SubprocessResult | BaseException] = [not_ready, gh, gh, gh, gh]
+        with (
+            patch(
+                "opcli.core.artifacts.run_command",
+                side_effect=self._make_side_effect(tmp_path, results),
+            ),
+            # "success" on first attempt (transient failure) — should not bail
+            patch(
+                "opcli.core.artifacts._check_build_jobs_conclusion",
+                side_effect=["success", None, None],
+            ),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            # Should succeed on second attempt, not raise "skipped"
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
+
+    def test_wait_continues_when_run_still_in_progress(self, tmp_path: Path) -> None:
+        """With wait=True and arch=all, keeps retrying when run conclusion is None (still running)."""
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
         not_ready = SubprocessError(["gh"], 1, "artifact not found")
         gh = self._GH_RESULT
+        results: list[SubprocessResult | BaseException] = [not_ready, gh, gh, gh, gh]
         with (
             patch(
                 "opcli.core.artifacts.run_command",
-                side_effect=[not_ready, gh, gh, gh, gh],
+                side_effect=self._make_side_effect(tmp_path, results),
             ),
             patch(
-                "opcli.core.artifacts._check_collect_job_conclusion",
+                "opcli.core.artifacts._check_build_jobs_conclusion",
                 return_value=None,
             ),
             patch("opcli.core.artifacts.time.sleep"),
         ):
-            artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", wait=True)
+            artifacts_fetch(
+                tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
+            )
 
     def test_wait_timeout_uses_custom_duration(self, tmp_path: Path) -> None:
         """wait_timeout controls how many attempts are made (max = timeout // sleep)."""
         not_ready = SubprocessError(["gh"], 1, "artifact not found")
         sleep_calls: list[object] = []
+        self._write_plan(tmp_path)
 
         with (
             patch("opcli.core.artifacts.run_command", side_effect=not_ready),
-            patch(
-                "opcli.core.artifacts._check_collect_job_conclusion",
-                return_value=None,
-            ),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
             patch(
                 "opcli.core.artifacts.time.sleep",
                 side_effect=sleep_calls.append,
@@ -1979,13 +2280,14 @@ class TestArtifactsFetch:
                 repo="owner/my-repo",
                 wait=True,
                 wait_timeout=60,
+                arch="all",
             )
 
-        assert len(sleep_calls) == 2  # noqa: PLR2004
+        assert len(sleep_calls) == 1  # only between attempts, not after the last one
 
     def test_wait_timeout_implies_wait(self, tmp_path: Path) -> None:
         """Providing wait_timeout without wait=True still enables waiting."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -1993,8 +2295,11 @@ class TestArtifactsFetch:
         gh = self._GH_RESULT
         results = [not_ready, gh, gh, gh, gh]
         with (
-            patch("opcli.core.artifacts.run_command", side_effect=results),
-            patch("opcli.core.artifacts._check_collect_job_conclusion", return_value=None),
+            patch(
+                "opcli.core.artifacts.run_command",
+                side_effect=self._make_side_effect(tmp_path, results),
+            ),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
             patch("opcli.core.artifacts.time.sleep"),
         ):
             # wait=False but wait_timeout is not None → should retry (any value)
@@ -2004,11 +2309,12 @@ class TestArtifactsFetch:
                 repo="owner/my-repo",
                 wait=False,
                 wait_timeout=300,
+                arch="all",
             )
 
     def test_wait_timeout_implies_wait_even_at_default_value(self, tmp_path: Path) -> None:
         """wait_timeout=_DEFAULT_WAIT_TIMEOUT_SECONDS (the default numeric value) still enables waiting."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        self._write_plan(tmp_path)
         self._make_charm_files(tmp_path)
         self._make_snap_files(tmp_path)
 
@@ -2016,8 +2322,11 @@ class TestArtifactsFetch:
         gh = self._GH_RESULT
         results = [not_ready, gh, gh, gh, gh]
         with (
-            patch("opcli.core.artifacts.run_command", side_effect=results),
-            patch("opcli.core.artifacts._check_collect_job_conclusion", return_value=None),
+            patch(
+                "opcli.core.artifacts.run_command",
+                side_effect=self._make_side_effect(tmp_path, results),
+            ),
+            patch("opcli.core.artifacts._check_build_jobs_conclusion", return_value=None),
             patch("opcli.core.artifacts.time.sleep"),
         ):
             # Even passing exactly the default value enables waiting (not None → wait)
@@ -2027,66 +2336,250 @@ class TestArtifactsFetch:
                 repo="owner/my-repo",
                 wait=False,
                 wait_timeout=_artifacts_mod._DEFAULT_WAIT_TIMEOUT_SECONDS,
+                arch="all",
             )
 
 
-class TestCheckCollectJobConclusion:
-    """Unit tests for _check_collect_job_conclusion."""
+class TestCheckBuildJobsConclusion:
+    """Unit tests for _check_build_jobs_conclusion."""
 
-    _GH_JOBS_RESPONSE = json.dumps(
-        {
-            "jobs": [
-                {"name": "Build charm my-charm (amd64)", "conclusion": "success"},
-                {"name": "Collect artifacts", "conclusion": "skipped"},
-            ]
-        }
-    )
+    def _gh_result(self, jobs: list[dict[str, object]]) -> SubprocessResult:
+        return SubprocessResult(stdout=json.dumps({"jobs": jobs}), stderr="", returncode=0)
 
-    def _gh_result(self, stdout: str) -> SubprocessResult:
-        return SubprocessResult(stdout=stdout, stderr="", returncode=0)
+    def _build_job(self, name: str, conclusion: str | None) -> dict[str, object]:
+        return {"name": name, "conclusion": conclusion}
 
-    def test_returns_conclusion_when_job_found(self) -> None:
-        result = SubprocessResult(stdout=self._GH_JOBS_RESPONSE, stderr="", returncode=0)
-        with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_collect_job_conclusion("123", "owner/repo")
-        assert conclusion == "skipped"
+    @staticmethod
+    def _job_names(*artifact_names: str) -> set[str]:
+        """Derive workflow job names from artifact names for test assertions."""
+        return {_artifacts_mod._artifact_name_to_build_job_name(n) for n in artifact_names}
 
-    def test_matches_with_reusable_workflow_prefix(self) -> None:
-        """Job name 'build / Collect artifacts' is matched as a substring."""
-        data = json.dumps(
-            {"jobs": [{"name": "build / Collect artifacts", "conclusion": "failure"}]}
+    def test_returns_success_when_all_build_jobs_succeed(self) -> None:
+        """Returns 'success' when all Build jobs have succeeded."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build charm my-charm (arm64)", "success"),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
         )
-        result = SubprocessResult(stdout=data, stderr="", returncode=0)
-        with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_collect_job_conclusion("123", "owner/repo")
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "success"
+
+    def test_returns_failure_when_any_build_job_fails(self) -> None:
+        """Returns 'failure' when at least one Build job has failed."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build charm my-charm (arm64)", "failure"),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion == "failure"
 
-    def test_returns_none_when_job_not_found(self) -> None:
-        data = json.dumps({"jobs": [{"name": "Build charm", "conclusion": "success"}]})
-        result = SubprocessResult(stdout=data, stderr="", returncode=0)
-        with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_collect_job_conclusion("123", "owner/repo")
+    def test_returns_cancelled_when_build_job_cancelled_no_failure(self) -> None:
+        """Returns 'cancelled' when a Build job is cancelled and none failed."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build charm my-charm (arm64)", "cancelled"),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "cancelled"
+
+    def test_failure_takes_priority_over_cancelled(self) -> None:
+        """'failure' takes priority over 'cancelled'."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "failure"),
+            self._build_job("Build charm my-charm (arm64)", "cancelled"),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "failure"
+
+    def test_returns_none_when_build_job_still_running(self) -> None:
+        """Returns None when at least one Build job is still running (conclusion null)."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build charm my-charm (arm64)", None),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion is None
 
-    def test_returns_none_when_conclusion_is_null(self) -> None:
-        """Job still running — conclusion is null in JSON."""
-        data = json.dumps({"jobs": [{"name": "Collect artifacts", "conclusion": None}]})
-        result = SubprocessResult(stdout=data, stderr="", returncode=0)
-        with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_collect_job_conclusion("123", "owner/repo")
+    def test_ignores_non_build_jobs(self) -> None:
+        """Jobs not in expected_job_names are excluded — no regex needed."""
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            self._build_job("Build matrix", "success"),  # excluded — not in expected set
+            self._build_job("Test integration", "failure"),  # excluded — not in expected set
+        ]
+        expected = self._job_names("artifacts-build-charm-my-charm-amd64")
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "success"
+
+    def test_returns_none_when_no_build_jobs_found(self) -> None:
+        """Returns None when none of the expected jobs appear in the response yet."""
+        jobs = [
+            self._build_job("Build matrix", "success"),
+            self._build_job("Test integration", None),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion is None
 
     def test_returns_none_when_gh_command_fails(self) -> None:
+        """Returns None if the gh API call fails (don't know yet — keep retrying)."""
         error = SubprocessError(["gh"], 1, "API error")
+        expected = self._job_names("artifacts-build-charm-my-charm-amd64")
         with patch("opcli.core.artifacts.run_command", side_effect=error):
-            conclusion = _artifacts_mod._check_collect_job_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion is None
 
     def test_returns_none_on_invalid_json(self) -> None:
+        """Returns None if gh returns non-JSON output."""
         result = SubprocessResult(stdout="not-json", stderr="", returncode=0)
+        expected = self._job_names("artifacts-build-charm-my-charm-amd64")
         with patch("opcli.core.artifacts.run_command", return_value=result):
-            conclusion = _artifacts_mod._check_collect_job_conclusion("123", "owner/repo")
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
         assert conclusion is None
+
+    def test_uses_correct_gh_command(self) -> None:
+        """Calls gh run view with --json jobs."""
+        jobs = [self._build_job("Build charm x (amd64)", "success")]
+        expected = self._job_names("artifacts-build-charm-x-amd64")
+        with patch(
+            "opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)
+        ) as mock_run:
+            _artifacts_mod._check_build_jobs_conclusion("456", "owner/myrepo", expected)
+        cmd = mock_run.call_args.args[0]
+        assert cmd == [
+            "gh",
+            "run",
+            "view",
+            "456",
+            "--repo",
+            "owner/myrepo",
+            "--json",
+            "jobs",
+        ]
+
+    def test_matches_prefixed_names_from_nested_reusable_workflow(self) -> None:
+        """Matches jobs with caller-chain prefix added by GitHub for nested reusable workflows.
+
+        When build-artifacts.yml is called as a reusable workflow, GitHub
+        prefixes every job name with the caller chain, e.g.:
+          "integration-test / build / Build charm my-charm (amd64)"
+        The bare name must still be found via suffix matching.
+        """
+        jobs = [
+            self._build_job("integration-test / build / Build charm my-charm (amd64)", "success"),
+            self._build_job("integration-test / build / Build rock my-rock (amd64)", "success"),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-rock-my-rock-amd64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "success"
+
+    def test_prefixed_failure_detected(self) -> None:
+        """Failure is detected even when job names carry a reusable-workflow prefix."""
+        jobs = [
+            self._build_job("integration-test / build / Build charm my-charm (amd64)", "success"),
+            self._build_job("integration-test / build / Build charm my-charm (arm64)", "failure"),
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "failure"
+
+    def test_returns_none_when_only_subset_of_expected_jobs_registered(self) -> None:
+        """Returns None if only some expected jobs appear in the API response.
+
+        GitHub may register matrix jobs progressively.  We must not return
+        'success' if one expected job hasn't appeared yet — it might still be
+        running or might fail.
+        """
+        jobs = [
+            self._build_job("Build charm my-charm (amd64)", "success"),
+            # arm64 job not yet registered in API
+        ]
+        expected = self._job_names(
+            "artifacts-build-charm-my-charm-amd64",
+            "artifacts-build-charm-my-charm-arm64",
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion is None
+
+    def test_prefixed_names_excluded_by_expected_set(self) -> None:
+        """Non-build jobs with prefixed names don't pollute results."""
+        jobs = [
+            self._build_job("integration-test / build / Build charm my-charm (amd64)", "success"),
+            self._build_job("integration-test / build / Build matrix", "success"),
+            self._build_job("integration-test / Test integration", "failure"),
+        ]
+        expected = self._job_names("artifacts-build-charm-my-charm-amd64")
+        with patch("opcli.core.artifacts.run_command", return_value=self._gh_result(jobs)):
+            conclusion = _artifacts_mod._check_build_jobs_conclusion("123", "owner/repo", expected)
+        assert conclusion == "success"
+
+    """Unit tests for _artifact_name_to_build_job_name."""
+
+    def test_charm_simple_name(self) -> None:
+        result = _artifacts_mod._artifact_name_to_build_job_name(
+            "artifacts-build-charm-my-charm-amd64"
+        )
+        assert result == "Build charm my-charm (amd64)"
+
+    def test_rock_with_hyphenated_name(self) -> None:
+        result = _artifacts_mod._artifact_name_to_build_job_name(
+            "artifacts-build-rock-my-rock-name-arm64"
+        )
+        assert result == "Build rock my-rock-name (arm64)"
+
+    def test_snap_arm64(self) -> None:
+        result = _artifacts_mod._artifact_name_to_build_job_name(
+            "artifacts-build-snap-my-snap-arm64"
+        )
+        assert result == "Build snap my-snap (arm64)"
+
+    def test_roundtrips_with_workflow_name_format(self) -> None:
+        """Conversion matches the build-artifacts.yml job name format exactly."""
+        # Simulates: matrix.type=charm, matrix.name=operator, matrix.arch=s390x
+        # Job name: "Build charm operator (s390x)"
+        # Artifact name: "artifacts-build-charm-operator-s390x"
+        result = _artifacts_mod._artifact_name_to_build_job_name(
+            "artifacts-build-charm-operator-s390x"
+        )
+        assert result == "Build charm operator (s390x)"
 
 
 class TestSafeArtifactDir:
@@ -2131,3 +2624,279 @@ class TestSafeArtifactDir:
 
         with pytest.raises(ConfigurationError, match="resolves outside"):
             _artifacts_mod._safe_artifact_dir(tmp_path, "innocent-artifact")
+
+
+class TestArtifactsFetchByArch:
+    """Tests for artifacts_fetch() with arch= (arch-filtered mode)."""
+
+    # artifacts.yaml declaring multi-arch builds.
+    _PLAN_YAML = (
+        "version: 1\n"
+        "charms:\n"
+        "- name: my-charm\n"
+        "  charmcraft-yaml: charmcraft.yaml\n"
+        "  platforms:\n"
+        "  - arch: amd64\n"
+        "  - arch: arm64\n"
+        "rocks:\n"
+        "- name: my-rock\n"
+        "  rockcraft-yaml: rock/rockcraft.yaml\n"
+        "  platforms:\n"
+        "  - arch: amd64\n"
+        "  - arch: arm64\n"
+        "snaps: []\n"
+    )
+
+    # Partial manifest for amd64 charm build.
+    _PARTIAL_CHARM_AMD64 = (
+        "version: 1\n"
+        "rocks: []\n"
+        "charms:\n"
+        "- name: my-charm\n"
+        "  charmcraft-yaml: charmcraft.yaml\n"
+        "  builds:\n"
+        "  - arch: amd64\n"
+        "    artifact: built-charm-my-charm-amd64\n"
+        "    run-id: '12345'\n"
+        "snaps: []\n"
+    )
+
+    # Partial manifest for amd64 rock build.
+    _PARTIAL_ROCK_AMD64 = (
+        "version: 1\n"
+        "rocks:\n"
+        "- name: my-rock\n"
+        "  rockcraft-yaml: rock/rockcraft.yaml\n"
+        "  builds:\n"
+        "  - arch: amd64\n"
+        "    image: ghcr.io/owner/repo/my-rock:abc1234-amd64\n"
+        "charms: []\n"
+        "snaps: []\n"
+    )
+
+    _GH_RESULT = SubprocessResult(stdout="", stderr="", returncode=0)
+
+    def _write_plan(self, tmp_path: Path) -> None:
+        write_file(tmp_path / "artifacts.yaml", self._PLAN_YAML)
+
+    def _write_partial_charm(self, tmp_path: Path) -> None:
+        d = tmp_path / "partial-artifacts-fetch" / "artifacts-build-charm-my-charm-amd64"
+        d.mkdir(parents=True, exist_ok=True)
+        write_file(d / "artifacts.build.yaml", self._PARTIAL_CHARM_AMD64)
+
+    def _write_partial_rock(self, tmp_path: Path) -> None:
+        d = tmp_path / "partial-artifacts-fetch" / "artifacts-build-rock-my-rock-amd64"
+        d.mkdir(parents=True, exist_ok=True)
+        write_file(d / "artifacts.build.yaml", self._PARTIAL_ROCK_AMD64)
+
+    def _make_charm_files(self, tmp_path: Path) -> None:
+        d = tmp_path / "built-charm-my-charm-amd64"
+        d.mkdir(exist_ok=True)
+        (d / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
+
+    def test_downloads_only_arch_specific_partials(self, tmp_path: Path) -> None:
+        """Downloads only partial manifests for the requested arch, not arm64."""
+        self._write_plan(tmp_path)
+        self._write_partial_charm(tmp_path)
+        self._write_partial_rock(tmp_path)
+        self._make_charm_files(tmp_path)
+
+        with patch("opcli.core.artifacts.run_command", return_value=self._GH_RESULT) as mock_run:
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64")
+
+        # Collect the --name values from gh run download calls.
+        download_names = [
+            c.args[0][c.args[0].index("--name") + 1]
+            for c in mock_run.call_args_list
+            if "download" in c.args[0]
+        ]
+        # Should download exactly the amd64 partials + the amd64 charm archive.
+        assert "artifacts-build-charm-my-charm-amd64" in download_names
+        assert "artifacts-build-rock-my-rock-amd64" in download_names
+        assert "built-charm-my-charm-amd64" in download_names
+        # Must NOT touch arm64 artifacts or the merged artifacts-build.
+        assert not any("arm64" in n for n in download_names)
+        assert "artifacts-build" not in download_names
+
+    def test_does_not_download_merged_artifacts_build(self, tmp_path: Path) -> None:
+        """Arch-filtered fetch never downloads the 'artifacts-build' merged artifact."""
+        self._write_plan(tmp_path)
+        self._write_partial_charm(tmp_path)
+        self._write_partial_rock(tmp_path)
+        self._make_charm_files(tmp_path)
+
+        with patch("opcli.core.artifacts.run_command", return_value=self._GH_RESULT) as mock_run:
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64")
+
+        download_names = [
+            c.args[0][c.args[0].index("--name") + 1]
+            for c in mock_run.call_args_list
+            if "download" in c.args[0]
+        ]
+        assert "artifacts-build" not in download_names
+
+    def test_raises_when_artifacts_yaml_missing(self, tmp_path: Path) -> None:
+        """Arch-filtered fetch requires artifacts.yaml to determine partial names."""
+        with pytest.raises(ConfigurationError, match=r"artifacts\.yaml"):
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64")
+
+    def test_raises_when_arch_not_in_plan(self, tmp_path: Path) -> None:
+        """Raises ConfigurationError if no artifacts match the requested arch."""
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: x\n  charmcraft-yaml: charmcraft.yaml\n"
+            "  platforms:\n  - arch: amd64\n",
+        )
+        with pytest.raises(ConfigurationError, match="s390x"):
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="s390x")
+
+    def test_localises_after_arch_filtered_fetch(self, tmp_path: Path) -> None:
+        """artifacts.build.yaml is updated with local paths after arch-filtered fetch."""
+        self._write_plan(tmp_path)
+        self._write_partial_charm(tmp_path)
+        self._write_partial_rock(tmp_path)
+        self._make_charm_files(tmp_path)
+
+        with patch("opcli.core.artifacts.run_command", return_value=self._GH_RESULT):
+            gen_path = artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64")
+
+        gen = load_artifacts_build(gen_path)
+        for charm in gen.charms:
+            amd64_builds = [b for b in charm.builds if b.arch == "amd64"]
+            assert amd64_builds, f"Charm '{charm.name}' has no amd64 build"
+            assert amd64_builds[0].path, f"Charm '{charm.name}' amd64 not localised"
+
+    def test_wait_retries_partials_without_collect_check(self, tmp_path: Path) -> None:
+        """With wait=True and arch=, retries partial manifests without checking collect job."""
+        # Use a charm-only plan so the side-effect only needs to handle one partial manifest.
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\n"
+            "charms:\n"
+            "- name: my-charm\n"
+            "  charmcraft-yaml: charmcraft.yaml\n"
+            "  platforms:\n"
+            "  - arch: amd64\n"
+            "rocks: []\n"
+            "snaps: []\n",
+        )
+        self._make_charm_files(tmp_path)
+
+        not_ready = SubprocessError(["gh"], 1, "artifact not found")
+        gh = self._GH_RESULT
+        charm_partial = "artifacts-build-charm-my-charm-amd64"
+        attempts = 0
+
+        def side_effect(cmd: list[str], cwd: str | None = None, **kw: object) -> object:
+            nonlocal attempts
+            if "download" not in cmd or "--name" not in cmd:
+                return gh
+            name = cmd[cmd.index("--name") + 1]
+            if name != charm_partial:
+                return gh
+            attempts += 1
+            if attempts == 1:
+                raise not_ready
+            # Second attempt: write the partial file and succeed.
+            dest_dir = tmp_path / "partial-artifacts-fetch" / name
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            write_file(
+                dest_dir / "artifacts.build.yaml",
+                "version: 1\n"
+                "rocks: []\n"
+                "charms:\n"
+                "- name: my-charm\n"
+                "  charmcraft-yaml: charmcraft.yaml\n"
+                "  builds:\n"
+                "  - arch: amd64\n"
+                "    artifact: built-charm-my-charm-amd64\n"
+                "    run-id: '12345'\n"
+                "snaps: []\n",
+            )
+            return gh
+
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=side_effect),
+            patch("opcli.core.artifacts.time.sleep"),
+        ):
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64", wait=True)
+
+    def test_wait_arch_fails_fast_on_auth_error(self, tmp_path: Path) -> None:
+        """Arch-filtered wait fails immediately on authentication errors."""
+        self._write_plan(tmp_path)
+
+        auth_error = SubprocessError(["gh"], 1, "HTTP 401 Unauthorized: bad credentials")
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=auth_error),
+            patch("opcli.core.artifacts.time.sleep") as mock_sleep,
+            pytest.raises(ConfigurationError, match="Authentication"),
+        ):
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="amd64", wait=True)
+
+        mock_sleep.assert_not_called()
+
+    def test_arch_all_downloads_all_partials_via_pattern(self, tmp_path: Path) -> None:
+        """With arch='all', fetch uses --pattern to download all partial manifests."""
+        self._write_plan(tmp_path)
+
+        # Simulate pattern download creating the partial files.
+        partial_dir = tmp_path / "partial-artifacts-fetch"
+        gh = self._GH_RESULT
+
+        def side_effect(cmd: list[str], cwd: str | None = None, **kw: object) -> object:
+            if "--pattern" in cmd:
+                # Write both amd64 and arm64 partials as the pattern would.
+                for name in [
+                    "artifacts-build-charm-my-charm-amd64",
+                    "artifacts-build-rock-my-rock-amd64",
+                    "artifacts-build-charm-my-charm-arm64",
+                    "artifacts-build-rock-my-rock-arm64",
+                ]:
+                    d = partial_dir / name
+                    d.mkdir(parents=True, exist_ok=True)
+                    partial_content = (
+                        (
+                            "version: 1\n"
+                            "rocks: []\n"
+                            "charms:\n"
+                            "- name: my-charm\n"
+                            "  charmcraft-yaml: charmcraft.yaml\n"
+                            "  builds:\n"
+                            f"  - arch: {'amd64' if 'amd64' in name else 'arm64'}\n"
+                            "    artifact: "
+                            f"built-charm-my-charm-{'amd64' if 'amd64' in name else 'arm64'}\n"
+                            "    run-id: '12345'\n"
+                            "snaps: []\n"
+                        )
+                        if "charm" in name
+                        else (
+                            "version: 1\n"
+                            "rocks:\n"
+                            "- name: my-rock\n"
+                            "  rockcraft-yaml: rock/rockcraft.yaml\n"
+                            "  builds:\n"
+                            f"  - arch: {'amd64' if 'amd64' in name else 'arm64'}\n"
+                            "    image: "
+                            f"ghcr.io/owner/repo/my-rock:abc1234-{'amd64' if 'amd64' in name else 'arm64'}\n"
+                            "charms: []\n"
+                            "snaps: []\n"
+                        )
+                    )
+                    write_file(d / "artifacts.build.yaml", partial_content)
+            elif "--name" in cmd:
+                name = cmd[cmd.index("--name") + 1]
+                # Create placeholder charm file for localization.
+                if name.startswith("built-charm"):
+                    arch = "amd64" if "amd64" in name else "arm64"
+                    d = tmp_path / name
+                    d.mkdir(exist_ok=True)
+                    (d / f"my-charm_ubuntu-24.04-{arch}.charm").write_bytes(b"")
+            return gh
+
+        with patch("opcli.core.artifacts.run_command", side_effect=side_effect) as mock_run:
+            artifacts_fetch(tmp_path, run_id="12345", repo="owner/repo", arch="all")
+
+        # Verify --pattern was used (not --name for individual partials).
+        pattern_calls = [c for c in mock_run.call_args_list if "--pattern" in c.args[0]]
+        assert pattern_calls, "Expected --pattern call for arch='all'"
+        assert "artifacts-build-*" in pattern_calls[0].args[0]
