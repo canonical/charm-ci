@@ -3,10 +3,27 @@
 
 """Tests for the central subprocess wrapper."""
 
+from pathlib import Path
+
 import pytest
 
+from opcli.core import subprocess as subprocess_module
 from opcli.core.exceptions import SubprocessError
 from opcli.core.subprocess import run_command
+
+
+def _fail_n_times_then_succeed_cmd(counter_file: Path, failures: int, message: str) -> list[str]:
+    """Build a shell command that fails *failures* times (printing *message*
+    to stderr) then succeeds, tracking attempts via *counter_file*.
+    """
+    return [
+        "sh",
+        "-c",
+        f'count=$(cat "{counter_file}" 2>/dev/null || echo 0); '
+        f'count=$((count + 1)); echo "$count" > "{counter_file}"; '
+        f'if [ "$count" -le {failures} ]; then echo "{message}" >&2; exit 1; '
+        f"fi; echo ok",
+    ]
 
 
 class TestStdinCaptured:
@@ -98,3 +115,80 @@ class TestInteractiveMutualExclusion:
     def test_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="mutually exclusive"):
             run_command(["echo", "hi"], interactive=True, stdin="hello")
+
+
+class TestRetry:
+    """retries / retry_on behavior in run_command."""
+
+    def test_succeeds_after_transient_failures_with_correct_backoff(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(subprocess_module, "_sleep", sleep_calls.append)
+
+        counter_file = tmp_path / "attempts"
+        cmd = _fail_n_times_then_succeed_cmd(
+            counter_file, failures=2, message="RemoteDisconnected"
+        )
+
+        result = run_command(
+            cmd,
+            stream=False,
+            retries=2,
+            retry_on=["RemoteDisconnected"],
+        )
+
+        assert result.returncode == 0
+        assert "ok" in result.stdout
+        assert counter_file.read_text().strip() == "3"
+        assert sleep_calls == [5.0, 15.0]
+
+    def test_non_retryable_failure_fails_immediately(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(subprocess_module, "_sleep", sleep_calls.append)
+
+        counter_file = tmp_path / "attempts"
+        cmd = _fail_n_times_then_succeed_cmd(
+            counter_file, failures=99, message="permission-required: no access"
+        )
+
+        with pytest.raises(SubprocessError, match="permission-required"):
+            run_command(cmd, stream=False, retries=2, retry_on=["RemoteDisconnected"])
+
+        assert counter_file.read_text().strip() == "1"
+        assert sleep_calls == []
+
+    def test_retries_exhausted_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(subprocess_module, "_sleep", sleep_calls.append)
+
+        counter_file = tmp_path / "attempts"
+        cmd = _fail_n_times_then_succeed_cmd(counter_file, failures=99, message="Connection reset")
+
+        with pytest.raises(SubprocessError, match="Connection reset"):
+            run_command(cmd, stream=False, retries=2, retry_on=["Connection reset"])
+
+        # 3 total attempts (1 initial + 2 retries), 2 sleeps in between.
+        assert counter_file.read_text().strip() == "3"
+        assert sleep_calls == [5.0, 15.0]
+
+    def test_default_retries_zero_is_single_attempt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(subprocess_module, "_sleep", sleep_calls.append)
+
+        counter_file = tmp_path / "attempts"
+        cmd = _fail_n_times_then_succeed_cmd(
+            counter_file, failures=99, message="RemoteDisconnected"
+        )
+
+        with pytest.raises(SubprocessError):
+            run_command(cmd, stream=False, retry_on=["RemoteDisconnected"])
+
+        assert counter_file.read_text().strip() == "1"
+        assert sleep_calls == []

@@ -260,6 +260,8 @@ These encode hard-won correctness lessons — do not violate.
 
 5. **Fork PR rock handling.** Fork PRs get read-only `GITHUB_TOKEN` and cannot push to GHCR. The workflow sets `OPCLI_ROCK_UPLOAD=artifact`; `artifacts_build` keeps the `.rock` file local and writes `artifact:` + `run-id:` metadata. After `artifacts_fetch` downloads the `.rock`, `push-images --missing-registry deploy` auto-deploys a local registry and pushes there. This converges with the local development path.
 
+6. **Publish retry behavior.** `opcli artifacts publish` retries known-transient charmcraft/CharmHub failures automatically: up to 3 total attempts (1 initial + 2 retries) with exponential backoff (5s, 15s, 45s), implemented via `run_command(..., retries=, retry_on=)` in `core/subprocess.py`. Only failures whose output matches `_RETRYABLE_CHARMHUB_ERRORS` in `core/publish.py` (Charmhub upload-status polling timeouts, `RemoteDisconnected`, connection resets/aborts) are retried — this is applied to the `charmcraft upload`, `upload-resource`, and `release` calls. Permanent errors (e.g. `permission-required: No publisher or collaborator permission`) do not match and fail immediately on the first attempt, since retrying them would never help. Retry logic intentionally lives in opcli, not as a GitHub Actions step-level retry wrapper, per the ownership split above (opcli owns publishing to CharmHub).
+
 ---
 
 ## Error hierarchy

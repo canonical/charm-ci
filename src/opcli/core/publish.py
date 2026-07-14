@@ -35,6 +35,18 @@ from opcli.models.artifacts_build import (
 
 logger = logging.getLogger(__name__)
 
+# Substrings identifying known-transient charmcraft/CharmHub failures (network
+# blips, server-side polling timeouts) that are safe to retry automatically.
+# Anything else — e.g. permission errors, validation errors — fails
+# immediately since retrying would never help.
+_RETRYABLE_CHARMHUB_ERRORS = (
+    "Timeout polling Charmhub for upload status",
+    "RemoteDisconnected",
+    "Connection aborted",
+    "Connection reset",
+)
+_CHARMHUB_RETRIES = 2
+
 
 # ---------------------------------------------------------------------------
 #  Public API
@@ -577,6 +589,8 @@ def _do_upload_resource(charm_name: str, resource_name: str, image_ref: str, roo
         cwd=str(root),
         stream=False,
         env={"CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS": "1"},
+        retries=_CHARMHUB_RETRIES,
+        retry_on=_RETRYABLE_CHARMHUB_ERRORS,
     )
     revision = _parse_revision(result.stdout, cmd)
     status(f"Uploaded resource '{resource_name}' → revision {revision}")
@@ -631,6 +645,8 @@ def _upload_charm_no_release(
             stream=False,
             check=False,
             env={"CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS": "1"},
+            retries=_CHARMHUB_RETRIES,
+            retry_on=_RETRYABLE_CHARMHUB_ERRORS,
         )
 
     if result.returncode != 0:
@@ -676,7 +692,13 @@ def _release_charm(  # noqa: PLR0913
         step(f"Releasing '{charm_name}' revision {revision} to {channel}"),
         with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
     ):
-        run_command(cmd, cwd=str(pack_dir), stream=False)
+        run_command(
+            cmd,
+            cwd=str(pack_dir),
+            stream=False,
+            retries=_CHARMHUB_RETRIES,
+            retry_on=_RETRYABLE_CHARMHUB_ERRORS,
+        )
 
 
 # ---------------------------------------------------------------------------
