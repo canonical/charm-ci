@@ -148,15 +148,19 @@ def run_command(  # noqa: PLR0913
                 quiet=quiet,
             )
         except SubprocessError as exc:
-            if not is_last_attempt and _is_retryable(exc.stderr, retry_on):
-                _wait_before_retry(attempt)
+            matched = _is_retryable(exc.stderr, retry_on)
+            if not is_last_attempt and matched:
+                _wait_before_retry(attempt, total_attempts)
                 continue
+            _log_retry_outcome(attempt, total_attempts, matched=matched)
             raise
 
         if result.returncode != 0:
-            if not is_last_attempt and _is_retryable(result.stdout + result.stderr, retry_on):
-                _wait_before_retry(attempt)
+            matched = _is_retryable(result.stdout + result.stderr, retry_on)
+            if not is_last_attempt and matched:
+                _wait_before_retry(attempt, total_attempts)
                 continue
+            _log_retry_outcome(attempt, total_attempts, matched=matched)
             if check:
                 raise SubprocessError(cmd=cmd, returncode=result.returncode, stderr=result.stderr)
         return result
@@ -199,14 +203,36 @@ def _is_retryable(output: str, retry_on: Sequence[str] | None) -> bool:
     return any(pattern in output for pattern in retry_on)
 
 
-def _wait_before_retry(attempt: int) -> None:
+def _wait_before_retry(attempt: int, total_attempts: int) -> None:
     """Sleep for the backoff delay corresponding to *attempt* (0-indexed)."""
     delay = _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
     print(
-        f"Transient failure detected, retrying in {delay:g}s (attempt {attempt + 2})...",
+        f"Transient failure detected (attempt {attempt + 1}/{total_attempts}); "
+        f"retrying in {delay:g}s...",
         file=sys.stderr,
     )
     _sleep(delay)
+
+
+def _log_retry_outcome(attempt: int, total_attempts: int, *, matched: bool) -> None:
+    """Log why no further retry will happen, if retries were configured at all.
+
+    Distinguishes "gave up after exhausting all retries" from "failure did not
+    match any retryable pattern, so it was never retried" — both look like a
+    first-attempt failure otherwise, which hides useful diagnostic context.
+    """
+    if total_attempts <= 1:
+        return
+    if not matched:
+        print(
+            "Failure does not match any retryable pattern; not retrying.",
+            file=sys.stderr,
+        )
+        return
+    print(
+        f"Giving up after {attempt + 1}/{total_attempts} attempts.",
+        file=sys.stderr,
+    )
 
 
 def _sleep(seconds: float) -> None:

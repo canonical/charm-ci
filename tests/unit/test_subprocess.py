@@ -9,7 +9,7 @@ import pytest
 
 from opcli.core import subprocess as subprocess_module
 from opcli.core.exceptions import SubprocessError
-from opcli.core.subprocess import run_command
+from opcli.core.subprocess import _is_retryable, run_command
 
 
 def _fail_n_times_then_succeed_cmd(counter_file: Path, failures: int, message: str) -> list[str]:
@@ -192,3 +192,49 @@ class TestRetry:
 
         assert counter_file.read_text().strip() == "1"
         assert sleep_calls == []
+
+
+class TestIsRetryableRealisticOutput:
+    """_is_retryable against realistic charmcraft-shaped stdout/stderr splits.
+
+    charmcraft writes progress/error text to stderr and, on success, a JSON
+    payload to stdout — the two streams are captured separately by
+    ``run_command`` and concatenated (``stdout + stderr``) before matching.
+    These tests exercise ``_is_retryable`` directly against that shape,
+    rather than only through generic ``sh -c`` fixtures, so a regression in
+    how the concatenation or matching is done (e.g. checking only one stream,
+    or matching against ``cmd`` instead of output) would be caught.
+    """
+
+    _RETRY_ON = (
+        "Timeout polling Charmhub for upload status",
+        "RemoteDisconnected",
+        "Connection aborted",
+        "Connection reset",
+    )
+
+    def test_matches_when_pattern_is_in_stderr_only(self) -> None:
+        stdout = ""
+        stderr = (
+            "Uploading bytes ended, id db6c7cda-760e-43bf-9312-0b09f0778454\n"
+            "Timeout polling Charmhub for upload status (after 60.0s).\n"
+        )
+        assert _is_retryable(stdout + stderr, self._RETRY_ON) is True
+
+    def test_matches_when_pattern_is_in_stdout_only(self) -> None:
+        stdout = "('Connection aborted.', RemoteDisconnected('Remote end closed connection'))\n"
+        stderr = ""
+        assert _is_retryable(stdout + stderr, self._RETRY_ON) is True
+
+    def test_does_not_match_permission_required_charmcraft_output(self) -> None:
+        stdout = '{"errors": [{"code": "permission-required", "message": "no access"}]}\n'
+        stderr = (
+            "Store operation failed:\n"
+            "- permission-required: No publisher or collaborator permission "
+            "for the haproxy charm package\n"
+        )
+        assert _is_retryable(stdout + stderr, self._RETRY_ON) is False
+
+    def test_no_retry_on_patterns_never_matches(self) -> None:
+        assert _is_retryable("RemoteDisconnected", None) is False
+        assert _is_retryable("RemoteDisconnected", []) is False

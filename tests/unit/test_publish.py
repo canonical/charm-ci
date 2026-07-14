@@ -1931,3 +1931,96 @@ class TestPermissionErrorNotRetried:
             artifacts_publish(tmp_path, channel="latest/edge")
 
         assert call_count["n"] == 1
+
+
+class TestDuplicateUploadResource:
+    """upload-resource reuses the existing revision on a duplicate-digest error.
+
+    Mirrors the charm-upload duplicate handling: if a resource upload was
+    already accepted server-side (e.g. a prior attempt succeeded but the
+    client saw a transient disconnect before recording the revision, and a
+    retry then hits a duplicate-digest response), the existing revision is
+    reused instead of raising.
+    """
+
+    def test_reuses_existing_revision_on_duplicate(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:latest
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: built-charm/my-charm_amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        built = root / "built-charm"
+        built.mkdir()
+        (built / "my-charm_amd64.charm").write_bytes(b"fake")
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=_DUPLICATE_STDOUT, returncode=1)
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge")
+
+        assert len(results) == 1
+        assert results[0].resources.get("my-rock-image") == _EXISTING_REVISION
+
+    def test_non_duplicate_resource_error_still_raises(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:latest
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: built-charm/my-charm_amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        built = root / "built-charm"
+        built.mkdir()
+        (built / "my-charm_amd64.charm").write_bytes(b"fake")
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                return _mock_result(stdout="not json", stderr="boom", returncode=1)
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with (
+            patch("opcli.core.publish.run_command", side_effect=fake_run),
+            pytest.raises(SubprocessError, match="boom"),
+        ):
+            artifacts_publish(root, channel="latest/edge")
