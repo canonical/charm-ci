@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML
+from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML, artifacts_build_path
 from opcli.core.discovery import discover_artifacts
 from opcli.core.env import current_arch
 from opcli.core.exceptions import (
@@ -178,9 +178,9 @@ def artifacts_path(
         DiscoveryError: If no artifacts match, or if multiple artifacts match
             without a *name* filter.
     """
-    gen_path = root / ARTIFACTS_BUILD_YAML
+    gen_path = artifacts_build_path(root)
     if not gen_path.exists():
-        msg = f"{ARTIFACTS_BUILD_YAML} not found. Run 'opcli artifacts build' first."
+        msg = f"{gen_path} not found. Run 'opcli artifacts build' first."
         raise ConfigurationError(msg)
 
     generated = load_artifacts_build(gen_path)
@@ -353,7 +353,8 @@ def artifacts_build(
         snaps=gen_snaps,
     )
 
-    dest = root / ARTIFACTS_BUILD_YAML
+    dest = artifacts_build_path(root)
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
     # When a filter is active and an existing build file exists, merge new
     # entries into the previous results so unrelated artifacts are preserved.
@@ -493,7 +494,8 @@ def artifacts_collect(root: Path, partial_paths: list[Path]) -> Path:
         charms=merged_charms,
         snaps=merged_snaps,
     )
-    dest = root / ARTIFACTS_BUILD_YAML
+    dest = artifacts_build_path(root)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     dump_artifacts_build(generated, dest)
     logger.info("Wrote merged %s", dest)
     return dest
@@ -516,9 +518,9 @@ def artifacts_localize(root: Path) -> int:
         ConfigurationError: If ``artifacts.build.yaml`` is not found or
             if any artifact with a CI reference has no matching local file.
     """
-    gen_path = root / ARTIFACTS_BUILD_YAML
+    gen_path = artifacts_build_path(root)
     if not gen_path.exists():
-        msg = f"{ARTIFACTS_BUILD_YAML} not found."
+        msg = f"{gen_path} not found."
         raise ConfigurationError(msg)
 
     generated = load_artifacts_build(gen_path)

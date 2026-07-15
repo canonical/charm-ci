@@ -21,8 +21,8 @@ to yaml discovery. Mixing modes per-fixture is supported.
 
 1. ``--artifacts-build-yaml`` pytest CLI option.
 2. ``OPCLI_ARTIFACTS_BUILD_YAML`` environment variable (absolute path).
-3. Walk up from pytest's ``rootdir`` until ``artifacts.build.yaml`` is found
-   (stops at the git root or filesystem root).
+3. Walk up from pytest's ``rootdir`` until ``build/artifacts.build.yaml`` is
+   found (stops at the git root or filesystem root).
 4. ``pytest.UsageError`` if not found.
 
 Fixtures
@@ -289,7 +289,9 @@ def charm_path(request: pytest.FixtureRequest) -> str:
     )
     from opcli.core.yaml_io import load_artifacts_build
 
-    return _build_charm_path(load_artifacts_build(yaml_path), yaml_path.parent)
+    return _build_charm_path(
+        load_artifacts_build(yaml_path), artifacts_root_from_yaml_path(yaml_path)
+    )
 
 
 @pytest.fixture(scope="session")
@@ -316,7 +318,9 @@ def charm_paths(request: pytest.FixtureRequest) -> dict[str, CharmPathList]:
     )
     from opcli.core.yaml_io import load_artifacts_build
 
-    return _build_charm_paths(load_artifacts_build(yaml_path), yaml_path.parent)
+    return _build_charm_paths(
+        load_artifacts_build(yaml_path), artifacts_root_from_yaml_path(yaml_path)
+    )
 
 
 @pytest.fixture(scope="session")
@@ -353,7 +357,7 @@ def resource_images(request: pytest.FixtureRequest) -> dict[str, str]:
     from opcli.core.yaml_io import load_artifacts_build
 
     artifacts = load_artifacts_build(yaml_path)
-    rock_imgs = build_rock_images(artifacts, yaml_path.parent)
+    rock_imgs = build_rock_images(artifacts, artifacts_root_from_yaml_path(yaml_path))
     return _build_resource_images(artifacts, rock_imgs)
 
 
@@ -379,7 +383,7 @@ def charm_resource_images(request: pytest.FixtureRequest) -> dict[str, dict[str,
     from opcli.core.yaml_io import load_artifacts_build
 
     artifacts = load_artifacts_build(yaml_path)
-    rock_imgs = build_rock_images(artifacts, yaml_path.parent)
+    rock_imgs = build_rock_images(artifacts, artifacts_root_from_yaml_path(yaml_path))
     return _build_charm_resource_images(artifacts, rock_imgs)
 
 
@@ -502,11 +506,13 @@ def build_rock_images(artifacts: ArtifactsGenerated, artifacts_root: Path) -> di
     :fixture:`resource_images` is unavailable::
 
         from opcli.models.artifacts_build import ArtifactsGenerated
-        from opcli.pytest_plugin import build_rock_images
+        from opcli.pytest_plugin import artifacts_root_from_yaml_path, build_rock_images
 
         @pytest.fixture(scope="session")
         def rock_images(opcli_artifacts: ArtifactsGenerated, opcli_build_yaml_path) -> dict[str, str]:
-            return build_rock_images(opcli_artifacts, opcli_build_yaml_path.parent)
+            return build_rock_images(
+                opcli_artifacts, artifacts_root_from_yaml_path(opcli_build_yaml_path)
+            )
     """
     from opcli.core.env import current_arch
 
@@ -620,7 +626,7 @@ def _discover_artifacts_build(
     Raises:
         pytest.UsageError: If the file cannot be found.
     """
-    from opcli.core.constants import ARTIFACTS_BUILD_YAML
+    from opcli.core.constants import ARTIFACTS_BUILD_YAML, BUILD_DIR
 
     cli_path: str | None = config.getoption("--artifacts-build-yaml", default=None)
     if cli_path:
@@ -642,7 +648,7 @@ def _discover_artifacts_build(
 
     directory = Path(config.rootpath)
     while True:
-        candidate = directory / ARTIFACTS_BUILD_YAML
+        candidate = directory / BUILD_DIR / ARTIFACTS_BUILD_YAML
         if candidate.is_file():
             return candidate
         if (directory / ".git").exists():
@@ -654,13 +660,35 @@ def _discover_artifacts_build(
 
     suffix = f"  {hint}" if hint else ""
     raise pytest.UsageError(
-        f"{ARTIFACTS_BUILD_YAML!r} not found (searched up from {config.rootpath!r}). "
+        f"{ARTIFACTS_BUILD_YAML!r} not found under {config.rootpath!r} or any "
+        f"ancestor directory's {BUILD_DIR!r} subdirectory. "
         f"Run 'opcli artifacts build' first, or set OPCLI_ARTIFACTS_BUILD_YAML.{suffix}"
     )
 
 
+def artifacts_root_from_yaml_path(yaml_path: Path) -> Path:
+    """Return the project root to resolve relative artifact paths against.
+
+    Charm/rock/snap paths stored in ``artifacts.build.yaml`` are always
+    relative to the project root (see ``core/artifacts.py``), not to the
+    manifest file's own directory.  Since ``opcli artifacts build`` writes
+    the manifest to ``<root>/build/artifacts.build.yaml``, the project root
+    is *two* levels above the manifest in that (common) case.  If the
+    manifest was located via an explicit ``--artifacts-build-yaml`` /
+    ``OPCLI_ARTIFACTS_BUILD_YAML`` override pointing elsewhere (not under a
+    ``build/`` directory), fall back to treating its parent directory as the
+    root, preserving the pre-existing contract for custom setups.
+    """
+    from opcli.core.constants import BUILD_DIR
+
+    if yaml_path.parent.name == BUILD_DIR:
+        return yaml_path.parent.parent
+    return yaml_path.parent
+
+
 __all__ = [
     "CharmPathList",
+    "artifacts_root_from_yaml_path",
     "build_rock_images",
     "charm_path",
     "charm_paths",

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from opcli.core.constants import artifacts_build_path
 from opcli.core.exceptions import ConfigurationError, DiscoveryError, SubprocessError
 from opcli.core.publish import (
     _CHARMHUB_RETRIES,
@@ -75,9 +76,16 @@ charms:
 """
 
 
+def _write_build_yaml(root: Path, build_yaml: str) -> None:
+    """Write artifacts.build.yaml under the project build/ directory."""
+    path = artifacts_build_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(build_yaml)
+
+
 def _setup_project(tmp_path: Path, build_yaml: str) -> Path:
     """Write manifest files to tmp_path and return it as root."""
-    (tmp_path / "artifacts.build.yaml").write_text(build_yaml)
+    _write_build_yaml(tmp_path, build_yaml)
     # Create directories for charm paths
     (tmp_path / "k8s-rock").mkdir(exist_ok=True)
     (tmp_path / "k8s-charm").mkdir(exist_ok=True)
@@ -252,7 +260,7 @@ charms:
 """
         root = tmp_path
         (root / "artifacts.yaml").write_text(artifacts_yaml)
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         # Create metadata.yaml with upstream-source
         (root / "metadata.yaml").write_text(
             """\
@@ -315,7 +323,7 @@ charms:
 """
         root = tmp_path
         (root / "artifacts.yaml").write_text(artifacts_yaml)
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         # charmcraft.yaml without upstream-source
         (root / "charmcraft.yaml").write_text("name: traefik-k8s\ntype: charm\n")
         # Create the charm file so validation passes
@@ -608,7 +616,7 @@ charms:
 """
         root = tmp_path
         (root / "artifacts.yaml").write_text(artifacts_yaml)
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         (root / "charmcraft.yaml").write_text(
             "name: traefik-k8s\ntype: charm\nresources:\n"
             "  traefik-image:\n    type: oci-image\n"
@@ -657,7 +665,7 @@ charms:
 """
         root = tmp_path
         (root / "artifacts.yaml").write_text(artifacts_yaml)
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         (root / "charmcraft.yaml").write_text(
             "name: test-charm\ntype: charm\nresources:\n"
             "  img:\n    type: oci-image\n"
@@ -752,7 +760,7 @@ charms:
 """
         root = tmp_path
         (root / "artifacts.yaml").write_text(artifacts_yaml)
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         # Write truly invalid YAML (unclosed flow sequence)
         (root / "charmcraft.yaml").write_text("resources: [unclosed\n")
         (root / "my-charm.charm").write_bytes(b"fake")
@@ -846,7 +854,7 @@ charms:
         type: oci-image
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         (root / "charmcraft.yaml").write_text(
             "name: my-charm\ntype: charm\nresources:\n"
             "  img:\n    type: oci-image\n"
@@ -980,7 +988,7 @@ charms:
 def _setup_project_with_plan(tmp_path: Path, build_yaml: str, plan_yaml: str) -> Path:
     """Write both artifacts.yaml and artifacts.build.yaml to tmp_path."""
     (tmp_path / "artifacts.yaml").write_text(plan_yaml)
-    (tmp_path / "artifacts.build.yaml").write_text(build_yaml)
+    _write_build_yaml(tmp_path, build_yaml)
     (tmp_path / "machine-charm").mkdir(exist_ok=True)
     (tmp_path / "k8s-charm").mkdir(exist_ok=True)
     (tmp_path / "k8s-rock").mkdir(exist_ok=True)
@@ -1140,7 +1148,7 @@ charms:
         path: built-my-charm-amd64/my-charm/my-charm_amd64.charm
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1178,7 +1186,7 @@ charms:
         path: built-my-charm-amd64/my-charm/my-charm_amd64.charm
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1222,7 +1230,7 @@ charms:
         path: built-my-charm-amd64/my-charm/my-charm_amd64.charm
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         # Write artifacts.yaml with channel only — pack-dir is in build manifest
         (root / "artifacts.yaml").write_text(
             "version: 1\ncharms:\n  - name: my-charm\n"
@@ -1286,7 +1294,7 @@ charms:
         rock: my-rock
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1323,7 +1331,7 @@ charms:
         path: my-charm/my-charm_ubuntu-24.04-amd64.charm
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft-my-charm.yaml").write_text("name: my-charm\n")
@@ -1372,7 +1380,7 @@ charms:
         rock: my-rock
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1423,7 +1431,7 @@ charms:
         rock: my-rock
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1471,7 +1479,7 @@ charms:
         base: "ubuntu@24.04"
         path: my-charm/my-charm_ubuntu-24.04-amd64.charm
 """
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         (charm_subdir / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"fake")
 
         def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
@@ -1557,7 +1565,7 @@ charms:
         path: my-charm/my-charm_ubuntu-24.04-amd64.charm
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1596,7 +1604,7 @@ charms:
         path: my-charm/my-charm_ubuntu-24.04-amd64.charm
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1630,7 +1638,7 @@ charms:
 
 def _make_charm_fixture(root: Path) -> None:
     """Write minimal charm files under *root* for no-resources publish tests."""
-    (root / "artifacts.build.yaml").write_text(_CHARM_BUILD_YAML_NO_RESOURCES)
+    _write_build_yaml(root, _CHARM_BUILD_YAML_NO_RESOURCES)
     charm_subdir = root / "my-charm"
     charm_subdir.mkdir()
     (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1696,7 +1704,7 @@ charms:
         rock: my-rock
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1757,7 +1765,7 @@ charms:
         rock: my-rock
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1853,7 +1861,7 @@ charms:
         rock: my-rock
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -1965,7 +1973,7 @@ charms:
         rock: my-rock
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
@@ -2006,7 +2014,7 @@ charms:
         rock: my-rock
 """
         root = tmp_path
-        (root / "artifacts.build.yaml").write_text(build_yaml)
+        _write_build_yaml(root, build_yaml)
         charm_subdir = root / "my-charm"
         charm_subdir.mkdir()
         (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")

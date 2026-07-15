@@ -39,6 +39,5 @@ prime/
 .spread-run-*/
 .spread-reuse.*.yaml
 
-# Generated artifacts
-artifacts.build.yaml
+# Generated artifacts (artifacts.build.yaml lives under build/, already ignored above)
 examples/opcli-dist/

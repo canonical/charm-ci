@@ -66,7 +66,7 @@ opcli install doctor
 
 ```bash
 opcli artifacts init     # discover charms/rocks/snaps → artifacts.yaml
-opcli artifacts build    # build all → artifacts.build.yaml
+opcli artifacts build    # build all → build/artifacts.build.yaml
 opcli spread init        # generate spread.yaml with integration-suites
 opcli spread expand      # preview expanded spread config
 opcli spread run         # run integration tests (LXD backend)
@@ -122,7 +122,7 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 | Command | Description |
 |---|---|
 | `init` | Discover charms/rocks/snaps and generate `artifacts.yaml`. `--force` to overwrite. |
-| `build` | Build artifacts → `artifacts.build.yaml`. Filter: `--charm`, `--rock`, `--snap`. `--build-timeout <seconds>` (default: 3600). |
+| `build` | Build artifacts → `build/artifacts.build.yaml`. Filter: `--charm`, `--rock`, `--snap`. `--build-timeout <seconds>` (default: 3600). |
 | `matrix` | Print JSON build matrix for GitHub Actions. |
 | `collect <partial>...` | Merge partial `artifacts.build.yaml` from parallel jobs. |
 | `fetch` | Download CI artifacts and rewrite to local paths. `--run-id` (required), `--repo`, `--wait`, `--wait-timeout <seconds>` (default: 1800; implies `--wait`). |
@@ -513,11 +513,11 @@ def test_deploy(juju, charm_paths, charm_resource_images):
 from pathlib import Path
 import pytest
 from opcli.models.artifacts_build import ArtifactsGenerated
-from opcli.pytest_plugin import build_rock_images
+from opcli.pytest_plugin import artifacts_root_from_yaml_path, build_rock_images
 
 @pytest.fixture(scope="session")
 def rock_images(opcli_artifacts: ArtifactsGenerated, opcli_build_yaml_path: Path) -> dict[str, str]:
-    return build_rock_images(opcli_artifacts, opcli_build_yaml_path.parent)
+    return build_rock_images(opcli_artifacts, artifacts_root_from_yaml_path(opcli_build_yaml_path))
 ```
 
 ```python
@@ -534,7 +534,7 @@ The plugin locates `artifacts.build.yaml` in this order:
 
 1. `--artifacts-build-yaml` pytest CLI option.
 2. `OPCLI_ARTIFACTS_BUILD_YAML` environment variable (absolute path).
-3. Walk up from pytest's rootdir until `artifacts.build.yaml` is found (stops at git root).
+3. Walk up from pytest's rootdir until `build/artifacts.build.yaml` is found (stops at git root).
 4. `pytest.UsageError` if none of the above succeed — run `opcli artifacts build` first.
 
 ### CLI-flag mode (no build step)
