@@ -19,7 +19,7 @@ from typing import Any, cast
 
 from ruamel.yaml.error import YAMLError
 
-from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML
+from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML, artifacts_build_path
 from opcli.core.exceptions import ConfigurationError, DiscoveryError, SubprocessError
 from opcli.core.pack_utils import resolve_pack_dir, with_pack_yaml_symlink
 from opcli.core.progress import status, step
@@ -115,7 +115,7 @@ def artifacts_publish(
             un-fetched CI artifacts, or no channel is resolvable for a charm.
         DiscoveryError: If a resource references a rock not in the build manifest.
     """
-    gen_path = root / ARTIFACTS_BUILD_YAML
+    gen_path = artifacts_build_path(root)
 
     if not gen_path.exists():
         msg = (

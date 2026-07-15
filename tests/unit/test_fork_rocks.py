@@ -19,6 +19,7 @@ from unittest.mock import patch
 import pytest
 
 from opcli.core.artifacts import artifacts_build, artifacts_fetch, artifacts_localize
+from opcli.core.constants import artifacts_build_path
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.provision import provision_load
 from opcli.core.spread import _CI_PREPARE_AFTER_USER, _LOCAL_PREPARE_BEFORE_USER
@@ -149,7 +150,7 @@ charms: []
 
     def test_deploy_policy_calls_provision_registry(self, tmp_path: Path) -> None:
         """--missing-registry=deploy should deploy registry then push."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_WITH_FILE_ROCK)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_WITH_FILE_ROCK)
         (tmp_path / "myrock.rock").write_bytes(b"fake")
 
         with (
@@ -167,7 +168,7 @@ charms: []
 
     def test_deploy_policy_retries_port_check(self, tmp_path: Path) -> None:
         """After deploying, _wait_for_port should retry before succeeding."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_WITH_FILE_ROCK)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_WITH_FILE_ROCK)
         (tmp_path / "myrock.rock").write_bytes(b"fake")
 
         with (
@@ -185,7 +186,7 @@ charms: []
 
     def test_deploy_policy_raises_if_port_never_opens(self, tmp_path: Path) -> None:
         """If port never becomes reachable after deploy, raise ConfigurationError."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_WITH_FILE_ROCK)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_WITH_FILE_ROCK)
 
         with (
             patch("opcli.core.provision.run_command"),
@@ -198,7 +199,7 @@ charms: []
 
     def test_skip_policy_returns_empty(self, tmp_path: Path) -> None:
         """--missing-registry=skip should return empty when registry is down."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_WITH_FILE_ROCK)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_WITH_FILE_ROCK)
 
         with patch("opcli.core.provision._is_port_open", return_value=False):
             pushed = provision_load(tmp_path, missing_registry="skip")
@@ -207,7 +208,7 @@ charms: []
 
     def test_fail_policy_raises(self, tmp_path: Path) -> None:
         """--missing-registry=fail should raise when registry is down."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_WITH_FILE_ROCK)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_WITH_FILE_ROCK)
 
         with (
             patch("opcli.core.provision._is_port_open", return_value=False),
@@ -217,7 +218,7 @@ charms: []
 
     def test_deploy_refuses_external_registry(self, tmp_path: Path) -> None:
         """--missing-registry=deploy with non-local registry should error."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_WITH_FILE_ROCK)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_WITH_FILE_ROCK)
 
         with (
             patch("opcli.core.provision._is_port_open", return_value=False),
@@ -227,7 +228,7 @@ charms: []
 
     def test_image_only_rocks_noop(self, tmp_path: Path) -> None:
         """Rocks with only image: and no file: should result in no-op."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_WITH_IMAGE_ROCK)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_WITH_IMAGE_ROCK)
 
         with patch("opcli.core.provision._is_port_open", return_value=True):
             pushed = provision_load(tmp_path)
@@ -309,8 +310,9 @@ class TestRockLocalize:
         """Rock with artifact field gets file rewritten to downloaded location."""
         # Create artifacts.build.yaml with a rock that has artifact + stale file path
         # (simulates post-collect state: file points to build runner path that doesn't exist)
-        build_yaml = tmp_path / "artifacts.build.yaml"
-        build_yaml.write_text(
+        build_yaml = artifacts_build_path(tmp_path)
+        write_file(
+            build_yaml,
             "rocks:\n"
             "- name: k8s-rock\n"
             "  rockcraft-yaml: k8s-rock/rockcraft.yaml\n"
@@ -320,7 +322,7 @@ class TestRockLocalize:
             "    artifact: built-rock-k8s-rock-amd64\n"
             "    run-id: '12345'\n"
             "charms: []\n"
-            "snaps: []\n"
+            "snaps: []\n",
         )
 
         # Simulate the downloaded artifact directory

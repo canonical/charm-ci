@@ -21,8 +21,8 @@ to yaml discovery. Mixing modes per-fixture is supported.
 
 1. ``--artifacts-build-yaml`` pytest CLI option.
 2. ``OPCLI_ARTIFACTS_BUILD_YAML`` environment variable (absolute path).
-3. Walk up from pytest's ``rootdir`` until ``artifacts.build.yaml`` is found
-   (stops at the git root or filesystem root).
+3. Walk up from pytest's ``rootdir`` until ``build/artifacts.build.yaml`` is
+   found (stops at the git root or filesystem root).
 4. ``pytest.UsageError`` if not found.
 
 Fixtures
@@ -620,7 +620,7 @@ def _discover_artifacts_build(
     Raises:
         pytest.UsageError: If the file cannot be found.
     """
-    from opcli.core.constants import ARTIFACTS_BUILD_YAML
+    from opcli.core.constants import ARTIFACTS_BUILD_YAML, BUILD_DIR
 
     cli_path: str | None = config.getoption("--artifacts-build-yaml", default=None)
     if cli_path:
@@ -642,7 +642,7 @@ def _discover_artifacts_build(
 
     directory = Path(config.rootpath)
     while True:
-        candidate = directory / ARTIFACTS_BUILD_YAML
+        candidate = directory / BUILD_DIR / ARTIFACTS_BUILD_YAML
         if candidate.is_file():
             return candidate
         if (directory / ".git").exists():

@@ -32,6 +32,7 @@ from typing import Any
 
 from ruamel.yaml.error import YAMLError
 
+from opcli.core.constants import BUILD_DIR
 from opcli.core.env import is_ci as _is_ci
 from opcli.core.exceptions import ConfigurationError, ValidationError
 from opcli.core.progress import status
@@ -43,7 +44,6 @@ logger = logging.getLogger(__name__)
 
 _SPREAD_YAML = "spread.yaml"
 _TASK_YAML_REL = "tests/integration/run/task.yaml"
-_BUILD_DIR = "build"
 _VIRTUAL_BACKEND = "integration-test"
 _OPCLI_MINIMAL_BACKEND = "opcli-minimal"
 _INTEGRATION_SUITES_KEY = "integration-suites"
@@ -524,7 +524,7 @@ def _expand_integration_suites(
             continue
         normalized_path, suite_cfg = _build_suite_entry(suite_path, suite_cfg_raw, root)
         # Prefix with build dir so spread finds task.yaml inside build/
-        build_suite_path = f"{_BUILD_DIR}/{normalized_path}"
+        build_suite_path = f"{BUILD_DIR}/{normalized_path}"
         suites[build_suite_path] = suite_cfg
 
     data["suites"] = suites
@@ -1276,7 +1276,7 @@ def _build_dir_context(
     writes to a deterministic ``build/`` path for debuggability.  The directory
     persists after the run so users can inspect generated files.
     """
-    build_dir = root / _BUILD_DIR
+    build_dir = root / BUILD_DIR
     build_dir.mkdir(parents=True, exist_ok=True)
     dump_yaml(literalize(expanded), build_dir / _SPREAD_YAML)
     yield build_dir

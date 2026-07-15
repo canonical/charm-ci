@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from opcli.core.constants import artifacts_build_path
 from opcli.models.artifacts_build import ArtifactsGenerated, CharmOutput, RockOutput
 from opcli.pytest_plugin import (
     CharmPathList,
@@ -34,6 +35,7 @@ from opcli.pytest_plugin import (
 from opcli.pytest_plugin import (
     resource_images as _resource_images_fixture,
 )
+from tests.conftest import write_file
 
 # Patch target: lazy-imported inside functions
 _ARCH = "opcli.core.env.current_arch"
@@ -123,8 +125,8 @@ class TestDiscoverArtifactsBuild:
         monkeypatch.delenv("OPCLI_ARTIFACTS_BUILD_YAML", raising=False)
         nested = tmp_path / "sub" / "nested"
         nested.mkdir(parents=True)
-        f = tmp_path / "artifacts.build.yaml"
-        f.write_text("version: 1\n")
+        f = artifacts_build_path(tmp_path)
+        write_file(f, "version: 1\n")
         result = _discover_artifacts_build(_mock_config(nested))
         assert result == f
 
@@ -132,8 +134,8 @@ class TestDiscoverArtifactsBuild:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("OPCLI_ARTIFACTS_BUILD_YAML", raising=False)
-        f = tmp_path / "artifacts.build.yaml"
-        f.write_text("version: 1\n")
+        f = artifacts_build_path(tmp_path)
+        write_file(f, "version: 1\n")
         result = _discover_artifacts_build(_mock_config(tmp_path))
         assert result == f
 
@@ -146,8 +148,8 @@ class TestDiscoverArtifactsBuild:
         """Walk-up does not cross a .git boundary into an unrelated parent."""
         monkeypatch.delenv("OPCLI_ARTIFACTS_BUILD_YAML", raising=False)
         # Place an artifacts.build.yaml ABOVE the .git root — should not be found.
-        parent_file = tmp_path / "artifacts.build.yaml"
-        parent_file.write_text("version: 1\n")
+        parent_file = artifacts_build_path(tmp_path)
+        write_file(parent_file, "version: 1\n")
         git_root = tmp_path / "repo"
         git_root.mkdir()
         (git_root / ".git").mkdir()
@@ -1037,8 +1039,9 @@ class TestCharmResourceImagesFixture:
     ) -> None:
         """Fixture resolves resources from artifacts.build.yaml correctly."""
         monkeypatch.setenv(_ARCH.replace("opcli.core.env.", ""), "amd64")
-        yaml_file = tmp_path / "artifacts.build.yaml"
-        yaml_file.write_text(
+        yaml_file = artifacts_build_path(tmp_path)
+        write_file(
+            yaml_file,
             "version: 1\n"
             "rocks:\n"
             "  - name: myrock\n"
@@ -1055,7 +1058,7 @@ class TestCharmResourceImagesFixture:
             "    resources:\n"
             "      oci-image:\n"
             "        type: oci-image\n"
-            "        rock: myrock\n"
+            "        rock: myrock\n",
         )
         config = _mock_config(str(tmp_path))
         request = MagicMock()
