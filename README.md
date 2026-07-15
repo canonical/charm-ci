@@ -71,6 +71,9 @@ opcli spread init        # generate spread.yaml with integration-suites
 opcli spread expand      # preview expanded spread config
 opcli spread run         # run integration tests (LXD backend)
 
+# Job order is deterministic by default (opcli pins spread's -seed to 0).
+# Pass your own seed to change the order: opcli spread run -- -seed 42
+
 # Target a specific test:
 opcli spread run -- integration-test-local:ubuntu-24.04:tests/integration/run:test_charm
 

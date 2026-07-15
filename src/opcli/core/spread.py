@@ -45,6 +45,7 @@ _SPREAD_YAML = "spread.yaml"
 _TASK_YAML_REL = "tests/integration/run/task.yaml"
 _BUILD_DIR = "build"
 _VIRTUAL_BACKEND = "integration-test"
+_DEFAULT_SPREAD_SEED = "0"
 _OPCLI_MINIMAL_BACKEND = "opcli-minimal"
 _INTEGRATION_SUITES_KEY = "integration-suites"
 
@@ -185,11 +186,24 @@ def spread_run(
 
     with _build_dir_context(root, expanded) as build_dir:
         _materialize_task_files(root, build_dir)
-        cmd = ["spread"]
-        if extra_args:
-            cmd.extend(extra_args)
+        cmd = ["spread", *_default_seed_args(extra_args), *(extra_args or [])]
         status(f"Running spread ({'CI' if is_ci else 'local'} mode)")
         run_command(cmd, cwd=str(build_dir), interactive=True, env=secrets_env)
+
+
+def _default_seed_args(extra_args: list[str] | None) -> list[str]:
+    """Return ``["-seed", ...]`` unless the caller already passed ``-seed``.
+
+    Spread randomizes job execution order using a time-based seed by
+    default (see ``spread -help``: ``-seed int  Seed for job order
+    permutation``), which makes runs non-reproducible and can mask
+    order-dependent test bugs. opcli pins a fixed seed so job order is
+    deterministic across runs, while still letting users override it via
+    ``-seed <value>`` in extra args.
+    """
+    if extra_args and any(arg == "-seed" or arg.startswith("-seed=") for arg in extra_args):
+        return []
+    return ["-seed", _DEFAULT_SPREAD_SEED]
 
 
 def spread_jobs(

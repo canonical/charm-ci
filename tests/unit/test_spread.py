@@ -973,7 +973,37 @@ class TestSpreadRun:
             )
 
         cmd = mock_run.call_args[0][0]
-        assert cmd == ["spread", "-v", selector]
+        assert cmd == ["spread", "-seed", "0", "-v", selector]
+
+    def test_default_seed_pins_deterministic_job_order(self, tmp_path: Path) -> None:
+        """Without an explicit -seed, opcli pins one so job order is reproducible."""
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+
+        with patch("opcli.core.spread.run_command") as mock_run:
+            spread_run(tmp_path, ci=False)
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["spread", "-seed", "0"]
+
+    def test_explicit_seed_overrides_default(self, tmp_path: Path) -> None:
+        """A user-supplied -seed is respected instead of the opcli default."""
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+
+        with patch("opcli.core.spread.run_command") as mock_run:
+            spread_run(tmp_path, extra_args=["-seed", "42"], ci=False)
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["spread", "-seed", "42"]
+
+    def test_explicit_seed_equals_form_overrides_default(self, tmp_path: Path) -> None:
+        """A user-supplied -seed=VALUE form is also respected."""
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+
+        with patch("opcli.core.spread.run_command") as mock_run:
+            spread_run(tmp_path, extra_args=["-seed=42"], ci=False)
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["spread", "-seed=42"]
 
     def test_expand_output_has_no_reroot(self, tmp_path: Path) -> None:
         """spread_expand() for display should not include reroot."""
