@@ -35,6 +35,18 @@ from opcli.models.artifacts_build import (
 
 logger = logging.getLogger(__name__)
 
+# Substrings identifying known-transient charmcraft/CharmHub failures (network
+# blips, server-side polling timeouts) that are safe to retry automatically.
+# Anything else — e.g. permission errors, validation errors — fails
+# immediately since retrying would never help.
+_RETRYABLE_CHARMHUB_ERRORS = (
+    "Timeout polling Charmhub for upload status",
+    "RemoteDisconnected",
+    "Connection aborted",
+    "Connection reset",
+)
+_CHARMHUB_RETRIES = 2
+
 
 # ---------------------------------------------------------------------------
 #  Public API
@@ -570,14 +582,36 @@ def _read_upstream_source(yaml_path: Path, resource_name: str) -> str | None:
 
 
 def _do_upload_resource(charm_name: str, resource_name: str, image_ref: str, root: Path) -> int:
-    """Call charmcraft upload-resource and return the revision number."""
+    """Call charmcraft upload-resource and return the revision number.
+
+    If CharmHub rejects the upload because a resource with the same digest
+    was already uploaded (e.g. because a prior attempt succeeded server-side
+    but the client saw a transient error before recording the revision, and
+    retrying triggered a duplicate response), the existing revision is reused
+    automatically — mirroring ``_upload_charm_no_release``'s duplicate-digest
+    handling for charm uploads.
+    """
     cmd = _build_upload_resource_cmd(charm_name, resource_name, image_ref)
     result = run_command(
         cmd,
         cwd=str(root),
         stream=False,
+        check=False,
         env={"CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS": "1"},
+        retries=_CHARMHUB_RETRIES,
+        retry_on=_RETRYABLE_CHARMHUB_ERRORS,
     )
+
+    if result.returncode != 0:
+        dup_revision = _parse_duplicate_revision(result.stdout)
+        if dup_revision is not None:
+            status(
+                f"Resource '{resource_name}' for charm '{charm_name}' already uploaded "
+                f"with the same digest — reusing revision {dup_revision}"
+            )
+            return dup_revision
+        raise SubprocessError(cmd=cmd, returncode=result.returncode, stderr=result.stderr)
+
     revision = _parse_revision(result.stdout, cmd)
     status(f"Uploaded resource '{resource_name}' → revision {revision}")
     return revision
@@ -631,6 +665,8 @@ def _upload_charm_no_release(
             stream=False,
             check=False,
             env={"CHARMCRAFT_ENABLE_EXPERIMENTAL_EXTENSIONS": "1"},
+            retries=_CHARMHUB_RETRIES,
+            retry_on=_RETRYABLE_CHARMHUB_ERRORS,
         )
 
     if result.returncode != 0:
@@ -676,7 +712,13 @@ def _release_charm(  # noqa: PLR0913
         step(f"Releasing '{charm_name}' revision {revision} to {channel}"),
         with_pack_yaml_symlink("charmcraft.yaml", yaml_path, pack_dir),
     ):
-        run_command(cmd, cwd=str(pack_dir), stream=False)
+        run_command(
+            cmd,
+            cwd=str(pack_dir),
+            stream=False,
+            retries=_CHARMHUB_RETRIES,
+            retry_on=_RETRYABLE_CHARMHUB_ERRORS,
+        )
 
 
 # ---------------------------------------------------------------------------

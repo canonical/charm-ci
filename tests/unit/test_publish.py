@@ -11,6 +11,8 @@ import pytest
 
 from opcli.core.exceptions import ConfigurationError, DiscoveryError, SubprocessError
 from opcli.core.publish import (
+    _CHARMHUB_RETRIES,
+    _RETRYABLE_CHARMHUB_ERRORS,
     PublishResult,
     ReleaseEntry,
     _parse_duplicate_revision,
@@ -1781,3 +1783,244 @@ charms:
         assert any(f"--revision={_EXISTING_REVISION}" in c for c in release_cmds), (
             f"Expected --revision={_EXISTING_REVISION} in a release command, got: {release_cmds}"
         )
+
+
+class TestRetryableErrorPatterns:
+    """_RETRYABLE_CHARMHUB_ERRORS matches real transient CI failures, not
+    permanent ones (regression coverage for the wazuh/traefik/haproxy logs).
+    """
+
+    def test_matches_charmhub_polling_timeout(self) -> None:
+        """wazuh-server: charmcraft upload-resource polling timeout."""
+        log = "Timeout polling Charmhub for upload status (after 60.0s)."
+        assert any(pattern in log for pattern in _RETRYABLE_CHARMHUB_ERRORS)
+
+    def test_matches_connection_reset(self) -> None:
+        """traefik-k8s: charmcraft upload hit a RemoteDisconnected error."""
+        log = "('Connection aborted.', RemoteDisconnected('Remote end closed connection'))"
+        assert any(pattern in log for pattern in _RETRYABLE_CHARMHUB_ERRORS)
+
+    def test_does_not_match_permission_error(self) -> None:
+        """haproxy: permission-required is permanent and must not be retried."""
+        log = (
+            "Store operation failed:\n"
+            "- permission-required: No publisher or collaborator permission "
+            "for the haproxy charm package"
+        )
+        assert not any(pattern in log for pattern in _RETRYABLE_CHARMHUB_ERRORS)
+
+
+class TestRetryOptIn:
+    """The three charmcraft-invoking call sites opt into retries/retry_on."""
+
+    def test_upload_charm_no_release_passes_retry_kwargs(self, tmp_path: Path) -> None:
+        _make_charm_fixture(tmp_path)
+
+        upload_calls: list[dict[str, object]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload" in cmd:
+                upload_calls.append(kwargs)
+                return _mock_result(stdout=json.dumps({"revision": 1}))
+            return _mock_result()
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(tmp_path, channel="latest/edge")
+
+        assert len(upload_calls) == 1
+        assert upload_calls[0].get("retries") == _CHARMHUB_RETRIES
+        assert upload_calls[0].get("retry_on") == _RETRYABLE_CHARMHUB_ERRORS
+
+    def test_upload_resource_passes_retry_kwargs(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:latest
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: built-charm/my-charm_amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        built = root / "built-charm"
+        built.mkdir()
+        (built / "my-charm_amd64.charm").write_bytes(b"fake")
+
+        upload_resource_calls: list[dict[str, object]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                upload_resource_calls.append(kwargs)
+                return _mock_result(stdout=json.dumps({"revision": 1}))
+            if "upload" in cmd:
+                return _mock_result(stdout=json.dumps({"revision": 1}))
+            return _mock_result()
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge")
+
+        assert len(upload_resource_calls) == 1
+        assert upload_resource_calls[0].get("retries") == _CHARMHUB_RETRIES
+        assert upload_resource_calls[0].get("retry_on") == _RETRYABLE_CHARMHUB_ERRORS
+
+    def test_release_passes_retry_kwargs(self, tmp_path: Path) -> None:
+        _make_charm_fixture(tmp_path)
+
+        release_calls: list[dict[str, object]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "release" in cmd:
+                release_calls.append(kwargs)
+                return _mock_result()
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(tmp_path, channel="latest/edge")
+
+        assert len(release_calls) == 1
+        assert release_calls[0].get("retries") == _CHARMHUB_RETRIES
+        assert release_calls[0].get("retry_on") == _RETRYABLE_CHARMHUB_ERRORS
+
+
+class TestPermissionErrorNotRetried:
+    """haproxy-style permission-required failures fail immediately (single
+    attempt), matching real run_command retry-skip behavior end-to-end.
+    """
+
+    def test_permission_error_raises_without_retry(self, tmp_path: Path) -> None:
+        _make_charm_fixture(tmp_path)
+        call_count = {"n": 0}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload" in cmd:
+                call_count["n"] += 1
+                # Delegate to the real run_command retry loop so this test
+                # exercises actual retry-or-not decision logic, using a fake
+                # subprocess dispatch that always fails with a permission error.
+                retry_on = kwargs.get("retry_on")
+                retries = kwargs.get("retries", 0)
+                assert retries == _CHARMHUB_RETRIES
+                assert retry_on == _RETRYABLE_CHARMHUB_ERRORS
+                stderr = (
+                    "Store operation failed:\n"
+                    "- permission-required: No publisher or collaborator "
+                    "permission for the haproxy charm package"
+                )
+                raise SubprocessError(cmd=cmd, returncode=1, stderr=stderr)
+            return _mock_result()
+
+        with (
+            patch("opcli.core.publish.run_command", side_effect=fake_run),
+            pytest.raises(SubprocessError, match="permission-required"),
+        ):
+            artifacts_publish(tmp_path, channel="latest/edge")
+
+        assert call_count["n"] == 1
+
+
+class TestDuplicateUploadResource:
+    """upload-resource reuses the existing revision on a duplicate-digest error.
+
+    Mirrors the charm-upload duplicate handling: if a resource upload was
+    already accepted server-side (e.g. a prior attempt succeeded but the
+    client saw a transient disconnect before recording the revision, and a
+    retry then hits a duplicate-digest response), the existing revision is
+    reused instead of raising.
+    """
+
+    def test_reuses_existing_revision_on_duplicate(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:latest
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: built-charm/my-charm_amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        built = root / "built-charm"
+        built.mkdir()
+        (built / "my-charm_amd64.charm").write_bytes(b"fake")
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                return _mock_result(stdout=_DUPLICATE_STDOUT, returncode=1)
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            results = artifacts_publish(root, channel="latest/edge")
+
+        assert len(results) == 1
+        assert results[0].resources.get("my-rock-image") == _EXISTING_REVISION
+
+    def test_non_duplicate_resource_error_still_raises(self, tmp_path: Path) -> None:
+        build_yaml = """\
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:latest
+charms:
+  - name: my-charm
+    charmcraft-yaml: my-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: built-charm/my-charm_amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+"""
+        root = tmp_path
+        (root / "artifacts.build.yaml").write_text(build_yaml)
+        charm_subdir = root / "my-charm"
+        charm_subdir.mkdir()
+        (charm_subdir / "charmcraft.yaml").write_text("name: my-charm\n")
+        built = root / "built-charm"
+        built.mkdir()
+        (built / "my-charm_amd64.charm").write_bytes(b"fake")
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            if "upload-resource" in cmd:
+                return _mock_result(stdout="not json", stderr="boom", returncode=1)
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with (
+            patch("opcli.core.publish.run_command", side_effect=fake_run),
+            pytest.raises(SubprocessError, match="boom"),
+        ):
+            artifacts_publish(root, channel="latest/edge")

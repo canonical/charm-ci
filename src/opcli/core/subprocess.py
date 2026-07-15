@@ -17,11 +17,19 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from opcli.core.exceptions import SubprocessError
 
 _DEFAULT_TIMEOUT_SECONDS = 3600
+
+# Exponential backoff schedule (seconds) between retry attempts, indexed
+# by the retry attempt number (0 = delay before 2nd attempt, 1 = delay
+# before 3rd attempt, etc). The last value is reused if more retries are
+# requested than there are entries.
+_RETRY_BACKOFF_SECONDS: tuple[float, ...] = (5.0, 15.0, 45.0)
 
 # Install hints for common tools invoked by opcli.  Keys are the binary
 # name; values are the user-friendly install instruction.
@@ -70,6 +78,8 @@ def run_command(  # noqa: PLR0913
     stdin: str | None = None,
     env: dict[str, str] | None = None,
     quiet: bool = False,
+    retries: int = 0,
+    retry_on: Sequence[str] | None = None,
 ) -> SubprocessResult:
     """Execute *cmd* and return captured output.
 
@@ -99,9 +109,22 @@ def run_command(  # noqa: PLR0913
             printed to stderr before the subprocess runs.  Useful for
             background probe commands where logging would be misleading.
             Only effective when *stream* is ``False``.
+        retries: Number of *additional* attempts to make after the first,
+            when a failure's output matches one of the *retry_on* patterns.
+            ``0`` (default) disables retrying entirely — behavior is
+            unchanged from before this parameter existed. Attempts are
+            separated by an exponential backoff delay (5s, 15s, 45s, ...;
+            the last delay is reused if more retries are requested than
+            there are scheduled delays).
+        retry_on: Substrings to look for in the combined stdout+stderr of a
+            failed attempt. A failure is only retried if at least one
+            pattern matches; otherwise it fails immediately on the first
+            attempt (e.g. permission errors should not be retried). Ignored
+            when *retries* is ``0``.
 
     Raises:
-        SubprocessError: If the command fails and *check* is ``True``.
+        SubprocessError: If the command fails, *retries* are exhausted (or
+            the failure is not retryable), and *check* is ``True``.
         ValueError: If both *interactive* and *stdin* are provided.
 
     """
@@ -109,15 +132,112 @@ def run_command(  # noqa: PLR0913
         msg = "'interactive' and 'stdin' are mutually exclusive"
         raise ValueError(msg)
     merged_env = {**os.environ, **env} if env else None
+    total_attempts = retries + 1
+
+    for attempt in range(total_attempts):
+        is_last_attempt = attempt == total_attempts - 1
+        try:
+            result = _dispatch(
+                cmd,
+                cwd=cwd,
+                timeout=timeout,
+                stream=stream,
+                interactive=interactive,
+                stdin=stdin,
+                env=merged_env,
+                quiet=quiet,
+            )
+        except SubprocessError as exc:
+            matched = _is_retryable(exc.stderr, retry_on)
+            if not is_last_attempt and matched:
+                _wait_before_retry(attempt, total_attempts)
+                continue
+            _log_retry_outcome(attempt, total_attempts, matched=matched)
+            raise
+
+        if result.returncode != 0:
+            matched = _is_retryable(result.stdout + result.stderr, retry_on)
+            if not is_last_attempt and matched:
+                _wait_before_retry(attempt, total_attempts)
+                continue
+            _log_retry_outcome(attempt, total_attempts, matched=matched)
+            if check:
+                raise SubprocessError(cmd=cmd, returncode=result.returncode, stderr=result.stderr)
+        return result
+
+    # Unreachable: total_attempts >= 1, so the loop always returns or raises.
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _dispatch(  # noqa: PLR0913
+    cmd: list[str],
+    *,
+    cwd: str | None,
+    timeout: int,
+    stream: bool,
+    interactive: bool,
+    stdin: str | None,
+    env: dict[str, str] | None,
+    quiet: bool,
+) -> SubprocessResult:
+    """Run *cmd* once via the appropriate backend, never raising on non-zero exit.
+
+    Not-found and timeout failures still raise ``SubprocessError``
+    unconditionally (as before); only the "command ran and exited non-zero"
+    case is deferred to the caller so :func:`run_command` can decide whether
+    to retry before raising.
+    """
     if interactive:
-        return _run_interactive(cmd, cwd=cwd, check=check, env=merged_env)
+        return _run_interactive(cmd, cwd=cwd, check=False, env=env)
     if stream:
-        return _run_streaming(
-            cmd, cwd=cwd, timeout=timeout, check=check, stdin=stdin, env=merged_env
-        )
+        return _run_streaming(cmd, cwd=cwd, timeout=timeout, check=False, stdin=stdin, env=env)
     return _run_captured(
-        cmd, cwd=cwd, timeout=timeout, check=check, stdin=stdin, env=merged_env, quiet=quiet
+        cmd, cwd=cwd, timeout=timeout, check=False, stdin=stdin, env=env, quiet=quiet
     )
+
+
+def _is_retryable(output: str, retry_on: Sequence[str] | None) -> bool:
+    """Return ``True`` if *output* contains any of the *retry_on* patterns."""
+    if not retry_on:
+        return False
+    return any(pattern in output for pattern in retry_on)
+
+
+def _wait_before_retry(attempt: int, total_attempts: int) -> None:
+    """Sleep for the backoff delay corresponding to *attempt* (0-indexed)."""
+    delay = _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
+    print(
+        f"Transient failure detected (attempt {attempt + 1}/{total_attempts}); "
+        f"retrying in {delay:g}s...",
+        file=sys.stderr,
+    )
+    _sleep(delay)
+
+
+def _log_retry_outcome(attempt: int, total_attempts: int, *, matched: bool) -> None:
+    """Log why no further retry will happen, if retries were configured at all.
+
+    Distinguishes "gave up after exhausting all retries" from "failure did not
+    match any retryable pattern, so it was never retried" — both look like a
+    first-attempt failure otherwise, which hides useful diagnostic context.
+    """
+    if total_attempts <= 1:
+        return
+    if not matched:
+        print(
+            "Failure does not match any retryable pattern; not retrying.",
+            file=sys.stderr,
+        )
+        return
+    print(
+        f"Giving up after {attempt + 1}/{total_attempts} attempts.",
+        file=sys.stderr,
+    )
+
+
+def _sleep(seconds: float) -> None:
+    """Sleep for *seconds*. Isolated so tests can monkeypatch it."""
+    time.sleep(seconds)
 
 
 def _run_interactive(
@@ -139,13 +259,14 @@ def _run_interactive(
             stderr=stderr,
         ) from exc
 
-    result = SubprocessResult(stdout="", stderr="", returncode=proc.returncode)
+    stderr = "(output not captured in interactive mode)" if proc.returncode != 0 else ""
+    result = SubprocessResult(stdout="", stderr=stderr, returncode=proc.returncode)
 
     if check and result.returncode != 0:
         raise SubprocessError(
             cmd=cmd,
             returncode=result.returncode,
-            stderr="(output not captured in interactive mode)",
+            stderr=result.stderr,
         )
 
     return result
