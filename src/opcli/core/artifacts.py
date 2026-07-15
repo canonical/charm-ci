@@ -180,7 +180,7 @@ def artifacts_path(
     """
     gen_path = artifacts_build_path(root)
     if not gen_path.exists():
-        msg = f"{ARTIFACTS_BUILD_YAML} not found. Run 'opcli artifacts build' first."
+        msg = f"{gen_path} not found. Run 'opcli artifacts build' first."
         raise ConfigurationError(msg)
 
     generated = load_artifacts_build(gen_path)
@@ -520,7 +520,7 @@ def artifacts_localize(root: Path) -> int:
     """
     gen_path = artifacts_build_path(root)
     if not gen_path.exists():
-        msg = f"{ARTIFACTS_BUILD_YAML} not found."
+        msg = f"{gen_path} not found."
         raise ConfigurationError(msg)
 
     generated = load_artifacts_build(gen_path)

@@ -513,11 +513,11 @@ def test_deploy(juju, charm_paths, charm_resource_images):
 from pathlib import Path
 import pytest
 from opcli.models.artifacts_build import ArtifactsGenerated
-from opcli.pytest_plugin import build_rock_images
+from opcli.pytest_plugin import artifacts_root_from_yaml_path, build_rock_images
 
 @pytest.fixture(scope="session")
 def rock_images(opcli_artifacts: ArtifactsGenerated, opcli_build_yaml_path: Path) -> dict[str, str]:
-    return build_rock_images(opcli_artifacts, opcli_build_yaml_path.parent)
+    return build_rock_images(opcli_artifacts, artifacts_root_from_yaml_path(opcli_build_yaml_path))
 ```
 
 ```python

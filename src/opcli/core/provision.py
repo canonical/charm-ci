@@ -175,7 +175,7 @@ def provision_load(
     """
     gen_path = artifacts_build_path(root)
     if not gen_path.exists():
-        logger.info("No %s found — nothing to load.", ARTIFACTS_BUILD_YAML)
+        logger.info("No %s found — nothing to load.", gen_path)
         return []
 
     generated = load_artifacts_build(gen_path)

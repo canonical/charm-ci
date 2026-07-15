@@ -119,8 +119,7 @@ def artifacts_publish(
 
     if not gen_path.exists():
         msg = (
-            f"{ARTIFACTS_BUILD_YAML} not found in {root}. "
-            "Run 'opcli artifacts build' or 'opcli artifacts fetch' first."
+            f"{gen_path} not found. Run 'opcli artifacts build' or 'opcli artifacts fetch' first."
         )
         raise ConfigurationError(msg)
 
