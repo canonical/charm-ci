@@ -212,6 +212,11 @@ def spread_jobs(
     - ``arch``: architecture string — taken from the explicit ``arch:`` field
       on the system entry when present, otherwise derived from the runner label.
 
+    ``spread -list`` itself does not guarantee a stable order across
+    invocations (job order depends on Go map iteration internal to spread),
+    so entries are sorted here by ``selector`` to produce a deterministic,
+    reproducible GitHub Actions matrix.
+
     Args:
         root: Project root directory containing ``spread.yaml``.
         include: Optional ``fnmatch`` glob pattern matched against the raw
@@ -268,6 +273,7 @@ def spread_jobs(
                 }
             )
 
+    entries.sort(key=lambda entry: entry["selector"])
     return entries
 
 

@@ -1347,6 +1347,27 @@ class TestSpreadTasks:
         with pytest.raises(ConfigurationError):
             spread_jobs(tmp_path)
 
+    def test_entries_sorted_by_selector_regardless_of_list_order(self, tmp_path: Path) -> None:
+        """Entries are sorted, since spread -list order is not guaranteed stable."""
+        write_file(tmp_path / "spread.yaml", _SPREAD_WITH_RUNNER)
+
+        # Deliberately out of order and not matching insertion order of any input.
+        shuffled_list = (
+            "integration-test-ci:ubuntu-24.04:tests/integration/run:test_other\n"
+            "integration-test-ci:ubuntu-22.04:tests/integration/run:test_other\n"
+            "integration-test-ci:ubuntu-24.04:tests/integration/run:test_charm\n"
+            "integration-test-ci:ubuntu-22.04:tests/integration/run:test_charm\n"
+        )
+
+        with patch(
+            "opcli.core.spread.run_command",
+            return_value=self._mock_list(shuffled_list),
+        ):
+            entries = spread_jobs(tmp_path)
+
+        selectors = [e["selector"] for e in entries]
+        assert selectors == sorted(selectors)
+
     def test_spread_list_called_with_ci_backend_selectors(self, tmp_path: Path) -> None:
         """Spread -list is invoked with one selector per virtual backend."""
         write_file(tmp_path / "spread.yaml", _SPREAD_NO_RUNNER)
