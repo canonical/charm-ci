@@ -12,9 +12,11 @@ import pytest
 from opcli.core.exceptions import ConfigurationError, DiscoveryError, SubprocessError
 from opcli.core.publish import (
     _CHARMHUB_RETRIES,
+    _KNOWN_TRANSPORTS,
     _RETRYABLE_CHARMHUB_ERRORS,
     PublishResult,
     ReleaseEntry,
+    _add_transport_prefix,
     _parse_duplicate_revision,
     artifacts_publish,
     publish_results_to_dicts,
@@ -580,6 +582,17 @@ charms:
 
 class TestTransportPrefixHandling:
     """Already-qualified refs should not get double-prefixed."""
+
+    @pytest.mark.parametrize("transport", _KNOWN_TRANSPORTS)
+    def test_known_transport_passthrough(self, transport: str) -> None:
+        """Every known transport in _KNOWN_TRANSPORTS is left untouched.
+
+        Guards against a typo or wrong separator in any entry silently
+        breaking passthrough for that transport (only docker:// and
+        oci-archive: were previously covered by end-to-end tests).
+        """
+        ref = f"{transport}:some/path:tag"
+        assert _add_transport_prefix(ref) == ref
 
     def test_localhost_registry_ref_gets_docker_prefix(self, tmp_path: Path) -> None:
         """A local-registry image ref (host:port, no transport) gets docker://.

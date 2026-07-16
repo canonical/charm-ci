@@ -725,9 +725,12 @@ def _release_charm(  # noqa: PLR0913
 #  Lowest-level utilities
 # ---------------------------------------------------------------------------
 
-# Known skopeo/OCI transport names charmcraft/skopeo understand. Longer names
-# that share a prefix with a shorter one (e.g. ``oci-archive`` vs ``oci``) must
-# come first so the regex alternation matches the full transport name.
+# Known skopeo/OCI transport names charmcraft/skopeo understand. Each entry is
+# anchored with a trailing literal ``:`` in the compiled regex below, so
+# alternation order doesn't affect correctness (e.g. ``docker`` failing to
+# match ``docker-archive:...`` just falls through to try the next
+# alternative). Grouped with longer, more specific names first purely for
+# readability.
 _KNOWN_TRANSPORTS = (
     "docker-archive",
     "docker-daemon",
