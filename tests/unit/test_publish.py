@@ -581,6 +581,86 @@ charms:
 class TestTransportPrefixHandling:
     """Already-qualified refs should not get double-prefixed."""
 
+    def test_localhost_registry_ref_gets_docker_prefix(self, tmp_path: Path) -> None:
+        """A local-registry image ref (host:port, no transport) gets docker://.
+
+        Regression test: ``localhost:32000/...`` was previously misdetected
+        as already having a transport prefix (``localhost`` looked like a
+        URI scheme to the old regex), so ``docker://`` was never prepended
+        and charmcraft failed with "unknown transport localhost".
+        """
+        build_yaml = """\
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: localhost:32000/k8s-rock:amd64-20260101-120000
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: k8s-charm/k8s-charm_ubuntu-24.04-amd64.charm
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+        root = _setup_project(tmp_path, build_yaml)
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge")
+
+        res_cmd = next(c for c in calls if "upload-resource" in c)
+        image_arg = next(a for a in res_cmd if a.startswith("--image="))
+        assert image_arg == "--image=docker://localhost:32000/k8s-rock:amd64-20260101-120000"
+
+    def test_custom_host_port_registry_ref_gets_docker_prefix(self, tmp_path: Path) -> None:
+        """A custom registry ref shaped like host:port also gets docker://."""
+        build_yaml = """\
+version: 1
+rocks:
+  - name: k8s-rock
+    rockcraft-yaml: k8s-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: myregistry:5000/k8s-rock:amd64-20260101-120000
+charms:
+  - name: k8s-charm
+    charmcraft-yaml: k8s-charm/charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: "ubuntu@24.04"
+        path: k8s-charm/k8s-charm_ubuntu-24.04-amd64.charm
+    resources:
+      k8s-rock-image:
+        type: oci-image
+        rock: k8s-rock
+"""
+        root = _setup_project(tmp_path, build_yaml)
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kwargs: object) -> SubprocessResult:
+            calls.append(cmd)
+            return _mock_result(stdout=json.dumps({"revision": 1}))
+
+        with patch("opcli.core.publish.run_command", side_effect=fake_run):
+            artifacts_publish(root, channel="latest/edge")
+
+        res_cmd = next(c for c in calls if "upload-resource" in c)
+        image_arg = next(a for a in res_cmd if a.startswith("--image="))
+        assert image_arg == "--image=docker://myregistry:5000/k8s-rock:amd64-20260101-120000"
+
     def test_docker_prefix_passthrough(self, tmp_path: Path) -> None:
         """An upstream-source that already has docker:// prefix."""
         artifacts_yaml = """\

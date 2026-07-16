@@ -725,7 +725,22 @@ def _release_charm(  # noqa: PLR0913
 #  Lowest-level utilities
 # ---------------------------------------------------------------------------
 
-_TRANSPORT_PREFIX_RE = "^[a-z][a-z0-9+.-]*:"
+# Known skopeo/OCI transport names charmcraft/skopeo understand. Longer names
+# that share a prefix with a shorter one (e.g. ``oci-archive`` vs ``oci``) must
+# come first so the regex alternation matches the full transport name.
+_KNOWN_TRANSPORTS = (
+    "docker-archive",
+    "docker-daemon",
+    "containers-storage",
+    "oci-archive",
+    "docker",
+    "oci",
+    "dir",
+    "ostree",
+    "sif",
+    "tarball",
+)
+_TRANSPORT_PREFIX_RE = re.compile(r"^(?:" + "|".join(_KNOWN_TRANSPORTS) + r"):")
 
 
 def _build_upload_resource_cmd(charm_name: str, resource_name: str, image_ref: str) -> list[str]:
@@ -763,10 +778,17 @@ def _build_release_cmd(
 def _add_transport_prefix(ref: str) -> str:
     """Ensure a registry ref has a skopeo transport prefix.
 
-    If the ref already contains a transport (e.g. ``docker://``, ``oci-archive:``),
-    returns it unchanged.  Otherwise prepends ``docker://``.
+    If the ref already starts with a known transport (e.g. ``docker://``,
+    ``oci-archive:``), returns it unchanged.  Otherwise prepends ``docker://``.
+
+    Matching is restricted to a finite list of known skopeo/OCI transports
+    (see ``_KNOWN_TRANSPORTS``) rather than a generic "looks like a URI
+    scheme" pattern. A generic pattern would false-positive on bare
+    ``host:port`` refs such as ``localhost:32000/my-image:tag`` — treating
+    ``localhost`` as if it were already a transport and leaving the ref
+    unprefixed, which charmcraft/skopeo then reject with "unknown transport".
     """
-    if re.match(_TRANSPORT_PREFIX_RE, ref):
+    if _TRANSPORT_PREFIX_RE.match(ref):
         return ref
     return f"docker://{ref}"
 
