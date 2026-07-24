@@ -400,8 +400,7 @@ integration-suites:
       TOX_ENV: charms-integration
 ```
 
-This also applies to `opcli pytest run`/`expand` directly via the `-e` flag,
-which `TOX_ENV` is passed into when spread invokes them.
+This also applies to `opcli pytest run`/`expand` directly — pass `-e` explicitly (e.g. `opcli pytest expand -e "$TOX_ENV"`) since only the generated `task.yaml` shell script reads `TOX_ENV` automatically.
 
 ### Pytest invocation templates
 
