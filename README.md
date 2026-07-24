@@ -336,7 +336,7 @@ integration-suites:
     backends:
       - integration-test
     environment:
-      CONCIERGE/test_k8s_charm: concierge-microk8s.yaml
+      CONCIERGE/test_k8s_charm: concierge-k8s.yaml
 
   # Monorepo pattern — sub-charm with its own tests
   k8s-charm/tests/integration/:

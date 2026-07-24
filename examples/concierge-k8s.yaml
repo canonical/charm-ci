@@ -5,11 +5,11 @@ juju:
     automatically-retry-hooks: "false"
 
 providers:
-  microk8s:
+  k8s:
     enable: true
     bootstrap: true
-    addons:
-      - hostpath-storage
+    features:
+      local-storage: {}
 
 host:
   packages:
