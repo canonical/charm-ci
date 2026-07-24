@@ -29,7 +29,13 @@ app = typer.Typer(
 def run(
     ctx: typer.Context,
     *,
-    tox_env: str = typer.Option("integration", "-e", help="Tox environment name."),
+    tox_env: str = typer.Option(
+        "integration",
+        "-e",
+        help="Tox environment name. In generated task.yaml this is sourced from "
+        'the TOX_ENV env var (defaulting to "integration"); override it via '
+        "spread.yaml's environment: block.",
+    ),
     suite: str | None = typer.Option(
         None,
         "--suite",
@@ -67,7 +73,13 @@ def run(
 def expand(
     ctx: typer.Context,
     *,
-    tox_env: str = typer.Option("integration", "-e", help="Tox environment name."),
+    tox_env: str = typer.Option(
+        "integration",
+        "-e",
+        help="Tox environment name. In generated task.yaml this is sourced from "
+        'the TOX_ENV env var (defaulting to "integration"); override it via '
+        "spread.yaml's environment: block.",
+    ),
     suite: str | None = typer.Option(
         None,
         "--suite",
