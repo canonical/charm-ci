@@ -382,6 +382,27 @@ At expand time, `integration-suites` entries are converted into native spread `s
 | `summary` | — | Spread suite summary |
 | `environment` | — | Additional environment variables (merged with auto-discovered modules) |
 
+### Overriding the tox environment with `TOX_ENV`
+
+The generated `task.yaml` runs `opcli pytest expand -e "${TOX_ENV:-integration}"`,
+so it defaults to the `integration` tox environment. If your project already
+has a differently-named tox environment (e.g. `charms-integration`,
+`k8s-integration`), set `TOX_ENV` in the suite's `environment:` block instead
+of renaming your tox env or adding a redundant `[testenv:integration]` alias:
+
+```yaml
+integration-suites:
+  tests/integration/:
+    working-dir: ./
+    backends:
+      - integration-test
+    environment:
+      TOX_ENV: charms-integration
+```
+
+This also applies to `opcli pytest run`/`expand` directly via the `-e` flag,
+which `TOX_ENV` is passed into when spread invokes them.
+
 ### Pytest invocation templates
 
 Controls how `opcli pytest run` and `opcli pytest expand` pass extra flags to the test framework. These keys live **per-suite inside `integration-suites`** — they are opcli-only and stripped from the spread output:
