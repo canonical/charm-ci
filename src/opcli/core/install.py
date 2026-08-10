@@ -13,10 +13,9 @@ import grp
 import os
 import platform
 import shutil
-import subprocess
 from pathlib import Path
 
-from opcli.core.exceptions import ConfigurationError
+from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
 
@@ -78,14 +77,29 @@ def install_doctor() -> dict[str, tuple[str | None, str | None]]:
     return result
 
 
+def _install_snap(binary: str, snap_name: str | None = None, *, classic: bool = True) -> None:
+    """Install *snap_name* (defaults to *binary*) via snap, unless already on PATH.
+
+    Prefixes the ``snap install`` command with ``sudo`` when not running as
+    root, matching the pattern shared by all the simple single-snap
+    installers below (``gh``, ``uv``, ``concierge``, ``charmcraft``,
+    ``rockcraft``, ``snapcraft``).
+    """
+    if shutil.which(binary):
+        status(f"{binary} already installed")
+        return
+    snap_name = snap_name or binary
+    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
+    cmd = [*snap_cmd, "snap", "install", snap_name]
+    if classic:
+        cmd.append("--classic")
+    with step(f"Installing {binary}"):
+        run_command(cmd)
+
+
 def install_gh() -> None:
     """Install the GitHub CLI (gh) snap if not already on PATH."""
-    if shutil.which("gh"):
-        status("gh already installed")
-        return
-    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
-    with step("Installing gh"):
-        run_command([*snap_cmd, "snap", "install", "gh", "--classic"])
+    _install_snap("gh")
 
 
 def install_uv() -> None:
@@ -96,12 +110,7 @@ def install_uv() -> None:
     on a fresh root environment (e.g. a spread prepare script) it may
     be missing and needs to be installed via the snap.
     """
-    if shutil.which("uv"):
-        status("uv already installed")
-        return
-    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
-    with step("Installing uv"):
-        run_command([*snap_cmd, "snap", "install", "astral-uv", "--classic"])
+    _install_snap("uv", "astral-uv")
 
 
 def install_spread() -> None:
@@ -165,12 +174,7 @@ def install_tox() -> None:
 
 def install_concierge() -> None:
     """Install the concierge snap if not already on PATH."""
-    if shutil.which("concierge"):
-        status("concierge already installed")
-        return
-    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
-    with step("Installing concierge"):
-        run_command([*snap_cmd, "snap", "install", "concierge", "--classic"])
+    _install_snap("concierge")
 
 
 def _lxd_is_initialised(snap_cmd: list[str]) -> bool:
@@ -222,32 +226,17 @@ def install_lxd() -> None:
 
 def install_charmcraft() -> None:
     """Install the charmcraft snap if not already on PATH."""
-    if shutil.which("charmcraft"):
-        status("charmcraft already installed")
-        return
-    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
-    with step("Installing charmcraft"):
-        run_command([*snap_cmd, "snap", "install", "charmcraft", "--classic"])
+    _install_snap("charmcraft")
 
 
 def install_rockcraft() -> None:
     """Install the rockcraft snap if not already on PATH."""
-    if shutil.which("rockcraft"):
-        status("rockcraft already installed")
-        return
-    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
-    with step("Installing rockcraft"):
-        run_command([*snap_cmd, "snap", "install", "rockcraft", "--classic"])
+    _install_snap("rockcraft")
 
 
 def install_snapcraft() -> None:
     """Install the snapcraft snap if not already on PATH."""
-    if shutil.which("snapcraft"):
-        status("snapcraft already installed")
-        return
-    snap_cmd = [] if os.getuid() == 0 else ["sudo"]
-    with step("Installing snapcraft"):
-        run_command([*snap_cmd, "snap", "install", "snapcraft", "--classic"])
+    _install_snap("snapcraft")
 
 
 def _check_os_prerequisites() -> None:
@@ -274,26 +263,22 @@ def _get_version(tool: str, path: str) -> str | None:
     if not flags:
         return None
     try:
-        result = subprocess.run(
-            [path, *flags],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        output = (result.stdout or result.stderr).strip()
-        if not output:
-            return None
-        # Some tools (e.g. tox) emit preamble lines before the version.
-        # Use the first line that starts with a digit.
-        for line in output.splitlines():
-            stripped = line.strip()
-            if stripped and stripped[0].isdigit():
-                # Truncate at " from " (tox: "4.56.1 from /path/...")
-                return stripped.split(" from ")[0]
-        return output.splitlines()[0]
-    except Exception:
+        result = run_command([path, *flags], timeout=5, check=False, stream=False, quiet=True)
+    except SubprocessError:
+        # Binary vanished between the `shutil.which` check and this call,
+        # or it hung past the 5s timeout — either way, no version to report.
         return None
+    output = (result.stdout or result.stderr).strip()
+    if not output:
+        return None
+    # Some tools (e.g. tox) emit preamble lines before the version.
+    # Use the first line that starts with a digit.
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped and stripped[0].isdigit():
+            # Truncate at " from " (tox: "4.56.1 from /path/...")
+            return stripped.split(" from ")[0]
+    return output.splitlines()[0]
 
 
 def _warn_if_local_bin_not_on_path(*, prefix: bool) -> None:

@@ -10,9 +10,10 @@ import pytest
 from typer.testing import CliRunner
 
 from opcli.commands.install import app as install_app
-from opcli.core.exceptions import ConfigurationError
+from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.install import (
     _check_os_prerequisites,
+    _get_version,
     _lxd_is_initialised,
     _warn_if_local_bin_not_on_path,
     install_all,
@@ -453,6 +454,74 @@ def test_install_all_raises_on_non_linux(mocker):
     mocker.patch("shutil.which", return_value="/usr/bin/snap")
     with pytest.raises(ConfigurationError, match="Linux"):
         install_all()
+
+
+# ---------------------------------------------------------------------------
+# _get_version
+# ---------------------------------------------------------------------------
+
+
+def _fake_result(stdout="", stderr=""):
+    return MagicMock(stdout=stdout, stderr=stderr)
+
+
+def test_get_version_uses_default_version_flag(mocker):
+    mock_run = mocker.patch(
+        "opcli.core.install.run_command", return_value=_fake_result("gh version 2.50.0\n")
+    )
+    assert _get_version("gh", "/usr/bin/gh") == "gh version 2.50.0"
+    mock_run.assert_called_once_with(
+        ["/usr/bin/gh", "--version"], timeout=5, check=False, stream=False, quiet=True
+    )
+
+
+def test_get_version_spread_has_no_version_flag(mocker):
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    assert _get_version("spread", "/usr/bin/spread") is None
+    mock_run.assert_not_called()
+
+
+def test_get_version_lxd_uses_version_subcommand(mocker):
+    mock_run = mocker.patch(
+        "opcli.core.install.run_command", return_value=_fake_result("5.21.2\n")
+    )
+    assert _get_version("lxd", "/snap/bin/lxd") == "5.21.2"
+    mock_run.assert_called_once_with(
+        ["/snap/bin/lxd", "version"], timeout=5, check=False, stream=False, quiet=True
+    )
+
+
+def test_get_version_returns_none_on_subprocess_error(mocker):
+    mocker.patch(
+        "opcli.core.install.run_command",
+        side_effect=SubprocessError(cmd=["x"], returncode=-1, stderr="timed out"),
+    )
+    assert _get_version("gh", "/usr/bin/gh") is None
+
+
+def test_get_version_returns_none_on_empty_output(mocker):
+    mocker.patch("opcli.core.install.run_command", return_value=_fake_result())
+    assert _get_version("gh", "/usr/bin/gh") is None
+
+
+def test_get_version_skips_preamble_and_truncates_at_from(mocker):
+    mocker.patch(
+        "opcli.core.install.run_command",
+        return_value=_fake_result("some preamble\n4.56.1 from /path/to/tox\n"),
+    )
+    assert _get_version("tox", "/usr/bin/tox") == "4.56.1"
+
+
+def test_get_version_falls_back_to_first_line_without_digit(mocker):
+    mocker.patch(
+        "opcli.core.install.run_command", return_value=_fake_result("no digits here\nnope\n")
+    )
+    assert _get_version("gh", "/usr/bin/gh") == "no digits here"
+
+
+def test_get_version_reads_stderr_when_stdout_empty(mocker):
+    mocker.patch("opcli.core.install.run_command", return_value=_fake_result(stderr="1.2.3\n"))
+    assert _get_version("gh", "/usr/bin/gh") == "1.2.3"
 
 
 # ---------------------------------------------------------------------------
