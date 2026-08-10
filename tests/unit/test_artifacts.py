@@ -174,6 +174,138 @@ class TestArtifactsBuild:
         assert "./aproxy_ubuntu-20.04-amd64.charm" in paths
         assert "./aproxy_ubuntu-22.04-amd64.charm" in paths
 
+    def test_build_charm_arch_only_filename_falls_back_to_charmcraft_base(
+        self, tmp_path: Path
+    ) -> None:
+        """Arch-only filenames (``{name}_{arch}.charm``) have no base in the name.
+
+        charmcraft.yaml's ``base:`` field is a legal alternative to declaring
+        the base in each ``platforms:`` key (e.g. ``platforms: {amd64:}``).
+        In that case charmcraft emits ``{name}_{arch}.charm`` with no base
+        info in the filename, so base must be read from charmcraft.yaml
+        (regression test for issue #107).
+        """
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: chrony\n  charmcraft-yaml: charmcraft.yaml\n",
+        )
+        write_file(
+            tmp_path / "charmcraft.yaml",
+            "name: chrony\nbase: ubuntu@24.04\nplatforms:\n  amd64:\n",
+        )
+        write_file(tmp_path / "chrony_amd64.charm", "fake charm")
+
+        with patch("opcli.core.artifacts.run_command"):
+            result = artifacts_build(tmp_path)
+
+        gen = load_artifacts_build(result)
+        outputs = gen.charms[0].builds
+        assert len(outputs) == 1
+        assert outputs[0].path == "./chrony_amd64.charm"
+        assert outputs[0].base == "ubuntu@24.04"
+
+    def test_build_charm_arch_only_filename_no_base_field_stays_none(self, tmp_path: Path) -> None:
+        """Arch-only filename + no top-level ``base:`` field: base stays None.
+
+        The fallback must degrade gracefully rather than raise or fabricate
+        a value when charmcraft.yaml has no ``base:`` key at all.
+        """
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: chrony\n  charmcraft-yaml: charmcraft.yaml\n",
+        )
+        write_file(
+            tmp_path / "charmcraft.yaml",
+            "name: chrony\nplatforms:\n  amd64:\n",
+        )
+        write_file(tmp_path / "chrony_amd64.charm", "fake charm")
+
+        with patch("opcli.core.artifacts.run_command"):
+            result = artifacts_build(tmp_path)
+
+        gen = load_artifacts_build(result)
+        assert gen.charms[0].builds[0].base is None
+
+    def test_build_charm_arch_only_filename_non_string_base_stays_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Fallback stays None if ``base:`` is not a plain string.
+
+        charmcraft's ``base:`` field is documented as a single string; guard
+        against a malformed/unexpected value (e.g. a YAML list) so we never
+        write a garbage stringified-list value into artifacts.build.yaml.
+        """
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: chrony\n  charmcraft-yaml: charmcraft.yaml\n",
+        )
+        write_file(
+            tmp_path / "charmcraft.yaml",
+            "name: chrony\nbase: [ubuntu@22.04, ubuntu@24.04]\nplatforms:\n  amd64:\n",
+        )
+        write_file(tmp_path / "chrony_amd64.charm", "fake charm")
+
+        with patch("opcli.core.artifacts.run_command"):
+            result = artifacts_build(tmp_path)
+
+        gen = load_artifacts_build(result)
+        assert gen.charms[0].builds[0].base is None
+
+    def test_build_charm_arch_only_filename_empty_string_base_stays_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Fallback stays None (not ``""``) if ``base:`` is an empty string.
+
+        An empty string is a syntactically valid YAML string, so a bare
+        ``isinstance(base, str)`` guard alone would let ``base: ""`` through
+        instead of degrading to ``base: null`` like every other malformed/
+        absent case.
+        """
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: chrony\n  charmcraft-yaml: charmcraft.yaml\n",
+        )
+        write_file(
+            tmp_path / "charmcraft.yaml",
+            'name: chrony\nbase: ""\nplatforms:\n  amd64:\n',
+        )
+        write_file(tmp_path / "chrony_amd64.charm", "fake charm")
+
+        with patch("opcli.core.artifacts.run_command"):
+            result = artifacts_build(tmp_path)
+
+        gen = load_artifacts_build(result)
+        assert gen.charms[0].builds[0].base is None
+
+    def test_build_charm_arch_only_filename_malformed_yaml_stays_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Arch-only filename + unparsable charmcraft.yaml: base stays None.
+
+        The fallback must not propagate a YAML parse error — build output
+        should still be produced with ``base: null``, same as before #107
+        was fixed, rather than the whole build failing.
+        """
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: chrony\n  charmcraft-yaml: charmcraft.yaml\n",
+        )
+        # Duplicate keys make this invalid/ambiguous YAML for some parsers,
+        # but ruamel.yaml's round-trip loader raises on this specific case
+        # (unhashable/duplicate mapping key), which is what we want to
+        # exercise here: a real parse failure in the fallback.
+        write_file(
+            tmp_path / "charmcraft.yaml",
+            "name: chrony\nname: chrony\nplatforms:\n  amd64:\n",
+        )
+        write_file(tmp_path / "chrony_amd64.charm", "fake charm")
+
+        with patch("opcli.core.artifacts.run_command"):
+            result = artifacts_build(tmp_path)
+
+        gen = load_artifacts_build(result)
+        assert gen.charms[0].builds[0].base is None
+
     def test_build_single_rock(self, tmp_path: Path) -> None:
         write_file(
             tmp_path / "artifacts.yaml",
@@ -1594,6 +1726,67 @@ class TestArtifactsLocalize:
         bases = {o.base for o in charm.builds}
         assert "ubuntu@22.04" in bases
         assert "ubuntu@24.04" in bases
+
+    def test_localise_arch_only_filename_falls_back_to_charmcraft_base(
+        self, tmp_path: Path
+    ) -> None:
+        """Arch-only filenames fall back to charmcraft.yaml's ``base:`` field.
+
+        Regression test for issue #107: ``platforms: {amd64:}`` produces
+        ``{name}_{arch}.charm`` with no base info in the name.
+        """
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_CI)
+        write_file(
+            tmp_path / "charmcraft.yaml",
+            "name: my-charm\nbase: ubuntu@24.04\nplatforms:\n  amd64:\n",
+        )
+        (tmp_path / "my-charm_amd64.charm").write_bytes(b"")
+
+        artifacts_localize(tmp_path)
+
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
+        charm = gen.charms[0]
+        assert len(charm.builds) == 1
+        assert charm.builds[0].path == "./my-charm_amd64.charm"
+        assert charm.builds[0].base == "ubuntu@24.04"
+
+    def test_localise_arch_only_filename_missing_charmcraft_yaml_stays_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Fallback degrades to None (not an error) if charmcraft.yaml is absent.
+
+        Unlike ``artifacts build`` (which pre-validates charmcraft.yaml
+        exists before ever building), ``artifacts localize`` only reads
+        artifacts.build.yaml plus the downloaded/local .charm files, so the
+        charmcraft.yaml referenced in ``charmcraft-yaml:`` may genuinely be
+        missing from the local checkout at localize time.
+        """
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_CI)
+        # Intentionally do not write tmp_path / "charmcraft.yaml".
+        (tmp_path / "my-charm_amd64.charm").write_bytes(b"")
+
+        artifacts_localize(tmp_path)
+
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
+        charm = gen.charms[0]
+        assert len(charm.builds) == 1
+        assert charm.builds[0].base is None
+
+    def test_localise_arch_only_filename_no_base_field_stays_none(self, tmp_path: Path) -> None:
+        """Fallback stays None if charmcraft.yaml has no top-level ``base:``."""
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_CI)
+        write_file(
+            tmp_path / "charmcraft.yaml",
+            "name: my-charm\nplatforms:\n  amd64:\n",
+        )
+        (tmp_path / "my-charm_amd64.charm").write_bytes(b"")
+
+        artifacts_localize(tmp_path)
+
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
+        charm = gen.charms[0]
+        assert len(charm.builds) == 1
+        assert charm.builds[0].base is None
 
 
 class TestArtifactsFetch:

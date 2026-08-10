@@ -26,6 +26,7 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 |---|---|
 | [docs/ISD283.md](docs/ISD283.md) | Functional specification |
 | [AGENTS.md](AGENTS.md) | Developer guide for AI coding agents |
+| [CHANGELOG.md](CHANGELOG.md) | Notable changes per release |
 | [examples/](examples/) | Example project layout with `artifacts.yaml`, `spread.yaml`, and `concierge.yaml` |
 
 ## Installation
@@ -886,6 +887,31 @@ tests/
 docs/          # Spec
 examples/      # Example project layout
 ```
+
+### Versioning policy
+
+`opcli` is currently in **alpha** (`Development Status :: 3 - Alpha`,
+versions `0.0.1-alpha.N`). While in alpha:
+
+- **No backward-compatibility guarantee.** Any release may change
+  `artifacts.yaml`/`artifacts.build.yaml` schema behavior, CLI flags,
+  `spread.yaml` virtual-backend keys, or reusable-workflow inputs without a
+  major version bump. Breaking changes are called out in
+  [CHANGELOG.md](CHANGELOG.md) and, where practical, kept backward-compatible
+  with a deprecation window instead of an outright break.
+- `artifacts.yaml` and `artifacts.build.yaml` carry an explicit
+  `version: 1` schema field (see `src/opcli/models/`) — this is the seed for
+  a real schema-migration story once the file format needs to change after
+  a stable release.
+- Alpha releases are tagged (`vX.Y.Z-alpha.N`) and published as
+  [GitHub Releases](https://github.com/canonical/charm-ci/releases); there is
+  no PyPI package yet.
+
+Once `opcli` reaches `1.0.0`, it will follow
+[Semantic Versioning](https://semver.org/): breaking changes to the CLI,
+`artifacts.yaml`/`artifacts.build.yaml` schemas, `spread.yaml` virtual-backend
+keys, or reusable-workflow inputs will require a major version bump and will
+be documented in [CHANGELOG.md](CHANGELOG.md) with a migration note.
 
 ## License
 
