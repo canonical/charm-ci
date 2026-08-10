@@ -10,13 +10,20 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Every job here only checks out the repo and runs lint/type/test/shellcheck
+# locally -- none of them need to write to the repo, packages, or anything
+# else, so the default GITHUB_TOKEN is restricted to read-only.
+permissions:
+  contents: read
+
 jobs:
   license-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Check license headers
-        uses: apache/skywalking-eyes/header@main
+        # Pinned for supply-chain safety; Renovate keeps this current.
+        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1
         with:
           config: .licenserc.yaml
 

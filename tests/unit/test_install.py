@@ -10,9 +10,10 @@ import pytest
 from typer.testing import CliRunner
 
 from opcli.commands.install import app as install_app
-from opcli.core.exceptions import ConfigurationError
+from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.install import (
     _check_os_prerequisites,
+    _get_version,
     _lxd_is_initialised,
     _warn_if_local_bin_not_on_path,
     install_all,
@@ -288,7 +289,7 @@ def test_install_lxd_uses_sudo_as_non_root(mocker):
     assert call(["sudo", "lxd", "init", "--auto"]) in mock_run.call_args_list
 
 
-def test_install_lxd_adds_user_to_lxd_group(mocker):
+def test_install_lxd_adds_user_to_lxd_group(mocker, caplog):
     mocker.patch("shutil.which", return_value=None)
     mocker.patch("os.getuid", return_value=1000)
     mocker.patch.dict(os.environ, {"USER": "ubuntu"}, clear=False)
@@ -297,8 +298,10 @@ def test_install_lxd_adds_user_to_lxd_group(mocker):
     mocker.patch("grp.getgrnam", return_value=mock_group)
     mocker.patch("opcli.core.install._lxd_is_initialised", return_value=True)
     mock_run = mocker.patch("opcli.core.install.run_command")
-    install_lxd()
+    with caplog.at_level("WARNING"):
+        install_lxd()
     assert call(["sudo", "usermod", "-aG", "lxd", "ubuntu"]) in mock_run.call_args_list
+    assert "ubuntu added to lxd group" in caplog.text
 
 
 def test_install_lxd_skips_group_add_if_already_member(mocker):
@@ -428,7 +431,7 @@ def test_install_all_calls_all_installers_as_root(mocker):
     mock_snapcraft.assert_called_once()
 
 
-def test_install_all_warns_path_for_non_root(mocker, tmp_path, capsys):
+def test_install_all_warns_path_for_non_root(mocker, tmp_path, caplog):
     mocker.patch("platform.system", return_value="Linux")
     mocker.patch("shutil.which", return_value="/usr/bin/snap")
     mocker.patch("os.getuid", return_value=1000)
@@ -443,9 +446,9 @@ def test_install_all_warns_path_for_non_root(mocker, tmp_path, capsys):
     mocker.patch("opcli.core.install.install_charmcraft")
     mocker.patch("opcli.core.install.install_rockcraft")
     mocker.patch("opcli.core.install.install_snapcraft")
-    install_all()
-    captured = capsys.readouterr()
-    assert "export PATH" in captured.out
+    with caplog.at_level("WARNING"):
+        install_all()
+    assert "export PATH" in caplog.text
 
 
 def test_install_all_raises_on_non_linux(mocker):
@@ -453,6 +456,74 @@ def test_install_all_raises_on_non_linux(mocker):
     mocker.patch("shutil.which", return_value="/usr/bin/snap")
     with pytest.raises(ConfigurationError, match="Linux"):
         install_all()
+
+
+# ---------------------------------------------------------------------------
+# _get_version
+# ---------------------------------------------------------------------------
+
+
+def _fake_result(stdout="", stderr=""):
+    return MagicMock(stdout=stdout, stderr=stderr)
+
+
+def test_get_version_uses_default_version_flag(mocker):
+    mock_run = mocker.patch(
+        "opcli.core.install.run_command", return_value=_fake_result("gh version 2.50.0\n")
+    )
+    assert _get_version("gh", "/usr/bin/gh") == "gh version 2.50.0"
+    mock_run.assert_called_once_with(
+        ["/usr/bin/gh", "--version"], timeout=5, check=False, stream=False, quiet=True
+    )
+
+
+def test_get_version_spread_has_no_version_flag(mocker):
+    mock_run = mocker.patch("opcli.core.install.run_command")
+    assert _get_version("spread", "/usr/bin/spread") is None
+    mock_run.assert_not_called()
+
+
+def test_get_version_lxd_uses_version_subcommand(mocker):
+    mock_run = mocker.patch(
+        "opcli.core.install.run_command", return_value=_fake_result("5.21.2\n")
+    )
+    assert _get_version("lxd", "/snap/bin/lxd") == "5.21.2"
+    mock_run.assert_called_once_with(
+        ["/snap/bin/lxd", "version"], timeout=5, check=False, stream=False, quiet=True
+    )
+
+
+def test_get_version_returns_none_on_subprocess_error(mocker):
+    mocker.patch(
+        "opcli.core.install.run_command",
+        side_effect=SubprocessError(cmd=["x"], returncode=-1, stderr="timed out"),
+    )
+    assert _get_version("gh", "/usr/bin/gh") is None
+
+
+def test_get_version_returns_none_on_empty_output(mocker):
+    mocker.patch("opcli.core.install.run_command", return_value=_fake_result())
+    assert _get_version("gh", "/usr/bin/gh") is None
+
+
+def test_get_version_skips_preamble_and_truncates_at_from(mocker):
+    mocker.patch(
+        "opcli.core.install.run_command",
+        return_value=_fake_result("some preamble\n4.56.1 from /path/to/tox\n"),
+    )
+    assert _get_version("tox", "/usr/bin/tox") == "4.56.1"
+
+
+def test_get_version_falls_back_to_first_line_without_digit(mocker):
+    mocker.patch(
+        "opcli.core.install.run_command", return_value=_fake_result("no digits here\nnope\n")
+    )
+    assert _get_version("gh", "/usr/bin/gh") == "no digits here"
+
+
+def test_get_version_reads_stderr_when_stdout_empty(mocker):
+    mocker.patch("opcli.core.install.run_command", return_value=_fake_result(stderr="1.2.3\n"))
+    assert _get_version("gh", "/usr/bin/gh") == "1.2.3"
 
 
 # ---------------------------------------------------------------------------
@@ -515,31 +586,31 @@ def test_cli_install_doctor_missing_tool(mocker):
 # ---------------------------------------------------------------------------
 
 
-def test_path_warning_printed_when_local_bin_missing(mocker, tmp_path, capsys):
+def test_path_warning_printed_when_local_bin_missing(mocker, tmp_path, caplog):
     mocker.patch("pathlib.Path.home", return_value=tmp_path)
     mocker.patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "SHELL": "/bin/bash"}, clear=False)
-    _warn_if_local_bin_not_on_path(prefix=True)
-    captured = capsys.readouterr()
-    assert ".local/bin" in captured.out
-    assert "export PATH" in captured.out
-    assert ".bashrc" in captured.out
+    with caplog.at_level("WARNING"):
+        _warn_if_local_bin_not_on_path(prefix=True)
+    assert ".local/bin" in caplog.text
+    assert "export PATH" in caplog.text
+    assert ".bashrc" in caplog.text
 
 
-def test_path_warning_uses_zshrc_for_zsh(mocker, tmp_path, capsys):
+def test_path_warning_uses_zshrc_for_zsh(mocker, tmp_path, caplog):
     mocker.patch("pathlib.Path.home", return_value=tmp_path)
     mocker.patch.dict(os.environ, {"PATH": "/usr/bin", "SHELL": "/usr/bin/zsh"}, clear=False)
-    _warn_if_local_bin_not_on_path(prefix=True)
-    captured = capsys.readouterr()
-    assert ".zshrc" in captured.out
+    with caplog.at_level("WARNING"):
+        _warn_if_local_bin_not_on_path(prefix=True)
+    assert ".zshrc" in caplog.text
 
 
-def test_path_warning_silent_when_local_bin_present(mocker, tmp_path, capsys):
+def test_path_warning_silent_when_local_bin_present(mocker, tmp_path, caplog):
     local_bin = str(tmp_path / ".local" / "bin")
     mocker.patch("pathlib.Path.home", return_value=tmp_path)
     mocker.patch.dict(os.environ, {"PATH": f"{local_bin}:/usr/bin"}, clear=False)
-    _warn_if_local_bin_not_on_path(prefix=False)
-    captured = capsys.readouterr()
-    assert captured.out == ""
+    with caplog.at_level("WARNING"):
+        _warn_if_local_bin_not_on_path(prefix=False)
+    assert caplog.text == ""
 
 
 # ---------------------------------------------------------------------------
