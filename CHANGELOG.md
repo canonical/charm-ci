@@ -37,6 +37,12 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
   `platforms: {amd64:}`); the base is now read from `charmcraft.yaml` as a
   fallback when it cannot be parsed from the packed filename. (#107)
 
+### Added
+
+- Support for GitHub Environment-scoped secrets via an optional `environment`
+  input on `integration-test.yml` and `publish-artifacts.yml`, forwarded to
+  the relevant jobs. (#123)
+
 ### Docs
 
 - Documented the `TOX_ENV` environment variable for overriding the default
