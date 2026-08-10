@@ -1822,7 +1822,7 @@ def _infer_repo_from_git(root: Path) -> str:
     """
     try:
         result = run_command(["git", "remote", "get-url", "origin"], cwd=str(root))
-    except Exception as exc:
+    except SubprocessError as exc:
         msg = "Could not read git remote 'origin'. Use --repo to specify the repository."
         raise ConfigurationError(msg) from exc
 
@@ -2209,7 +2209,7 @@ def _check_build_jobs_conclusion(  # noqa: PLR0911, C901
             ["gh", "run", "view", run_id, "--repo", repo, "--json", "jobs"],
             stream=False,
         )
-    except Exception:
+    except SubprocessError:
         return None
 
     try:
