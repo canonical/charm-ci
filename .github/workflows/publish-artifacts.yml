@@ -22,6 +22,19 @@ name: Publish Artifacts
 # Same-org callers may use `secrets: inherit` instead of explicit passing.
 # Requires CHARMHUB_TOKEN secret in the calling repository (passed as CHARMCRAFT_AUTH).
 
+# NOTE on concurrency: overlapping publish runs on the same ref could each
+# independently resolve the same "previous combined release" tag for
+# --notes-start-tag, producing two publish-<run_id> releases with
+# overlapping/duplicated "What's Changed" ranges. This is intentionally NOT
+# addressed with a `concurrency:` group here: GitHub concurrency groups keep
+# at most one *pending* run per group and cancel any earlier pending run
+# when a new one is queued (regardless of cancel-in-progress) — for a
+# workflow that uploads to CharmHub, that would silently drop an entire
+# publish (built, tested, but never published/tagged/released) instead of
+# merely producing a cosmetic release-notes overlap, which is strictly
+# worse. The overlap is self-limiting (each release still lists everything
+# it actually published) and is considered an acceptable trade-off.
+
 on:
   workflow_call:
     inputs:
@@ -43,6 +56,14 @@ on:
         default: false
       inject-version:
         description: "Inject a version file with the publish commit SHA into fetched charm archives"
+        type: boolean
+        default: true
+      create-tags:
+        description: "Create a git tag ({charm-name}-rev{revision}) for every published charm revision"
+        type: boolean
+        default: true
+      create-release:
+        description: "Create a single combined GitHub Release summarizing everything published in this run"
         type: boolean
         default: true
     secrets:
@@ -202,8 +223,10 @@ jobs:
             --json \
             "${DRY_RUN_ARGS[@]}" > publish-results.json
 
-      - name: Create GitHub Release
+      - name: Tag and release publish
         if: inputs.dry-run != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CREATE_TAGS: ${{ inputs.create-tags }}
+          CREATE_RELEASE: ${{ inputs.create-release }}
         run: ${GITHUB_WORKSPACE}/.charm-ci/.github/scripts/create-publish-release.sh
