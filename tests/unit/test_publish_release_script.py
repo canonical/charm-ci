@@ -270,18 +270,44 @@ def test_notes_start_tag_uses_previous_release_even_at_same_commit(tmp_path: Pat
     assert "--notes-start-tag publish-41" in log
 
 
-def test_transient_release_view_error_aborts_instead_of_recreating(tmp_path: Path) -> None:
-    """A non-404 `gh release view` failure (e.g. a transient API error) must
+def test_transient_release_lookup_error_aborts_instead_of_recreating(
+    tmp_path: Path,
+) -> None:
+    """A non-404 release-lookup failure (e.g. a transient API error) must
     abort the script, not be silently treated as "release doesn't exist" —
     otherwise a flaky API call could cause `gh release create` to fail on an
-    already-existing release, or (for the previous-tag scan) silently widen
-    release notes past a release that does in fact exist.
+    already-existing release.
+
+    This exercises the combined-release idempotency check.
     """
     _write_publish_results(tmp_path, charm_name="traefik-k8s", revision=308)
 
     result = _run_script(
         tmp_path,
         existing_releases="ERROR:publish-42",
+        github_run_id="42",
+    )
+
+    assert result.returncode == 1
+    assert "failed unexpectedly" in result.stderr
+    assert "gh release create" not in _read_log(tmp_path)
+
+
+def test_transient_release_lookup_error_in_previous_tag_scan_aborts(
+    tmp_path: Path,
+) -> None:
+    """Same guarantee as above, but exercised via the *other* call site:
+    the previous-combined-release scan in find_previous_combined_release_tag.
+    A transient error there must abort rather than being silently treated as
+    "no such release", which would otherwise cause release notes to widen
+    past a release that does in fact exist.
+    """
+    _write_publish_results(tmp_path, charm_name="traefik-k8s", revision=308)
+
+    result = _run_script(
+        tmp_path,
+        existing_releases="ERROR:publish-41",
+        remote_tags="publish-41\npublish-40",
         github_run_id="42",
     )
 
@@ -356,15 +382,16 @@ def _run_script(  # noqa: PLR0913
         bin_dir / "gh",
         """#!/usr/bin/env bash
 set -euo pipefail
-if [ "$1 $2" = "release view" ]; then
+if [ "$1" = "api" ]; then
+  tag="${2##*/}"
   case " ${EXISTING_RELEASES:-} " in
-    *" $3 "*) exit 0 ;;
-    *" ERROR:$3 "*)
-      echo "HTTP 500: Internal Server Error" >&2
+    *" ${tag} "*) exit 0 ;;
+    *" ERROR:${tag} "*)
+      echo "gh: Internal Server Error (HTTP 500)" >&2
       exit 1
       ;;
     *)
-      echo "release not found" >&2
+      echo "gh: Not Found (HTTP 404)" >&2
       exit 1
       ;;
   esac

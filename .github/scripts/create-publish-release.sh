@@ -30,23 +30,32 @@ set -euo pipefail
 CREATE_TAGS="${CREATE_TAGS:-true}"
 CREATE_RELEASE="${CREATE_RELEASE:-true}"
 
-# Wraps `gh release view` so a genuine 404 ("release not found") is
-# distinguished from a transient API/network failure. Returns 0 if the
-# release exists, 1 if it does not exist (confirmed 404), and aborts the
-# script on any other error so a flaky API call can't silently be
-# misread as "release doesn't exist" (which would widen release notes)
-# or "release exists" (which would abort a legitimate creation).
+# Wraps a release-existence lookup so a genuine 404 is distinguished from a
+# transient API/network failure. Returns 0 if the release exists, 1 if it
+# does not exist (confirmed 404), and aborts the script on any other error
+# so a flaky API call can't silently be misread as "release doesn't exist"
+# (which would widen release notes) or "release exists" (which would abort
+# a legitimate creation).
+#
+# Deliberately uses `gh api repos/{owner}/{repo}/releases/tags/<tag>` rather
+# than `gh release view <tag>`: the latter queries the published-release
+# REST endpoint and the draft-release GraphQL endpoint concurrently and
+# collapses whichever error arrives, so a transient failure on either one
+# can surface as an indistinguishable "release not found". The single REST
+# call here reports one unambiguous HTTP status per request.
 release_exists() {
   local tag="$1"
   local err
-  if err="$(gh release view "${tag}" 2>&1 1>/dev/null)"; then
+  if err="$(gh api "repos/{owner}/{repo}/releases/tags/${tag}" 2>&1 1>/dev/null)"; then
     return 0
   fi
-  if [ "${err}" = "release not found" ]; then
-    return 1
-  fi
-  echo "::error::gh release view ${tag} failed unexpectedly: ${err}" >&2
-  exit 1
+  case "${err}" in
+    *"(HTTP 404)"*) return 1 ;;
+    *)
+      echo "::error::release lookup for ${tag} failed unexpectedly: ${err}" >&2
+      exit 1
+      ;;
+  esac
 }
 
 find_previous_combined_release_tag() {
