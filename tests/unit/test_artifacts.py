@@ -251,6 +251,32 @@ class TestArtifactsBuild:
         gen = load_artifacts_build(result)
         assert gen.charms[0].builds[0].base is None
 
+    def test_build_charm_arch_only_filename_empty_string_base_stays_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Fallback stays None (not ``""``) if ``base:`` is an empty string.
+
+        An empty string is a syntactically valid YAML string, so a bare
+        ``isinstance(base, str)`` guard alone would let ``base: ""`` through
+        instead of degrading to ``base: null`` like every other malformed/
+        absent case.
+        """
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: chrony\n  charmcraft-yaml: charmcraft.yaml\n",
+        )
+        write_file(
+            tmp_path / "charmcraft.yaml",
+            'name: chrony\nbase: ""\nplatforms:\n  amd64:\n',
+        )
+        write_file(tmp_path / "chrony_amd64.charm", "fake charm")
+
+        with patch("opcli.core.artifacts.run_command"):
+            result = artifacts_build(tmp_path)
+
+        gen = load_artifacts_build(result)
+        assert gen.charms[0].builds[0].base is None
+
     def test_build_charm_arch_only_filename_malformed_yaml_stays_none(
         self, tmp_path: Path
     ) -> None:

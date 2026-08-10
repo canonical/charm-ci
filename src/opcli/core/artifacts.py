@@ -1245,12 +1245,14 @@ def _read_charmcraft_base(yaml_path: Path) -> str | None:
     if not data:
         return None
     base = data.get("base")
-    # charmcraft's `base:` field is documented as a single string
+    # charmcraft's `base:` field is documented as a single non-empty string
     # (e.g. "ubuntu@24.04"). Guard against non-string values (malformed
     # charmcraft.yaml, or someone confusing this with the legacy `bases:`
     # list) so we degrade to None instead of writing a garbage value like
-    # "['ubuntu@22.04', 'ubuntu@24.04']" into artifacts.build.yaml.
-    return base if isinstance(base, str) else None
+    # "['ubuntu@22.04', 'ubuntu@24.04']" into artifacts.build.yaml — and
+    # treat an empty string the same as absent, so callers never write
+    # `base: ""` instead of `base: null`.
+    return base if isinstance(base, str) and base else None
 
 
 def _build_snap(
