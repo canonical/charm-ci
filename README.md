@@ -817,12 +817,15 @@ The workflow resolves values from your repository's GitHub Secrets, masks them w
 
 ### Scoping secrets to a GitHub Environment
 
-By default, secrets referenced by `integration-test.yml` and
-`publish-artifacts.yml` (`test-secret-{1..5}-name`, `CHARMHUB_TOKEN`,
-`GITHUB_TOKEN`) come from repository-level secrets, which are visible to
-every workflow in the repo. To scope them to a dedicated [GitHub
+By default, named secrets referenced by `integration-test.yml` and
+`publish-artifacts.yml` (`test-secret-{1..5}-name`, `CHARMHUB_TOKEN`) come
+from repository-level secrets, which are visible to every workflow in the
+repo. To scope them to a dedicated [GitHub
 Environment](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets#creating-secrets-for-an-environment)
-instead, pass the optional `environment` input:
+instead, pass the optional `environment` input. Note: this only affects named
+secrets — it has no effect on the auto-generated `GITHUB_TOKEN`, whose scope
+is controlled solely by the job's `permissions:` block and repo/org policy,
+not by GitHub Environments.
 
 ```yaml
 jobs:
@@ -847,9 +850,13 @@ configured) must satisfy that environment's protection rules — e.g. required
 reviewers — before running. It's purely additive: if a secret isn't defined
 in the named environment, GitHub falls back to the repository secret of the
 same name, so existing repo-secret-based setups keep working unchanged. The
-named environment must exist in the **calling** repository (it's
-auto-created with no protection rules the first time it's referenced if it
-doesn't already exist). Leaving `environment` unset (the default) is fully
+named environment must exist in the **calling** repository; on public repos
+(or private repos on a GitHub Team/Enterprise/Pro plan) it's auto-created
+with no protection rules the first time it's referenced if it doesn't
+already exist. **On GitHub Free, environments cannot be configured for
+private repositories at all** — see [GitHub's
+docs](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+for plan restrictions. Leaving `environment` unset (the default) is fully
 backward compatible — the job has no `environment:` key at all.
 
 ## Development

@@ -88,7 +88,7 @@ on:
       environment:
         description: "GitHub Environment name to scope the test job (and its secrets) to (optional)"
         type: string
-        required: false
+        default: ""
 
 jobs:
   # ── Job 1: build all artifacts ──────────────────────────────────────────────
