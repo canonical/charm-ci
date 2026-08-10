@@ -302,6 +302,7 @@ The table below distinguishes *mechanically enforced* rules from *advisory* ones
 | Shell scripts (`shellcheck`) | ✅ CI blocks | `ci.yml` shellcheck step |
 | No push to main | ⚠️ Advisory | Branch protection (enable on canonical/charm-ci) |
 | CI green before merge | ⚠️ Advisory | Branch protection (enable on canonical/charm-ci) |
+| AI agents never merge PRs | ⚠️ Advisory | Agent discipline — see "Git workflow" below |
 | Docs updated with code | ⚠️ Advisory | PR review discipline |
 | Mock at `run_command` only | ⚠️ Advisory | Code review |
 | Avoid `Any` | ✅ CI blocks | `mypy --strict` rejects new `Any` |
@@ -318,8 +319,10 @@ git checkout -b fix/my-fix
 git push --set-upstream origin fix/my-fix
 gh pr create --title "..." --body "..."
 gh pr checks <number> --watch   # WAIT for CI workflow green
-gh pr merge <number> --squash
+# Do NOT merge. Hand off to a human reviewer — see "AI agents must never merge PRs" below.
 ```
+
+**AI agents must never merge PRs — nor attempt to.** This includes `gh pr merge` in any form (`--squash`, `--admin`, `--auto`, etc.) and any equivalent API call. An agent's job ends at opening the PR with green CI and a clear description; a human must review and merge it. This is non-negotiable even if: CI is fully green, the agent is confident in the change, self-approval is blocked and no reviewer is immediately available, or the agent has "admin" credentials capable of bypassing branch protection. If merging is blocked (e.g. required review missing), stop and ask the user — never use an admin override to force it through.
 
 **CI must be green before merging. No exceptions.**
 
