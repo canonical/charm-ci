@@ -15,6 +15,16 @@ name: Integration Test
 #         packages: write
 #         actions: read
 #
+# Optional: scope test secrets (test-secret-{1..5}-name) and GITHUB_TOKEN to a
+# GitHub Environment instead of repo-wide secrets by passing `environment:
+# <name>`. This is purely additive — the test job still falls back to the
+# repo secret of the same name if it is not defined in the named environment,
+# and omitting the input leaves behavior unchanged (no environment key is set
+# on the job).
+#
+#   with:
+#     environment: integration-tests
+#
 # Assumptions about the operator repository layout:
 #   - ``artifacts.yaml`` declares charms/rocks
 #   - ``spread.yaml`` uses the ``integration-test:`` virtual backend
@@ -75,6 +85,10 @@ on:
         description: "Snap channel to install rockcraft from when building rocks. Passed to build-artifacts."
         type: string
         default: "latest/stable"
+      environment:
+        description: "GitHub Environment name to scope the test job (and its secrets) to (optional)"
+        type: string
+        required: false
 
 jobs:
   # ── Job 1: build all artifacts ──────────────────────────────────────────────
@@ -155,6 +169,7 @@ jobs:
     needs: [test-matrix]
     runs-on: ${{ fromJSON(matrix.runs-on) }}
     timeout-minutes: ${{ inputs.test-timeout-minutes }}
+    environment: ${{ inputs.environment || null }}
     permissions:
       contents: read
       actions: read

@@ -21,6 +21,15 @@ name: Publish Artifacts
 #
 # Same-org callers may use `secrets: inherit` instead of explicit passing.
 # Requires CHARMHUB_TOKEN secret in the calling repository (passed as CHARMCRAFT_AUTH).
+#
+# Optional: scope CHARMHUB_TOKEN to a GitHub Environment instead of a repo
+# secret by passing `environment: <name>`. This is purely additive — the
+# publish job still falls back to the repo secret of the same name if it is
+# not defined in the named environment, and omitting the input leaves
+# behavior unchanged (no environment key is set on the job).
+#
+#   with:
+#     environment: charmhub-publish
 
 # NOTE on concurrency: overlapping publish runs on the same ref could each
 # independently resolve the same "previous combined release" tag for
@@ -66,6 +75,10 @@ on:
         description: "Create a single combined GitHub Release summarizing everything published in this run"
         type: boolean
         default: true
+      environment:
+        description: "GitHub Environment name to scope the publish job (and its secrets) to (optional)"
+        type: string
+        required: false
     secrets:
       CHARMHUB_TOKEN:
         description: "CharmHub auth token (from charmcraft login --export). Required for cross-org callers; same-org callers may use secrets: inherit."
@@ -112,6 +125,7 @@ jobs:
     name: Publish
     needs: resolve-run
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || null }}
     permissions:
       contents: write
       actions: read

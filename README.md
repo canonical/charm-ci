@@ -689,6 +689,7 @@ jobs:
       working-directory: .
       # build-timeout-minutes: 60    # forwarded to build-artifacts (default: 60)
       # test-timeout-minutes: 120    # max minutes per spread test job (default: 120)
+      # environment: integration-tests  # optional: scope secrets to a GitHub Environment
 ```
 
 Example usage for documentation tests:
@@ -721,6 +722,7 @@ jobs:
       # inject-version: true   # optional; set false to publish charms unchanged
       # create-tags: true      # optional; set false to skip per-revision git tags
       # create-release: true   # optional; set false to skip the combined GitHub Release
+      # environment: charmhub-publish  # optional: scope CHARMHUB_TOKEN to a GitHub Environment
       working-directory: .
 ```
 
@@ -812,6 +814,43 @@ jobs:
 The workflow resolves values from your repository's GitHub Secrets, masks them with `::add-mask::`, and exports them to the environment before spread runs.
 
 > **Note:** Running `opcli spread run -- -vv` locally will print secret values to the terminal (spread's verbose mode). This is acceptable for a local dev environment. In CI, GitHub Actions log masking covers all output.
+
+### Scoping secrets to a GitHub Environment
+
+By default, secrets referenced by `integration-test.yml` and
+`publish-artifacts.yml` (`test-secret-{1..5}-name`, `CHARMHUB_TOKEN`,
+`GITHUB_TOKEN`) come from repository-level secrets, which are visible to
+every workflow in the repo. To scope them to a dedicated [GitHub
+Environment](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets#creating-secrets-for-an-environment)
+instead, pass the optional `environment` input:
+
+```yaml
+jobs:
+  integration-test:
+    uses: canonical/charm-ci/.github/workflows/integration-test.yml@main
+    secrets: inherit
+    with:
+      environment: integration-tests
+      test-secret-1-name: S3_ACCESS_KEY
+
+  publish:
+    uses: canonical/charm-ci/.github/workflows/publish-artifacts.yml@main
+    secrets:
+      CHARMHUB_TOKEN: ${{ secrets.CHARMHUB_TOKEN }}
+    with:
+      environment: charmhub-publish
+```
+
+This sets `environment:` on the job that consumes secrets (`test` /
+`publish`), so it only has access to the named environment's secrets and (if
+configured) must satisfy that environment's protection rules — e.g. required
+reviewers — before running. It's purely additive: if a secret isn't defined
+in the named environment, GitHub falls back to the repository secret of the
+same name, so existing repo-secret-based setups keep working unchanged. The
+named environment must exist in the **calling** repository (it's
+auto-created with no protection rules the first time it's referenced if it
+doesn't already exist). Leaving `environment` unset (the default) is fully
+backward compatible — the job has no `environment:` key at all.
 
 ## Development
 
