@@ -117,6 +117,13 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 ## Commands
 
+Every command accepts a global `--verbose`/`-v` flag (before the subcommand
+name, e.g. `opcli -v artifacts fetch ...`) that surfaces INFO-level detail
+from opcli's internal operations (per-artifact download/localize/publish
+results). Warnings and errors are always shown regardless of this flag.
+
+Run `opcli --version` to print the installed opcli version and exit.
+
 ### `opcli artifacts`
 
 | Command | Description |
@@ -336,7 +343,7 @@ integration-suites:
     backends:
       - integration-test
     environment:
-      CONCIERGE/test_k8s_charm: concierge-microk8s.yaml
+      CONCIERGE/test_k8s_charm: concierge-k8s.yaml
 
   # Monorepo pattern — sub-charm with its own tests
   k8s-charm/tests/integration/:
@@ -381,6 +388,26 @@ At expand time, `integration-suites` entries are converted into native spread `s
 | `backends` | (required) | Which virtual backends to run this suite on |
 | `summary` | — | Spread suite summary |
 | `environment` | — | Additional environment variables (merged with auto-discovered modules) |
+
+### Overriding the tox environment with `TOX_ENV`
+
+The generated `task.yaml` runs `opcli pytest expand -e "${TOX_ENV:-integration}"`,
+so it defaults to the `integration` tox environment. If your project already
+has a differently-named tox environment (e.g. `charms-integration`,
+`k8s-integration`), set `TOX_ENV` in the suite's `environment:` block instead
+of renaming your tox env or adding a redundant `[testenv:integration]` alias:
+
+```yaml
+integration-suites:
+  tests/integration/:
+    working-dir: ./
+    backends:
+      - integration-test
+    environment:
+      TOX_ENV: charms-integration
+```
+
+This also applies to `opcli pytest run`/`expand` directly — pass `-e` explicitly (e.g. `opcli pytest expand -e "$TOX_ENV"`) since only the generated `task.yaml` shell script reads `TOX_ENV` automatically.
 
 ### Pytest invocation templates
 
@@ -692,18 +719,39 @@ jobs:
     with:
       # channel: latest/edge  # optional
       # inject-version: true   # optional; set false to publish charms unchanged
+      # create-tags: true      # optional; set false to skip per-revision git tags
+      # create-release: true   # optional; set false to skip the combined GitHub Release
       working-directory: .
 ```
 
-The publish workflow also creates one GitHub Release per published charm revision.
-Release bodies start with CharmHub publish metadata (channel, base, architecture,
-and resource revisions) and then include GitHub-generated release notes such as
-the "What's Changed" and "New Contributors" sections.
+The publish workflow can also create a git tag (`{charm-name}-rev{revision}`) for
+every published charm revision, and at most one combined GitHub Release per
+publish workflow run summarizing everything published (charms, revisions,
+bases, architectures, and resource revisions), with links to each per-revision
+tag. Both are enabled by default (`create-tags: true`, `create-release: true`)
+and can be independently disabled — e.g. to defer visible releases to a
+separate "promote" workflow, or to reduce the number of per-revision tags in
+repositories that publish many bases/architectures per run. Disabling
+`create-tags` does not eliminate tags entirely: a GitHub Release cannot exist
+without a tag, so when `create-release: true` one `publish-<run-id>` tag is
+still created per publish run (in addition to, or instead of, the
+per-revision tags depending on `create-tags`). When enabled, the combined
+release includes GitHub-generated release notes such as the "What's Changed"
+and "New Contributors" sections.
 Before uploading to CharmHub, the workflow injects a `version` file containing
 the first 8 characters of the publish commit SHA into each fetched `.charm`
 archive, unless that archive already contains a `version` file.
 Set `inject-version: false` to skip this reusable-workflow-only behavior.
 Local `opcli artifacts publish` never modifies charm archives.
+
+> **Behavior change:** previously this workflow created one GitHub Release
+> per published charm revision (`{charm-name}-rev{revision}`). It now
+> creates at most one combined Release per publish run instead — per-revision
+> git tags still exist (when `create-tags: true`), but per-revision *Release*
+> objects no longer do. If you have automation that queries
+> `gh release view {charm-name}-rev{revision}` directly, switch it to read
+> the combined release instead, or to resolve the tag directly rather than
+> via a Release lookup.
 
 Pinning to a SHA or tag automatically installs the matching `opcli` version via `canonical/get-workflow-version-action`.
 

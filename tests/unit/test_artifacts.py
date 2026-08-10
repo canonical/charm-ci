@@ -2583,6 +2583,38 @@ class TestCheckBuildJobsConclusion:
         assert result == "Build charm operator (s390x)"
 
 
+class TestInferRepoFromGit:
+    """Tests for _infer_repo_from_git()."""
+
+    def test_parses_https_remote(self, tmp_path: Path) -> None:
+        """A standard HTTPS GitHub remote resolves to owner/repo."""
+        result = SubprocessResult(
+            stdout="https://github.com/owner/repo.git\n", stderr="", returncode=0
+        )
+        with patch("opcli.core.artifacts.run_command", return_value=result):
+            assert _artifacts_mod._infer_repo_from_git(tmp_path) == "owner/repo"
+
+    def test_raises_configuration_error_when_git_command_fails(self, tmp_path: Path) -> None:
+        """A ConfigurationError (not the raw SubprocessError) is raised when git fails."""
+        error = SubprocessError(["git"], 128, "fatal: not a git repository")
+        with (
+            patch("opcli.core.artifacts.run_command", side_effect=error),
+            pytest.raises(ConfigurationError, match="Could not read git remote"),
+        ):
+            _artifacts_mod._infer_repo_from_git(tmp_path)
+
+    def test_raises_configuration_error_on_unparseable_url(self, tmp_path: Path) -> None:
+        """A non-GitHub remote URL raises a ConfigurationError."""
+        result = SubprocessResult(
+            stdout="https://gitlab.com/owner/repo.git\n", stderr="", returncode=0
+        )
+        with (
+            patch("opcli.core.artifacts.run_command", return_value=result),
+            pytest.raises(ConfigurationError, match="Could not parse"),
+        ):
+            _artifacts_mod._infer_repo_from_git(tmp_path)
+
+
 class TestSafeArtifactDir:
     """Tests for _safe_artifact_dir path traversal prevention."""
 

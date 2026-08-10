@@ -3,6 +3,7 @@
 
 """Top-level Typer application — registers all command groups."""
 
+import logging
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -18,6 +19,7 @@ except ImportError:
     )
     sys.exit(1)
 
+from opcli import __version__
 from opcli.commands import (
     artifacts,
     env,
@@ -68,3 +70,60 @@ typer_app.add_typer(install.app, name="install")
 typer_app.add_typer(spread.app, name="spread")
 typer_app.add_typer(pytest_cmd.app, name="pytest")
 typer_app.add_typer(tutorial_cmd.app, name="tutorial")
+
+
+def _version_callback(show_version: bool) -> None:
+    """Print opcli's version and exit, if --version was passed."""
+    if show_version:
+        typer.echo(f"opcli {__version__}")
+        raise typer.Exit()
+
+
+@typer_app.callback()
+def _main(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help=(
+            "Show INFO-level detail from opcli's internal operations "
+            "(e.g. per-artifact download/localize/publish results). "
+            "Warnings and errors are always shown."
+        ),
+    ),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show opcli's version and exit.",
+    ),
+) -> None:
+    _configure_logging(verbose=verbose)
+
+
+def _configure_logging(*, verbose: bool) -> None:
+    """Configure opcli's own logger namespace so its logger.* calls are visible.
+
+    Without this, ``logger.info(...)`` calls scattered across ``core/`` are
+    silently dropped (the root logger defaults to WARNING with no handler),
+    and any ``logger.warning``/``logger.error`` that does fire uses Python's
+    unformatted "handler of last resort". ``--verbose`` raises the level to
+    INFO for users debugging artifact discovery/build/publish behavior.
+
+    This deliberately configures the ``opcli`` logger (every ``core/``
+    module logs via ``logging.getLogger(__name__)``, i.e. under the
+    ``opcli.*`` namespace) rather than the root logger, and disables
+    propagation to it. ``opcli.app.app()`` is a CLI entrypoint, not an
+    embeddable library API, but a caller who does import and invoke it
+    programmatically should not have their own root-logger handlers or
+    unrelated third-party loggers clobbered or have their level bumped to
+    INFO as a side effect of running opcli's CLI logic.
+    """
+    opcli_logger = logging.getLogger("opcli")
+    opcli_logger.handlers.clear()
+    handler = logging.StreamHandler(stream=sys.stderr)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    opcli_logger.addHandler(handler)
+    opcli_logger.setLevel(logging.INFO if verbose else logging.WARNING)
+    opcli_logger.propagate = False

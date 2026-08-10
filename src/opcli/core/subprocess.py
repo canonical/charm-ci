@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from opcli.core.exceptions import SubprocessError
+from opcli.core.progress import status
 
 _DEFAULT_TIMEOUT_SECONDS = 3600
 
@@ -206,10 +207,9 @@ def _is_retryable(output: str, retry_on: Sequence[str] | None) -> bool:
 def _wait_before_retry(attempt: int, total_attempts: int) -> None:
     """Sleep for the backoff delay corresponding to *attempt* (0-indexed)."""
     delay = _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
-    print(
+    status(
         f"Transient failure detected (attempt {attempt + 1}/{total_attempts}); "
-        f"retrying in {delay:g}s...",
-        file=sys.stderr,
+        f"retrying in {delay:g}s..."
     )
     _sleep(delay)
 
@@ -224,15 +224,9 @@ def _log_retry_outcome(attempt: int, total_attempts: int, *, matched: bool) -> N
     if total_attempts <= 1:
         return
     if not matched:
-        print(
-            "Failure does not match any retryable pattern; not retrying.",
-            file=sys.stderr,
-        )
+        status("Failure does not match any retryable pattern; not retrying.")
         return
-    print(
-        f"Giving up after {attempt + 1}/{total_attempts} attempts.",
-        file=sys.stderr,
-    )
+    status(f"Giving up after {attempt + 1}/{total_attempts} attempts.")
 
 
 def _sleep(seconds: float) -> None:
@@ -248,7 +242,7 @@ def _run_interactive(
     env: dict[str, str] | None = None,
 ) -> SubprocessResult:
     """Run *cmd* with inherited stdin/stdout/stderr for full TTY access."""
-    _log_command(cmd, cwd, err=True)
+    _log_command(cmd, cwd)
     try:
         proc = subprocess.run(cmd, cwd=cwd, check=False, env=env)
     except OSError as exc:
@@ -272,12 +266,11 @@ def _run_interactive(
     return result
 
 
-def _log_command(cmd: list[str], cwd: str | None, *, err: bool = False) -> None:
+def _log_command(cmd: list[str], cwd: str | None) -> None:
     """Print the command and working directory for reproducibility."""
-    dest = sys.stderr if err else sys.stdout
-    print(f"$ {shlex.join(cmd)}", file=dest)
+    status(f"$ {shlex.join(cmd)}")
     if cwd:
-        print(f"  cwd: {cwd}", file=dest)
+        status(f"  cwd: {cwd}")
 
 
 def _run_streaming(  # noqa: PLR0913
@@ -290,7 +283,7 @@ def _run_streaming(  # noqa: PLR0913
     env: dict[str, str] | None = None,
 ) -> SubprocessResult:
     """Run *cmd* with real-time output to the terminal."""
-    _log_command(cmd, cwd, err=True)
+    _log_command(cmd, cwd)
     try:
         proc = subprocess.Popen(
             cmd,
@@ -415,7 +408,7 @@ def _run_captured(  # noqa: PLR0913
 ) -> SubprocessResult:
     """Run *cmd* with fully buffered output (no terminal echo)."""
     if not quiet:
-        _log_command(cmd, cwd, err=True)
+        _log_command(cmd, cwd)
     try:
         proc = subprocess.run(
             cmd,
