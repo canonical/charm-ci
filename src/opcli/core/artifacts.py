@@ -21,6 +21,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from ruamel.yaml.error import YAMLError
+
 from opcli.core.constants import ARTIFACTS_BUILD_YAML, ARTIFACTS_YAML, artifacts_build_path
 from opcli.core.discovery import discover_artifacts
 from opcli.core.env import current_arch
@@ -38,6 +40,7 @@ from opcli.core.yaml_io import (
     dump_artifacts_plan,
     load_artifacts_build,
     load_artifacts_plan,
+    load_yaml_optional,
 )
 from opcli.models.artifacts import (
     ArtifactsPlan,
@@ -1138,7 +1141,7 @@ def _build_charm(
         CharmOutput(
             arch=arch,
             path=_relative_to_root(p, root),
-            base=_parse_base_from_charm_path(p),
+            base=_parse_base_from_charm_path(p) or _read_charmcraft_base(yaml_path),
         )
         for p in new_outputs
     ]
@@ -1214,6 +1217,28 @@ def _parse_base_from_charm_path(path: str) -> str | None:
     if not m:
         return None
     return f"{m.group('distro')}@{m.group('version')}"
+
+
+def _read_charmcraft_base(yaml_path: Path) -> str | None:
+    """Read the top-level ``base:`` field from *yaml_path* as a fallback.
+
+    Some ``charmcraft.yaml`` files use ``base:`` combined with arch-only
+    ``platforms:`` keys (e.g. ``platforms: {amd64:}``). charmcraft then
+    produces filenames like ``{name}_{arch}.charm`` with no base info,
+    which :func:`_parse_base_from_charm_path` cannot parse. Falling back to
+    the declared ``base:`` field recovers the value in that case.
+
+    Returns ``None`` on any IO/parse error, or if the file has no top-level
+    ``base`` field, so callers can rely on this always degrading gracefully.
+    """
+    try:
+        data = load_yaml_optional(yaml_path)
+    except (OSError, YAMLError):
+        return None
+    if not data:
+        return None
+    base = data.get("base")
+    return str(base) if base is not None else None
 
 
 def _build_snap(
@@ -1610,13 +1635,14 @@ def _localize_charm(
             )
             continue
         indices_to_replace.append(idx)
-        for path, base in charm_files:
+        for path, parsed_base in charm_files:
+            resolved_base = parsed_base or _read_charmcraft_base(root / charm.charmcraft_yaml)
             new_entries.append(
                 CharmOutput.model_validate(
                     {
                         "arch": build.arch,
                         "path": path,
-                        "base": base,
+                        "base": resolved_base,
                         "artifact": build.artifact,
                         "run-id": build.run_id,
                     }

@@ -47,10 +47,19 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is the minimum supported version (see requires-python in
+        # pyproject.toml); 3.13 is the other classifier-listed version.
+        # Test both explicitly so CI doesn't silently drift onto whatever
+        # newer Python `uv` happens to pick by default.
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - run: sudo snap install --classic astral-uv
-      - run: uv sync --frozen
+      - run: uv python install ${{ matrix.python-version }}
+      - run: uv sync --frozen --python ${{ matrix.python-version }}
       - run: uv run pytest tests/unit/ --cov=opcli --cov-fail-under=85 -q
 
   shellcheck:

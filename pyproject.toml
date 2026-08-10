@@ -57,7 +57,7 @@ line-length = 99
 select = ["A", "B", "C", "D", "E", "F", "I", "N", "PL", "RUF", "S", "SIM", "TC", "UP", "W"]
 ignore = [
     "B008",   # typer.Option/Argument in defaults is the standard pattern
-    "B904",
+    "B904",   # explicit re-raise `from` isn't required; CLI layer wraps in OpcliError
     "D107",
     "D203",
     "D204",
@@ -72,8 +72,12 @@ ignore = [
     "D409",
     "D413",
     "E501",
-    "S105",
-    "S603",
+    "S105",   # possible-hardcoded-password: false positives on non-secret string
+              # literals (env var names, YAML keys); no secrets are hardcoded —
+              # all real secrets flow through core/secrets.py's .secrets.env loader.
+    "S603",   # subprocess-without-shell-equals-true: all subprocess calls are
+              # centralised in core/subprocess.py (shell=False always; see
+              # AGENTS.md "Subprocess rule"), so this check is redundant here.
     "TC002",
     "TC006",
     "UP006",
