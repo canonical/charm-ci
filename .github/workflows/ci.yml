@@ -22,9 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check license headers
-        # Pinned to v0.8.0 (unlike canonical/action-tmate, which we
-        # deliberately keep floating on @main).
-        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
+        # Pinned to a commit SHA for supply-chain safety (unlike
+        # canonical/action-tmate, which we deliberately keep floating
+        # on @main). Renovate keeps this SHA up to date automatically.
+        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1
         with:
           config: .licenserc.yaml
 
