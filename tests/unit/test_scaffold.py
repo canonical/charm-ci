@@ -57,13 +57,11 @@ class TestCLIEntryPoint:
 
 
 class TestVerboseLogging:
-    """Verify --verbose wires up logging.basicConfig() to surface INFO logs."""
+    """Verify --verbose wires up the ``opcli`` logger to surface INFO logs.
 
-    def teardown_method(self) -> None:
-        # _configure_logging mutates the root logger via basicConfig(force=True);
-        # reset it so this test class doesn't leak state into other tests.
-        logging.root.handlers.clear()
-        logging.root.setLevel(logging.WARNING)
+    (State is reset after every test by the autouse ``reset_opcli_logger``
+    fixture in conftest.py.)
+    """
 
     def test_verbose_flag_listed_in_help(self) -> None:
         result = runner.invoke(app, ["--help"])
@@ -71,13 +69,20 @@ class TestVerboseLogging:
         assert "--verbose" in result.output
         assert "-v" in result.output
 
-    def test_default_root_level_is_warning(self) -> None:
+    def test_default_opcli_logger_level_is_warning(self) -> None:
         _configure_logging(verbose=False)
-        assert logging.root.level == logging.WARNING
+        assert logging.getLogger("opcli").level == logging.WARNING
 
-    def test_verbose_root_level_is_info(self) -> None:
+    def test_verbose_opcli_logger_level_is_info(self) -> None:
         _configure_logging(verbose=True)
-        assert logging.root.level == logging.INFO
+        assert logging.getLogger("opcli").level == logging.INFO
+
+    def test_configure_logging_does_not_touch_root_logger(self) -> None:
+        root_level_before = logging.root.level
+        root_handlers_before = list(logging.root.handlers)
+        _configure_logging(verbose=True)
+        assert logging.root.level == root_level_before
+        assert logging.root.handlers == root_handlers_before
 
     def test_info_logs_hidden_without_verbose(self, capsys: pytest.CaptureFixture[str]) -> None:
         _configure_logging(verbose=False)

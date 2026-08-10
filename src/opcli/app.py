@@ -103,17 +103,27 @@ def _main(
 
 
 def _configure_logging(*, verbose: bool) -> None:
-    """Configure the root logger so opcli's internal logger.* calls are visible.
+    """Configure opcli's own logger namespace so its logger.* calls are visible.
 
     Without this, ``logger.info(...)`` calls scattered across ``core/`` are
-    silently dropped (root logger defaults to WARNING with no handler), and
-    any ``logger.warning``/``logger.error`` that does fire uses Python's
+    silently dropped (the root logger defaults to WARNING with no handler),
+    and any ``logger.warning``/``logger.error`` that does fire uses Python's
     unformatted "handler of last resort". ``--verbose`` raises the level to
     INFO for users debugging artifact discovery/build/publish behavior.
+
+    This deliberately configures the ``opcli`` logger (every ``core/``
+    module logs via ``logging.getLogger(__name__)``, i.e. under the
+    ``opcli.*`` namespace) rather than the root logger, and disables
+    propagation to it. ``opcli.app.app()`` is a CLI entrypoint, not an
+    embeddable library API, but a caller who does import and invoke it
+    programmatically should not have their own root-logger handlers or
+    unrelated third-party loggers clobbered or have their level bumped to
+    INFO as a side effect of running opcli's CLI logic.
     """
-    logging.basicConfig(
-        level=logging.INFO if verbose else logging.WARNING,
-        format="%(levelname)s %(name)s: %(message)s",
-        stream=sys.stderr,
-        force=True,
-    )
+    opcli_logger = logging.getLogger("opcli")
+    opcli_logger.handlers.clear()
+    handler = logging.StreamHandler(stream=sys.stderr)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    opcli_logger.addHandler(handler)
+    opcli_logger.setLevel(logging.INFO if verbose else logging.WARNING)
+    opcli_logger.propagate = False
