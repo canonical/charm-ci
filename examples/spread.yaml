@@ -40,7 +40,7 @@ integration-suites:
     backends:
     - integration-test
     environment:
-      CONCIERGE/test_k8s_charm: concierge-microk8s.yaml
+      CONCIERGE/test_k8s_charm: concierge-k8s.yaml
   # Sub-charm tests (monorepo pattern — working-dir scopes artifacts to k8s-charm/)
   k8s-charm/tests/integration/:
     <<: *pytest-args
@@ -49,7 +49,7 @@ integration-suites:
     backends:
     - integration-test
     environment:
-      CONCIERGE: concierge-microk8s.yaml
+      CONCIERGE: concierge-k8s.yaml
   # Machine-charm tests with explicit variants (no auto-discover)
   machine-charm/tests/integration/:
     <<: *pytest-args
