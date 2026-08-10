@@ -3,6 +3,7 @@
 
 """Top-level Typer application — registers all command groups."""
 
+import logging
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -68,3 +69,36 @@ typer_app.add_typer(install.app, name="install")
 typer_app.add_typer(spread.app, name="spread")
 typer_app.add_typer(pytest_cmd.app, name="pytest")
 typer_app.add_typer(tutorial_cmd.app, name="tutorial")
+
+
+@typer_app.callback()
+def _main(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help=(
+            "Show INFO-level detail from opcli's internal operations "
+            "(e.g. per-artifact download/localize/publish results). "
+            "Warnings and errors are always shown."
+        ),
+    ),
+) -> None:
+    _configure_logging(verbose=verbose)
+
+
+def _configure_logging(*, verbose: bool) -> None:
+    """Configure the root logger so opcli's internal logger.* calls are visible.
+
+    Without this, ``logger.info(...)`` calls scattered across ``core/`` are
+    silently dropped (root logger defaults to WARNING with no handler), and
+    any ``logger.warning``/``logger.error`` that does fire uses Python's
+    unformatted "handler of last resort". ``--verbose`` raises the level to
+    INFO for users debugging artifact discovery/build/publish behavior.
+    """
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+        force=True,
+    )

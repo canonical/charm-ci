@@ -117,6 +117,11 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 
 ## Commands
 
+Every command accepts a global `--verbose`/`-v` flag (before the subcommand
+name, e.g. `opcli -v artifacts fetch ...`) that surfaces INFO-level detail
+from opcli's internal operations (per-artifact download/localize/publish
+results). Warnings and errors are always shown regardless of this flag.
+
 ### `opcli artifacts`
 
 | Command | Description |

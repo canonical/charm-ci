@@ -4,12 +4,14 @@
 """Smoke tests for the opcli scaffold."""
 
 import io
+import logging
 import subprocess as sp
 from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
 
+from opcli.app import _configure_logging
 from opcli.app import typer_app as app
 from opcli.core.exceptions import (
     ConfigurationError,
@@ -47,6 +49,63 @@ class TestCLIEntryPoint:
     def test_pytest_help(self) -> None:
         result = runner.invoke(app, ["pytest", "--help"])
         assert result.exit_code == 0
+
+
+class TestVerboseLogging:
+    """Verify --verbose wires up logging.basicConfig() to surface INFO logs."""
+
+    def teardown_method(self) -> None:
+        # _configure_logging mutates the root logger via basicConfig(force=True);
+        # reset it so this test class doesn't leak state into other tests.
+        logging.root.handlers.clear()
+        logging.root.setLevel(logging.WARNING)
+
+    def test_verbose_flag_listed_in_help(self) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "--verbose" in result.output
+        assert "-v" in result.output
+
+    def test_default_root_level_is_warning(self) -> None:
+        _configure_logging(verbose=False)
+        assert logging.root.level == logging.WARNING
+
+    def test_verbose_root_level_is_info(self) -> None:
+        _configure_logging(verbose=True)
+        assert logging.root.level == logging.INFO
+
+    def test_info_logs_hidden_without_verbose(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _configure_logging(verbose=False)
+        logging.getLogger("opcli.core.artifacts").info("hidden info message")
+        assert "hidden info message" not in capsys.readouterr().err
+
+    def test_info_logs_shown_with_verbose(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _configure_logging(verbose=True)
+        logging.getLogger("opcli.core.artifacts").info("visible info message")
+        assert "visible info message" in capsys.readouterr().err
+
+    def test_warning_logs_always_shown(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _configure_logging(verbose=False)
+        logging.getLogger("opcli.core.artifacts").warning("a warning")
+        assert "a warning" in capsys.readouterr().err
+
+    def test_cli_verbose_flag_surfaces_info_from_subcommand(self) -> None:
+        def _fake_expand(*_args: object, **_kwargs: object) -> None:
+            logging.getLogger("opcli.core.spread").info("expanding via -v")
+
+        with patch("opcli.commands.spread.spread_expand", side_effect=_fake_expand):
+            result = runner.invoke(app, ["--verbose", "spread", "expand"])
+        assert result.exit_code == 0
+        assert "expanding via -v" in result.output
+
+    def test_cli_without_verbose_hides_info_from_subcommand(self) -> None:
+        def _fake_expand(*_args: object, **_kwargs: object) -> None:
+            logging.getLogger("opcli.core.spread").info("should stay hidden")
+
+        with patch("opcli.commands.spread.spread_expand", side_effect=_fake_expand):
+            result = runner.invoke(app, ["spread", "expand"])
+        assert result.exit_code == 0
+        assert "should stay hidden" not in result.output
 
 
 class TestExceptionHierarchy:
