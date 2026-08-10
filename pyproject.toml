@@ -6,7 +6,24 @@ build-backend = "hatchling.build"
 name = "opcli"
 version = "0.0.1-alpha.10"
 description = "CLI tool for operator development workflows (Charms, Rocks, Snaps)"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+    { name = "Canonical Ltd." },
+]
+keywords = ["charm", "charmcraft", "juju", "operator", "snap", "rock", "ci"]
 requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "pydantic>=2",
     "ruamel.yaml>=0.18",
