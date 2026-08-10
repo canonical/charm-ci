@@ -33,6 +33,11 @@ class TestCLIEntryPoint:
         assert result.exit_code == 0
         assert "opcli" in result.output.lower()
 
+    def test_version_flag_prints_version_and_exits(self) -> None:
+        result = runner.invoke(app, ["--version"])
+        assert result.exit_code == 0
+        assert result.output.strip().startswith("opcli ")
+
     def test_artifacts_help(self) -> None:
         result = runner.invoke(app, ["artifacts", "--help"])
         assert result.exit_code == 0

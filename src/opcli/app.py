@@ -19,6 +19,7 @@ except ImportError:
     )
     sys.exit(1)
 
+from opcli import __version__
 from opcli.commands import (
     artifacts,
     env,
@@ -71,6 +72,13 @@ typer_app.add_typer(pytest_cmd.app, name="pytest")
 typer_app.add_typer(tutorial_cmd.app, name="tutorial")
 
 
+def _version_callback(show_version: bool) -> None:
+    """Print opcli's version and exit, if --version was passed."""
+    if show_version:
+        typer.echo(f"opcli {__version__}")
+        raise typer.Exit()
+
+
 @typer_app.callback()
 def _main(
     verbose: bool = typer.Option(
@@ -82,6 +90,13 @@ def _main(
             "(e.g. per-artifact download/localize/publish results). "
             "Warnings and errors are always shown."
         ),
+    ),
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show opcli's version and exit.",
     ),
 ) -> None:
     _configure_logging(verbose=verbose)
