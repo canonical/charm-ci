@@ -42,7 +42,7 @@ from jinja2 import StrictUndefined, TemplateSyntaxError, UndefinedError
 from jinja2.exceptions import SecurityError
 from jinja2.sandbox import SandboxedEnvironment
 
-from opcli.core.constants import ARTIFACTS_BUILD_YAML
+from opcli.core.constants import artifacts_build_path
 from opcli.core.env import current_arch
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.yaml_io import load_artifacts_build
@@ -151,9 +151,9 @@ def _load_artifacts(root: Path) -> ArtifactsGenerated:
     Raises:
         ConfigurationError: If the file does not exist.
     """
-    gen_path = root / ARTIFACTS_BUILD_YAML
+    gen_path = artifacts_build_path(root)
     if not gen_path.exists():
-        msg = f"{ARTIFACTS_BUILD_YAML} not found. Run 'opcli artifacts build' first."
+        msg = f"{gen_path} not found. Run 'opcli artifacts build' first."
         raise ConfigurationError(msg)
     return load_artifacts_build(gen_path)
 

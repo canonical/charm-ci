@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from opcli.core.artifacts import artifacts_path
+from opcli.core.constants import artifacts_build_path
 from opcli.core.exceptions import ConfigurationError, DiscoveryError
 from tests.conftest import write_file
 
@@ -84,7 +85,7 @@ class TestArtifactsPath:
     """Tests for artifacts_path()."""
 
     def test_single_charm_returns_path(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         with patch("opcli.core.artifacts.current_arch", return_value="amd64"):
             result = artifacts_path(tmp_path)
@@ -93,7 +94,7 @@ class TestArtifactsPath:
         assert result[0] == (tmp_path / "traefik-k8s_ubuntu-22.04-amd64.charm").resolve()
 
     def test_multi_charm_no_name_raises(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _MULTI_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _MULTI_CHARM_BUILD)
 
         with (
             patch("opcli.core.artifacts.current_arch", return_value="amd64"),
@@ -102,7 +103,7 @@ class TestArtifactsPath:
             artifacts_path(tmp_path, artifact_type="charm")
 
     def test_multi_charm_with_name_filters(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _MULTI_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _MULTI_CHARM_BUILD)
 
         with patch("opcli.core.artifacts.current_arch", return_value="amd64"):
             result = artifacts_path(tmp_path, name="worker-k8s")
@@ -111,7 +112,7 @@ class TestArtifactsPath:
         assert "worker-k8s" in str(result[0])
 
     def test_type_filter_charm(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _ROCK_BUILD)
+        write_file(artifacts_build_path(tmp_path), _ROCK_BUILD)
 
         with (
             patch("opcli.core.artifacts.current_arch", return_value="amd64"),
@@ -120,7 +121,7 @@ class TestArtifactsPath:
             artifacts_path(tmp_path, artifact_type="charm")
 
     def test_type_filter_rock(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _ROCK_BUILD)
+        write_file(artifacts_build_path(tmp_path), _ROCK_BUILD)
 
         with patch("opcli.core.artifacts.current_arch", return_value="amd64"):
             result = artifacts_path(tmp_path, artifact_type="rock")
@@ -129,7 +130,7 @@ class TestArtifactsPath:
         assert "myrock" in str(result[0])
 
     def test_type_filter_snap(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SNAP_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SNAP_BUILD)
 
         with patch("opcli.core.artifacts.current_arch", return_value="amd64"):
             result = artifacts_path(tmp_path, artifact_type="snap")
@@ -138,7 +139,7 @@ class TestArtifactsPath:
         assert "mysnap" in str(result[0])
 
     def test_arch_override(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _MULTI_ARCH_BUILD)
+        write_file(artifacts_build_path(tmp_path), _MULTI_ARCH_BUILD)
 
         result = artifacts_path(tmp_path, arch="arm64")
 
@@ -150,7 +151,7 @@ class TestArtifactsPath:
             artifacts_path(tmp_path)
 
     def test_no_matching_artifact_raises(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         with (
             patch("opcli.core.artifacts.current_arch", return_value="amd64"),
@@ -160,7 +161,7 @@ class TestArtifactsPath:
 
     def test_arch_fallback_when_no_match(self, tmp_path: Path) -> None:
         """When no build matches the requested arch, falls back to all builds."""
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         with patch("opcli.core.artifacts.current_arch", return_value="s390x"):
             result = artifacts_path(tmp_path)

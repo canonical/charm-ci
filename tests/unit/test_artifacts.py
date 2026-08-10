@@ -19,6 +19,7 @@ from opcli.core.artifacts import (
     artifacts_localize,
     artifacts_matrix,
 )
+from opcli.core.constants import artifacts_build_path
 from opcli.core.exceptions import ConfigurationError, OpcliError, SubprocessError
 from opcli.core.subprocess import SubprocessResult
 from opcli.core.yaml_io import load_artifacts_build, load_artifacts_plan
@@ -394,11 +395,11 @@ class TestArtifactsBuild:
 
     def test_invalid_generated_fields_rejected(self, tmp_path: Path) -> None:
         write_file(
-            tmp_path / "artifacts.build.yaml",
+            artifacts_build_path(tmp_path),
             "version: 1\ncharms:\n- name: c\n  source: .\n  builds:\n    file: ./c.charm\n",
         )
         with pytest.raises(Exception, match="validation error"):
-            load_artifacts_build(tmp_path / "artifacts.build.yaml")
+            load_artifacts_build(artifacts_build_path(tmp_path))
 
     def test_build_rock_with_pack_dir_creates_symlink(self, tmp_path: Path) -> None:
         """pack-dir: a temporary rockcraft.yaml symlink is created and removed."""
@@ -897,7 +898,7 @@ class TestArtifactsBuild:
 
         # Manually seed a build file with a rock entry that shouldn't survive
         write_file(
-            tmp_path / "artifacts.build.yaml",
+            artifacts_build_path(tmp_path),
             "version: 1\nrocks:\n- name: leftover\n  rockcraft-yaml: x.yaml\n"
             "  builds:\n  - arch: amd64\n    file: ./x.rock\n",
         )
@@ -1065,7 +1066,7 @@ class TestArtifactsCollect:
             "    base: ubuntu@24.04\n",
         )
 
-        dest = tmp_path / "artifacts.build.yaml"
+        dest = artifacts_build_path(tmp_path)
         artifacts_collect(tmp_path, [rock_partial, charm_partial])
 
         gen = load_artifacts_build(dest)
@@ -1099,7 +1100,7 @@ class TestArtifactsCollect:
 
         artifacts_collect(tmp_path, [rock_partial, charm_partial])
 
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         # Image lives on the rock, not on the resource
         assert gen.rocks[0].builds[0].file == "./my-rock_1.0_amd64.rock"
         resource = gen.charms[0].resources["my-rock-image"]  # type: ignore[index]
@@ -1123,7 +1124,7 @@ class TestArtifactsCollect:
 
         artifacts_collect(tmp_path, [rock1, rock2])
 
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         expected_count = 2
         assert len(gen.rocks) == expected_count
         names = {r.name for r in gen.rocks}
@@ -1195,7 +1196,7 @@ class TestArtifactsCollect:
 
         artifacts_collect(tmp_path, [rock_amd64, rock_arm64])
 
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         assert len(gen.rocks) == 1
         assert gen.rocks[0].name == "my-rock"
         expected_arch_count = 2
@@ -1226,7 +1227,7 @@ class TestArtifactsCollect:
 
         artifacts_collect(tmp_path, [charm_amd64, charm_arm64])
 
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         assert len(gen.charms) == 1
         assert gen.charms[0].name == "my-charm"
         expected_arch_count = 2
@@ -1253,7 +1254,7 @@ class TestArtifactsCollect:
 
         artifacts_collect(tmp_path, [snap_amd64, snap_arm64])
 
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         assert len(gen.snaps) == 1
         assert gen.snaps[0].name == "my-snap"
         expected_arch_count = 2
@@ -1456,7 +1457,7 @@ class TestArtifactsCollectCIMode:
 
         artifacts_collect(tmp_path, [rock_partial, charm_partial])
 
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         assert gen.rocks[0].builds[0].image == "ghcr.io/myorg/my-repo/my-rock:abc1234"
         resource = gen.charms[0].resources["my-rock-image"]  # type: ignore[index]
         # Resource carries the rock reference; image resolved from rock.builds.image
@@ -1482,14 +1483,14 @@ class TestArtifactsLocalize:
 
     def test_localises_charm_from_downloaded_file(self, tmp_path: Path) -> None:
         """Finds .charm file and updates output.files."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_CI)
         charm_file = tmp_path / "my-charm_ubuntu-24.04-amd64.charm"
         charm_file.write_bytes(b"")
 
         count = artifacts_localize(tmp_path)
 
         assert count == 1
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         assert len(gen.charms[0].builds) == 1
         path = gen.charms[0].builds[0].path
         assert path is not None
@@ -1508,7 +1509,7 @@ class TestArtifactsLocalize:
             "  - arch: amd64\n"
             "    path: ./my-charm_ubuntu-24.04-amd64.charm\n"
         )
-        write_file(tmp_path / "artifacts.build.yaml", generated)
+        write_file(artifacts_build_path(tmp_path), generated)
         charm_file = tmp_path / "my-charm_new.charm"
         charm_file.write_bytes(b"")
 
@@ -1518,7 +1519,7 @@ class TestArtifactsLocalize:
 
     def test_raises_when_no_charm_file_found(self, tmp_path: Path) -> None:
         """Raises ConfigurationError when a CI-ref charm has no matching .charm file."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_CI)
 
         with pytest.raises(ConfigurationError, match="my-charm"):
             artifacts_localize(tmp_path)
@@ -1539,7 +1540,7 @@ class TestArtifactsLocalize:
             "  - arch: amd64\n"
             "    path: ./my-charm_ubuntu-24.04-amd64.charm\n"
         )
-        write_file(tmp_path / "artifacts.build.yaml", generated)
+        write_file(artifacts_build_path(tmp_path), generated)
         # Create a second charm file — should not be picked up since charm
         # already has output.files
         (tmp_path / "my-charm_new.charm").write_bytes(b"")
@@ -1550,7 +1551,7 @@ class TestArtifactsLocalize:
 
     def test_does_not_match_charm_with_longer_prefix_name(self, tmp_path: Path) -> None:
         """Does not pick up 'my-charm-k8s_*.charm' when localising 'my-charm'."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_CI)
         # Only the longer-prefix file exists — pattern must NOT match it
         (tmp_path / "my-charm-k8s_ubuntu-24.04-amd64.charm").write_bytes(b"")
 
@@ -1559,13 +1560,13 @@ class TestArtifactsLocalize:
 
     def test_localises_all_files_for_multi_base_charm(self, tmp_path: Path) -> None:
         """Populates output.files with all per-base .charm files."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_CI)
         (tmp_path / "my-charm_ubuntu-22.04-amd64.charm").write_bytes(b"")
         (tmp_path / "my-charm_ubuntu-24.04-amd64.charm").write_bytes(b"")
 
         artifacts_localize(tmp_path)
 
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         charm = gen.charms[0]
         assert len(charm.builds) == 2  # noqa: PLR2004
         paths = {o.path for o in charm.builds}
@@ -1577,14 +1578,14 @@ class TestArtifactsLocalize:
 
     def test_localises_all_files_for_multi_base_charm_at_separator(self, tmp_path: Path) -> None:
         """Localize populates base correctly for modern ``@`` filename format."""
-        write_file(tmp_path / "artifacts.build.yaml", self._GENERATED_CI)
+        write_file(artifacts_build_path(tmp_path), self._GENERATED_CI)
         # Modern charmcraft uses @ between distro and version
         (tmp_path / "my-charm_ubuntu@22.04-amd64.charm").write_bytes(b"")
         (tmp_path / "my-charm_ubuntu@24.04-amd64.charm").write_bytes(b"")
 
         artifacts_localize(tmp_path)
 
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         charm = gen.charms[0]
         assert len(charm.builds) == 2  # noqa: PLR2004
         paths = {o.path for o in charm.builds}
@@ -1765,7 +1766,7 @@ class TestArtifactsFetch:
         with patch(patch_target, side_effect=self._make_side_effect(tmp_path)) as mock_run:
             result = artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", arch="all")
 
-        assert result == tmp_path / "artifacts.build.yaml"
+        assert result == artifacts_build_path(tmp_path)
         calls = mock_run.call_args_list
         # First call: download all partial manifests via pattern
         partial_dir = tmp_path / "partial-artifacts-fetch"
@@ -1890,7 +1891,7 @@ class TestArtifactsFetch:
         ):
             artifacts_fetch(tmp_path, run_id="99887766", repo="owner/my-repo", arch="all")
 
-        gen = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        gen = load_artifacts_build(artifacts_build_path(tmp_path))
         for charm in gen.charms:
             charm_paths = [o.path for o in charm.builds if o.path]
             assert charm_paths, f"Charm '{charm.name}' was not localised"
@@ -2081,7 +2082,7 @@ class TestArtifactsFetch:
                 tmp_path, run_id="99887766", repo="owner/my-repo", wait=True, arch="all"
             )
 
-        assert result == tmp_path / "artifacts.build.yaml"
+        assert result == artifacts_build_path(tmp_path)
         assert download_call_count == 2  # noqa: PLR2004
         mock_sleep.assert_not_called()
 
