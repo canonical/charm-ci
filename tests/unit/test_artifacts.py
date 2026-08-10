@@ -226,6 +226,31 @@ class TestArtifactsBuild:
         gen = load_artifacts_build(result)
         assert gen.charms[0].builds[0].base is None
 
+    def test_build_charm_arch_only_filename_non_string_base_stays_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Fallback stays None if ``base:`` is not a plain string.
+
+        charmcraft's ``base:`` field is documented as a single string; guard
+        against a malformed/unexpected value (e.g. a YAML list) so we never
+        write a garbage stringified-list value into artifacts.build.yaml.
+        """
+        write_file(
+            tmp_path / "artifacts.yaml",
+            "version: 1\ncharms:\n- name: chrony\n  charmcraft-yaml: charmcraft.yaml\n",
+        )
+        write_file(
+            tmp_path / "charmcraft.yaml",
+            "name: chrony\nbase: [ubuntu@22.04, ubuntu@24.04]\nplatforms:\n  amd64:\n",
+        )
+        write_file(tmp_path / "chrony_amd64.charm", "fake charm")
+
+        with patch("opcli.core.artifacts.run_command"):
+            result = artifacts_build(tmp_path)
+
+        gen = load_artifacts_build(result)
+        assert gen.charms[0].builds[0].base is None
+
     def test_build_charm_arch_only_filename_malformed_yaml_stays_none(
         self, tmp_path: Path
     ) -> None:
