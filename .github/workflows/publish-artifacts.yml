@@ -45,14 +45,6 @@ on:
         description: "Inject a version file with the publish commit SHA into fetched charm archives"
         type: boolean
         default: true
-      create-tags:
-        description: "Create a git tag ({charm-name}-rev{revision}) for every published charm revision"
-        type: boolean
-        default: true
-      create-release:
-        description: "Create a single combined GitHub Release summarizing everything published in this run"
-        type: boolean
-        default: true
     secrets:
       CHARMHUB_TOKEN:
         description: "CharmHub auth token (from charmcraft login --export). Required for cross-org callers; same-org callers may use secrets: inherit."
@@ -210,10 +202,8 @@ jobs:
             --json \
             "${DRY_RUN_ARGS[@]}" > publish-results.json
 
-      - name: Tag and release publish
+      - name: Create GitHub Release
         if: inputs.dry-run != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CREATE_TAGS: ${{ inputs.create-tags }}
-          CREATE_RELEASE: ${{ inputs.create-release }}
         run: ${GITHUB_WORKSPACE}/.charm-ci/.github/scripts/create-publish-release.sh

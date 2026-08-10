@@ -712,20 +712,13 @@ jobs:
     with:
       # channel: latest/edge  # optional
       # inject-version: true   # optional; set false to publish charms unchanged
-      # create-tags: true      # optional; set false to skip per-revision git tags
-      # create-release: true   # optional; set false to skip the combined GitHub Release
       working-directory: .
 ```
 
-The publish workflow can also create a git tag (`{charm-name}-rev{revision}`) for
-every published charm revision, and at most one combined GitHub Release per
-publish workflow run summarizing everything published (charms, revisions,
-bases, architectures, and resource revisions), with links to each per-revision
-tag. Both are enabled by default (`create-tags: true`, `create-release: true`)
-and can be independently disabled — e.g. to defer visible releases to a
-separate "promote" workflow, or to skip tagging in repositories that don't want
-tag clutter. When enabled, the combined release includes GitHub-generated
-release notes such as the "What's Changed" and "New Contributors" sections.
+The publish workflow also creates one GitHub Release per published charm revision.
+Release bodies start with CharmHub publish metadata (channel, base, architecture,
+and resource revisions) and then include GitHub-generated release notes such as
+the "What's Changed" and "New Contributors" sections.
 Before uploading to CharmHub, the workflow injects a `version` file containing
 the first 8 characters of the publish commit SHA into each fetched `.charm`
 archive, unless that archive already contains a `version` file.
