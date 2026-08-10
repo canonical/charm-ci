@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from opcli.commands.pytest_cmd import _cd_prefix
 from opcli.commands.pytest_cmd import app as pytest_app
+from opcli.core.constants import artifacts_build_path
 from opcli.core.exceptions import ConfigurationError
 from opcli.core.pytest_args import assemble_tox_argv, pytest_run
 from opcli.core.spread import get_suite_config, spread_expand
@@ -106,7 +107,7 @@ class TestRenderArgumentsTemplate:
     """Tests for render_arguments_template()."""
 
     def test_renders_charm_file_flags(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = (
             "{% for charm in artifacts.charms %}"
@@ -122,7 +123,7 @@ class TestRenderArgumentsTemplate:
         assert result == ["--charm-file=traefik-k8s_ubuntu-22.04-amd64.charm"]
 
     def test_renders_multiple_artifacts(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _MULTI_ARTIFACT_BUILD)
+        write_file(artifacts_build_path(tmp_path), _MULTI_ARTIFACT_BUILD)
 
         template = (
             "{% for charm in artifacts.charms %}"
@@ -151,13 +152,13 @@ class TestRenderArgumentsTemplate:
             render_arguments_template(tmp_path, "{{ artifacts }}")
 
     def test_syntax_error_raises(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         with pytest.raises(ConfigurationError, match="Jinja2 syntax error in pytest-arguments"):
             render_arguments_template(tmp_path, "{% invalid %}")
 
     def test_undefined_variable_raises(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         with (
             patch("opcli.core.template.current_arch", return_value="amd64"),
@@ -167,7 +168,7 @@ class TestRenderArgumentsTemplate:
 
     def test_undefined_attribute_raises(self, tmp_path: Path) -> None:
         """StrictUndefined catches typos like artifacts.charm (missing 's')."""
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         with (
             patch("opcli.core.template.current_arch", return_value="amd64"),
@@ -176,7 +177,7 @@ class TestRenderArgumentsTemplate:
             render_arguments_template(tmp_path, "{{ artifacts.nonexistent_field }}")
 
     def test_type_error_raises_configuration_error(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         with (
             patch("opcli.core.template.current_arch", return_value="amd64"),
@@ -185,7 +186,7 @@ class TestRenderArgumentsTemplate:
             render_arguments_template(tmp_path, "{{ artifacts.charms + 1 }}")
 
     def test_index_error_raises_configuration_error(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         with (
             patch("opcli.core.template.current_arch", return_value="amd64"),
@@ -195,7 +196,7 @@ class TestRenderArgumentsTemplate:
 
     def test_ssti_attack_blocked(self, tmp_path: Path) -> None:
         """SandboxedEnvironment prevents template injection attacks."""
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         malicious = "{{ artifacts.__class__.__mro__ }}"
         with (
@@ -206,7 +207,7 @@ class TestRenderArgumentsTemplate:
 
     def test_env_context_in_arguments_template(self, tmp_path: Path) -> None:
         """``env`` is available in pytest-arguments-template, not just environment-template."""
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = '--model={{ env.get("MY_JUJU_MODEL_OPCLI", "default") }}'
         with (
@@ -222,7 +223,7 @@ class TestRenderEnvironmentTemplate:
     """Tests for render_environment_template()."""
 
     def test_renders_key_value_pairs(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = "CHARM_PATH={{ artifacts.charms[0].builds[0].path }}"
 
@@ -232,7 +233,7 @@ class TestRenderEnvironmentTemplate:
         assert result == {"CHARM_PATH": "traefik-k8s_ubuntu-22.04-amd64.charm"}
 
     def test_skips_comments_and_blank_lines(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = "# This is a comment\n\nFOO=bar\n\n"
 
@@ -242,7 +243,7 @@ class TestRenderEnvironmentTemplate:
         assert result == {"FOO": "bar"}
 
     def test_malformed_line_raises(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = "NOT_A_VALID_LINE"
 
@@ -253,7 +254,7 @@ class TestRenderEnvironmentTemplate:
             render_environment_template(tmp_path, template)
 
     def test_value_with_equals_sign(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = "IMAGE=ghcr.io/org/img:tag=latest"
 
@@ -263,7 +264,7 @@ class TestRenderEnvironmentTemplate:
         assert result == {"IMAGE": "ghcr.io/org/img:tag=latest"}
 
     def test_env_context_renders_existing_var(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = "MY_VAR={{ env.MY_TEST_VAR_OPCLI }}"
         with (
@@ -275,7 +276,7 @@ class TestRenderEnvironmentTemplate:
         assert result == {"MY_VAR": "hello-world"}
 
     def test_env_context_get_with_default(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = 'OPTIONAL={{ env.get("SURELY_ABSENT_OPCLI_VAR", "fallback") }}'
         with patch("opcli.core.template.current_arch", return_value="amd64"):
@@ -285,7 +286,7 @@ class TestRenderEnvironmentTemplate:
 
     def test_env_context_missing_var_strict_raises(self, tmp_path: Path) -> None:
         """Accessing a missing env key via attribute notation raises ConfigurationError."""
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = "BAD={{ env.SURELY_ABSENT_OPCLI_VAR }}"
         with (
@@ -296,7 +297,7 @@ class TestRenderEnvironmentTemplate:
 
     def test_env_missing_var_error_includes_get_hint(self, tmp_path: Path) -> None:
         """Error message for a missing env key hints at env.get()."""
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         template = "BAD={{ env.SURELY_ABSENT_OPCLI_VAR }}"
         with (
@@ -311,7 +312,7 @@ class TestAssembleToxArgvWithTemplate:
 
     def test_default_no_template_produces_no_flags(self, tmp_path: Path) -> None:
         """Without a template, no artifact flags are generated — plugin handles injection."""
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         argv = assemble_tox_argv(tmp_path)
 
@@ -319,7 +320,7 @@ class TestAssembleToxArgvWithTemplate:
         assert "--" not in " ".join(argv)
 
     def test_arguments_template_overrides_pfe(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         suite_config: dict[str, str | None] = {
             "working-dir": "./",
@@ -333,7 +334,7 @@ class TestAssembleToxArgvWithTemplate:
         assert "--charm-file=" not in " ".join(argv)
 
     def test_extra_args_appended_with_template(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         suite_config: dict[str, str | None] = {
             "working-dir": "./",
@@ -352,7 +353,7 @@ class TestPytestRunWithTemplate:
     """Tests for pytest_run with template-based env vars."""
 
     def test_env_template_sets_vars(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
 
         suite_config: dict[str, str | None] = {
             "working-dir": "./",
@@ -421,7 +422,7 @@ class TestCLIRunnerTemplates:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Without a template, expand emits just 'tox -e integration' — no artifact flags."""
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
         monkeypatch.chdir(tmp_path)
 
         runner = CliRunner()
@@ -435,7 +436,7 @@ class TestCLIRunnerTemplates:
     def test_expand_with_env_template(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
         write_file(tmp_path / "spread.yaml", _SPREAD_YAML_WITH_ENV_TEMPLATE)
         (tmp_path / "tests" / "integration").mkdir(parents=True)
         (tmp_path / "tests" / "integration" / "test_charm.py").touch()
@@ -450,7 +451,7 @@ class TestCLIRunnerTemplates:
         assert "traefik-k8s_ubuntu-22.04-amd64.charm" in result.output
 
     def test_expand_with_extra_args(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
         monkeypatch.chdir(tmp_path)
 
         runner = CliRunner()
@@ -542,7 +543,7 @@ class TestExpandCdPrefix:
     def test_expand_no_cd_when_root_working_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
         monkeypatch.chdir(tmp_path)
 
         runner = CliRunner()
@@ -557,7 +558,7 @@ class TestExpandCdPrefix:
         (tmp_path / "sub-charm").mkdir()
         (tmp_path / "sub-charm" / "tests" / "integration").mkdir(parents=True)
         (tmp_path / "sub-charm" / "tests" / "integration" / "test_charm.py").touch()
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
         write_file(tmp_path / "spread.yaml", _SPREAD_YAML_WITH_WORKING_DIR)
         monkeypatch.chdir(tmp_path)
 
@@ -578,7 +579,7 @@ class TestExpandCdPrefix:
         (tmp_path / "sub-charm").mkdir()
         (tmp_path / "sub-charm" / "tests" / "integration").mkdir(parents=True)
         (tmp_path / "sub-charm" / "tests" / "integration" / "test_charm.py").touch()
-        write_file(tmp_path / "artifacts.build.yaml", _SINGLE_CHARM_BUILD)
+        write_file(artifacts_build_path(tmp_path), _SINGLE_CHARM_BUILD)
         write_file(tmp_path / "spread.yaml", _SPREAD_YAML_WITH_WORKING_DIR_AND_ENV_TEMPLATE)
         monkeypatch.chdir(tmp_path)
 
@@ -635,7 +636,7 @@ class TestExamplesEnvTemplate:
     def test_spread_job_rendered_from_examples_spread_yaml(self, tmp_path: Path) -> None:
         """SPREAD_JOB from env is rendered into KEY=VALUE by the examples template."""
         shutil.copy(_EXAMPLES_DIR / "spread.yaml", tmp_path / "spread.yaml")
-        write_file(tmp_path / "artifacts.build.yaml", _EXAMPLES_ARTIFACTS_BUILD)
+        write_file(artifacts_build_path(tmp_path), _EXAMPLES_ARTIFACTS_BUILD)
         (tmp_path / "tests" / "integration").mkdir(parents=True)
         (tmp_path / "tests" / "integration" / "test_k8s_charm.py").touch()
         (tmp_path / "tests" / "integration" / "test_machine_charm.py").touch()

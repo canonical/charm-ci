@@ -176,7 +176,7 @@ jobs:
         if: matrix.type == 'rock' && needs.build-matrix.outputs.rock-upload-mode == 'registry'
         uses: actions/cache/restore@v4
         with:
-          path: ${{ inputs.working-directory }}/artifacts.build.yaml
+          path: ${{ inputs.working-directory }}/build/artifacts.build.yaml
           key: ${{ steps.rock-cache-meta.outputs.key }}
 
       - name: Run pre-build rock script
@@ -240,7 +240,7 @@ jobs:
           steps.restore-rock-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ${{ inputs.working-directory }}/artifacts.build.yaml
+          path: ${{ inputs.working-directory }}/build/artifacts.build.yaml
           key: ${{ steps.rock-cache-meta.outputs.key }}
 
       - name: Upload ${{ matrix.type }} ${{ matrix.name }}
@@ -258,5 +258,5 @@ jobs:
           # COUPLING: this pattern must stay in sync with _PARTIAL_ARTIFACT_PREFIX
           # in src/opcli/core/artifacts.py.
           name: artifacts-build-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
-          path: ${{ inputs.working-directory }}/artifacts.build.yaml
+          path: ${{ inputs.working-directory }}/build/artifacts.build.yaml
           if-no-files-found: error

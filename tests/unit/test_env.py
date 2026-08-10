@@ -9,6 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from opcli.commands.env import app as env_app
+from opcli.core.constants import artifacts_build_path
 from opcli.core.env import current_arch
 from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.provision import provision_load, provision_prepare, provision_registry
@@ -152,7 +153,7 @@ class TestProvisionLoad:
         assert result == []
 
     def test_registry_port_closed_returns_empty_without_pushing(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(artifacts_build_path(tmp_path), _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -164,7 +165,7 @@ class TestProvisionLoad:
         mock_run.assert_not_called()
 
     def test_pushes_local_rocks(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(artifacts_build_path(tmp_path), _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -189,7 +190,7 @@ class TestProvisionLoad:
         )
 
     def test_custom_registry(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(artifacts_build_path(tmp_path), _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -215,7 +216,7 @@ class TestProvisionLoad:
 
     def test_pushes_even_with_stale_image_ref(self, tmp_path: Path) -> None:
         """Rock with a stale image ref (e.g. after concierge restore) is always pushed."""
-        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_STALE_IMAGE)
+        write_file(artifacts_build_path(tmp_path), _GENERATED_WITH_STALE_IMAGE)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -227,11 +228,11 @@ class TestProvisionLoad:
 
         assert pushed == ["localhost:32000/myrock:amd64-20260101-120000"]
         mock_run.assert_called_once()
-        updated = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        updated = load_artifacts_build(artifacts_build_path(tmp_path))
         assert updated.rocks[0].builds[0].image == "localhost:32000/myrock:amd64-20260101-120000"
 
     def test_pushes_multiple_local_rocks(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_MULTIPLE_LOCAL_ROCKS)
+        write_file(artifacts_build_path(tmp_path), _GENERATED_WITH_MULTIPLE_LOCAL_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -273,7 +274,7 @@ class TestProvisionLoad:
 
     def test_no_local_rocks_returns_empty(self, tmp_path: Path) -> None:
         write_file(
-            tmp_path / "artifacts.build.yaml",
+            artifacts_build_path(tmp_path),
             "version: 1\n"
             "rocks:\n- name: r1\n  rockcraft-yaml: rd/rockcraft.yaml\n"
             "  builds:\n  - arch: amd64\n    image: ghcr.io/r1:v1\n",
@@ -289,7 +290,7 @@ class TestProvisionLoad:
         mock_run.assert_not_called()
 
     def test_empty_generated_returns_empty(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(artifacts_build_path(tmp_path), "version: 1\n")
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -301,7 +302,7 @@ class TestProvisionLoad:
         mock_run.assert_not_called()
 
     def test_pushes_oci_archive_directly_without_docker_daemon(self, tmp_path: Path) -> None:
-        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(artifacts_build_path(tmp_path), _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command") as mock_run,
@@ -319,7 +320,7 @@ class TestProvisionLoad:
 
     def test_updates_artifacts_build_with_image_ref(self, tmp_path: Path) -> None:
         """After pushing, rock.builds.image is set to timestamped ref and file is preserved."""
-        write_file(tmp_path / "artifacts.build.yaml", _GENERATED_WITH_ROCKS)
+        write_file(artifacts_build_path(tmp_path), _GENERATED_WITH_ROCKS)
 
         with (
             patch("opcli.core.provision.run_command"),
@@ -329,7 +330,7 @@ class TestProvisionLoad:
             mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             provision_load(tmp_path)
 
-        updated = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        updated = load_artifacts_build(artifacts_build_path(tmp_path))
         myrock = next(r for r in updated.rocks if r.name == "myrock")
         assert myrock.builds[0].image == "localhost:32000/myrock:amd64-20260101-120000"
         assert myrock.builds[0].file == "./rock_dir/myrock.rock"
@@ -337,7 +338,7 @@ class TestProvisionLoad:
     def test_updates_charm_resources_for_pushed_rock(self, tmp_path: Path) -> None:
         """provision_load pushes rocks; charm resources reference via rock: field."""
         write_file(
-            tmp_path / "artifacts.build.yaml",
+            artifacts_build_path(tmp_path),
             _GENERATED_WITH_ROCKS_AND_RESOURCES,
         )
 
@@ -349,7 +350,7 @@ class TestProvisionLoad:
             mock_dt.datetime.now.return_value.strftime.return_value = "20260101-120000"
             provision_load(tmp_path)
 
-        updated = load_artifacts_build(tmp_path / "artifacts.build.yaml")
+        updated = load_artifacts_build(artifacts_build_path(tmp_path))
         myrock = next(r for r in updated.rocks if r.name == "myrock")
         assert myrock.builds[0].image == "localhost:32000/myrock:amd64-20260101-120000"
         charm = updated.charms[0]
@@ -362,7 +363,7 @@ class TestProvisionLoad:
         is always pushed — no stale image ref can silently skip a push.
         """
         write_file(
-            tmp_path / "artifacts.build.yaml",
+            artifacts_build_path(tmp_path),
             "version: 1\n"
             "rocks:\n- name: myrock\n  rockcraft-yaml: rock_dir/rockcraft.yaml\n"
             "  builds:\n  - arch: amd64\n    file: ./rock_dir/myrock.rock\n"
@@ -382,7 +383,7 @@ class TestProvisionLoad:
 
     def test_no_writeback_when_nothing_pushed(self, tmp_path: Path) -> None:
         """artifacts.build.yaml is not written when no rocks are pushed."""
-        write_file(tmp_path / "artifacts.build.yaml", "version: 1\n")
+        write_file(artifacts_build_path(tmp_path), "version: 1\n")
 
         with (
             patch("opcli.core.provision.dump_artifacts_build") as mock_dump,
@@ -571,7 +572,7 @@ class TestProvisionRegistry:
             "  builds:\n  - arch: amd64\n"
             "    path: ./c.charm\n    base: ubuntu@22.04\n"
         )
-        write_file(tmp_path / "artifacts.build.yaml", content)
+        write_file(artifacts_build_path(tmp_path), content)
         with (
             patch("opcli.core.provision._is_port_open", return_value=False),
             patch(

@@ -26,7 +26,7 @@ import socket
 import time
 from pathlib import Path
 
-from opcli.core.constants import ARTIFACTS_BUILD_YAML
+from opcli.core.constants import ARTIFACTS_BUILD_YAML, artifacts_build_path
 from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.progress import status
 from opcli.core.subprocess import run_command
@@ -173,9 +173,9 @@ def provision_load(
             or if ``"deploy"`` is used with a non-local registry.
         SubprocessError: If a push command fails.
     """
-    gen_path = root / ARTIFACTS_BUILD_YAML
+    gen_path = artifacts_build_path(root)
     if not gen_path.exists():
-        logger.info("No %s found — nothing to load.", ARTIFACTS_BUILD_YAML)
+        logger.info("No %s found — nothing to load.", gen_path)
         return []
 
     generated = load_artifacts_build(gen_path)
@@ -299,7 +299,7 @@ def provision_registry(
     """
     # Skip if there are no rocks to push — the registry is only needed to serve
     # locally-built rock images.
-    gen_path = root / ARTIFACTS_BUILD_YAML
+    gen_path = artifacts_build_path(root)
     if gen_path.exists():
         generated = load_artifacts_build(gen_path)
         if not generated.rocks:

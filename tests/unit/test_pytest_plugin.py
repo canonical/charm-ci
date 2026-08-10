@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from opcli.core.constants import artifacts_build_path
 from opcli.models.artifacts_build import ArtifactsGenerated, CharmOutput, RockOutput
 from opcli.pytest_plugin import (
     CharmPathList,
@@ -20,6 +21,7 @@ from opcli.pytest_plugin import (
     _resolve_path,
     _select_arch_builds_charm,
     _select_arch_builds_rock,
+    artifacts_root_from_yaml_path,
     build_rock_images,
 )
 from opcli.pytest_plugin import (
@@ -34,6 +36,7 @@ from opcli.pytest_plugin import (
 from opcli.pytest_plugin import (
     resource_images as _resource_images_fixture,
 )
+from tests.conftest import write_file
 
 # Patch target: lazy-imported inside functions
 _ARCH = "opcli.core.env.current_arch"
@@ -123,8 +126,8 @@ class TestDiscoverArtifactsBuild:
         monkeypatch.delenv("OPCLI_ARTIFACTS_BUILD_YAML", raising=False)
         nested = tmp_path / "sub" / "nested"
         nested.mkdir(parents=True)
-        f = tmp_path / "artifacts.build.yaml"
-        f.write_text("version: 1\n")
+        f = artifacts_build_path(tmp_path)
+        write_file(f, "version: 1\n")
         result = _discover_artifacts_build(_mock_config(nested))
         assert result == f
 
@@ -132,8 +135,8 @@ class TestDiscoverArtifactsBuild:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("OPCLI_ARTIFACTS_BUILD_YAML", raising=False)
-        f = tmp_path / "artifacts.build.yaml"
-        f.write_text("version: 1\n")
+        f = artifacts_build_path(tmp_path)
+        write_file(f, "version: 1\n")
         result = _discover_artifacts_build(_mock_config(tmp_path))
         assert result == f
 
@@ -146,8 +149,8 @@ class TestDiscoverArtifactsBuild:
         """Walk-up does not cross a .git boundary into an unrelated parent."""
         monkeypatch.delenv("OPCLI_ARTIFACTS_BUILD_YAML", raising=False)
         # Place an artifacts.build.yaml ABOVE the .git root — should not be found.
-        parent_file = tmp_path / "artifacts.build.yaml"
-        parent_file.write_text("version: 1\n")
+        parent_file = artifacts_build_path(tmp_path)
+        write_file(parent_file, "version: 1\n")
         git_root = tmp_path / "repo"
         git_root.mkdir()
         (git_root / ".git").mkdir()
@@ -174,6 +177,54 @@ class TestResolvePath:
     def test_absolute_path_returned_unchanged(self) -> None:
         result = _resolve_path("/abs/path/foo.charm", Path("/proj/root"))
         assert result == "/abs/path/foo.charm"
+
+
+# ---------------------------------------------------------------------------
+# artifacts_root_from_yaml_path
+# ---------------------------------------------------------------------------
+
+
+class TestArtifactsRootFromYamlPath:
+    """Regression tests: relative artifact paths in artifacts.build.yaml are
+    always relative to the project root, not to build/ where the manifest
+    itself now lives (see issue #114).
+    """
+
+    def test_build_dir_manifest_resolves_to_grandparent(self, tmp_path: Path) -> None:
+        yaml_path = artifacts_build_path(tmp_path)
+        assert artifacts_root_from_yaml_path(yaml_path) == tmp_path
+
+    def test_non_build_dir_manifest_resolves_to_parent(self, tmp_path: Path) -> None:
+        """An explicit --artifacts-build-yaml / env var override pointing
+        somewhere other than build/ keeps the pre-existing "parent is root"
+        contract.
+        """
+        yaml_path = tmp_path / "somewhere-else" / "artifacts.build.yaml"
+        assert artifacts_root_from_yaml_path(yaml_path) == yaml_path.parent
+
+    def test_end_to_end_charm_path_resolves_relative_to_project_root(self, tmp_path: Path) -> None:
+        """Full regression test for issue #114: with the manifest under
+        build/, charm_path must still resolve paths relative to the real
+        project root, not to build/.
+        """
+        charm_file = tmp_path / "my-charm_amd64.charm"
+        charm_file.touch()
+        write_file(
+            artifacts_build_path(tmp_path),
+            "version: 1\n"
+            "charms:\n"
+            "  - name: my-charm\n"
+            "    charmcraft-yaml: charmcraft.yaml\n"
+            "    builds:\n"
+            "      - arch: amd64\n"
+            "        path: ./my-charm_amd64.charm\n",
+        )
+        config = _mock_config(tmp_path)
+        request = MagicMock()
+        request.config = config
+        with patch(_ARCH, return_value="amd64"):
+            result = _charm_path_fixture.__wrapped__(request)  # type: ignore[attr-defined]
+        assert result == str(charm_file.resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -1037,8 +1088,9 @@ class TestCharmResourceImagesFixture:
     ) -> None:
         """Fixture resolves resources from artifacts.build.yaml correctly."""
         monkeypatch.setenv(_ARCH.replace("opcli.core.env.", ""), "amd64")
-        yaml_file = tmp_path / "artifacts.build.yaml"
-        yaml_file.write_text(
+        yaml_file = artifacts_build_path(tmp_path)
+        write_file(
+            yaml_file,
             "version: 1\n"
             "rocks:\n"
             "  - name: myrock\n"
@@ -1055,7 +1107,7 @@ class TestCharmResourceImagesFixture:
             "    resources:\n"
             "      oci-image:\n"
             "        type: oci-image\n"
-            "        rock: myrock\n"
+            "        rock: myrock\n",
         )
         config = _mock_config(str(tmp_path))
         request = MagicMock()
