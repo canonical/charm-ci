@@ -22,6 +22,15 @@ name: Publish Artifacts
 # Same-org callers may use `secrets: inherit` instead of explicit passing.
 # Requires CHARMHUB_TOKEN secret in the calling repository (passed as CHARMCRAFT_AUTH).
 
+# Serialize publish runs per ref: overlapping runs could each resolve the
+# same "previous combined release" for --notes-start-tag and race to create
+# publish-<run_id> releases with overlapping/duplicated release notes.
+# Never cancel an in-progress publish — it may have already published to
+# CharmHub, so cancelling would leave that revision untagged/unreleased.
+concurrency:
+  group: publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   workflow_call:
     inputs:

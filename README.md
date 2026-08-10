@@ -723,9 +723,14 @@ publish workflow run summarizing everything published (charms, revisions,
 bases, architectures, and resource revisions), with links to each per-revision
 tag. Both are enabled by default (`create-tags: true`, `create-release: true`)
 and can be independently disabled — e.g. to defer visible releases to a
-separate "promote" workflow, or to skip tagging in repositories that don't want
-tag clutter. When enabled, the combined release includes GitHub-generated
-release notes such as the "What's Changed" and "New Contributors" sections.
+separate "promote" workflow, or to reduce the number of per-revision tags in
+repositories that publish many bases/architectures per run. Disabling
+`create-tags` does not eliminate tags entirely: a GitHub Release cannot exist
+without a tag, so when `create-release: true` one `publish-<run-id>` tag is
+still created per publish run (in addition to, or instead of, the
+per-revision tags depending on `create-tags`). When enabled, the combined
+release includes GitHub-generated release notes such as the "What's Changed"
+and "New Contributors" sections.
 Before uploading to CharmHub, the workflow injects a `version` file containing
 the first 8 characters of the publish commit SHA into each fetched `.charm`
 archive, unless that archive already contains a `version` file.

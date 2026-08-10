@@ -30,12 +30,31 @@ set -euo pipefail
 CREATE_TAGS="${CREATE_TAGS:-true}"
 CREATE_RELEASE="${CREATE_RELEASE:-true}"
 
+# Wraps `gh release view` so a genuine 404 ("release not found") is
+# distinguished from a transient API/network failure. Returns 0 if the
+# release exists, 1 if it does not exist (confirmed 404), and aborts the
+# script on any other error so a flaky API call can't silently be
+# misread as "release doesn't exist" (which would widen release notes)
+# or "release exists" (which would abort a legitimate creation).
+release_exists() {
+  local tag="$1"
+  local err
+  if err="$(gh release view "${tag}" 2>&1 1>/dev/null)"; then
+    return 0
+  fi
+  if [ "${err}" = "release not found" ]; then
+    return 1
+  fi
+  echo "::error::gh release view ${tag} failed unexpectedly: ${err}" >&2
+  exit 1
+}
+
 find_previous_combined_release_tag() {
   local tag_prefix="publish-"
   local previous_tag
 
   while IFS= read -r previous_tag; do
-    if gh release view "${previous_tag}" > /dev/null 2>&1; then
+    if release_exists "${previous_tag}"; then
       echo "${previous_tag}"
       return 0
     fi
@@ -140,7 +159,7 @@ if [ "${CREATE_RELEASE}" != "true" ]; then
   exit 0
 fi
 
-if gh release view "${COMBINED_TAG}" > /dev/null 2>&1; then
+if release_exists "${COMBINED_TAG}"; then
   echo "Release ${COMBINED_TAG} already exists — skipping (idempotent rerun)."
   exit 0
 fi

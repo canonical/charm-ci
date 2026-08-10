@@ -270,6 +270,26 @@ def test_notes_start_tag_uses_previous_release_even_at_same_commit(tmp_path: Pat
     assert "--notes-start-tag publish-41" in log
 
 
+def test_transient_release_view_error_aborts_instead_of_recreating(tmp_path: Path) -> None:
+    """A non-404 `gh release view` failure (e.g. a transient API error) must
+    abort the script, not be silently treated as "release doesn't exist" —
+    otherwise a flaky API call could cause `gh release create` to fail on an
+    already-existing release, or (for the previous-tag scan) silently widen
+    release notes past a release that does in fact exist.
+    """
+    _write_publish_results(tmp_path, charm_name="traefik-k8s", revision=308)
+
+    result = _run_script(
+        tmp_path,
+        existing_releases="ERROR:publish-42",
+        github_run_id="42",
+    )
+
+    assert result.returncode == 1
+    assert "failed unexpectedly" in result.stderr
+    assert "gh release create" not in _read_log(tmp_path)
+
+
 def test_notes_start_tag_omitted_when_no_previous_release(tmp_path: Path) -> None:
     _write_publish_results(tmp_path, charm_name="traefik-k8s", revision=1)
 
@@ -339,7 +359,14 @@ set -euo pipefail
 if [ "$1 $2" = "release view" ]; then
   case " ${EXISTING_RELEASES:-} " in
     *" $3 "*) exit 0 ;;
-    *) exit 1 ;;
+    *" ERROR:$3 "*)
+      echo "HTTP 500: Internal Server Error" >&2
+      exit 1
+      ;;
+    *)
+      echo "release not found" >&2
+      exit 1
+      ;;
   esac
 fi
 printf 'gh' >> "${COMMAND_LOG}"
