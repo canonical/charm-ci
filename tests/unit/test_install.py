@@ -289,7 +289,7 @@ def test_install_lxd_uses_sudo_as_non_root(mocker):
     assert call(["sudo", "lxd", "init", "--auto"]) in mock_run.call_args_list
 
 
-def test_install_lxd_adds_user_to_lxd_group(mocker):
+def test_install_lxd_adds_user_to_lxd_group(mocker, caplog):
     mocker.patch("shutil.which", return_value=None)
     mocker.patch("os.getuid", return_value=1000)
     mocker.patch.dict(os.environ, {"USER": "ubuntu"}, clear=False)
@@ -298,8 +298,10 @@ def test_install_lxd_adds_user_to_lxd_group(mocker):
     mocker.patch("grp.getgrnam", return_value=mock_group)
     mocker.patch("opcli.core.install._lxd_is_initialised", return_value=True)
     mock_run = mocker.patch("opcli.core.install.run_command")
-    install_lxd()
+    with caplog.at_level("WARNING"):
+        install_lxd()
     assert call(["sudo", "usermod", "-aG", "lxd", "ubuntu"]) in mock_run.call_args_list
+    assert "ubuntu added to lxd group" in caplog.text
 
 
 def test_install_lxd_skips_group_add_if_already_member(mocker):
@@ -429,7 +431,7 @@ def test_install_all_calls_all_installers_as_root(mocker):
     mock_snapcraft.assert_called_once()
 
 
-def test_install_all_warns_path_for_non_root(mocker, tmp_path, capsys):
+def test_install_all_warns_path_for_non_root(mocker, tmp_path, caplog):
     mocker.patch("platform.system", return_value="Linux")
     mocker.patch("shutil.which", return_value="/usr/bin/snap")
     mocker.patch("os.getuid", return_value=1000)
@@ -444,9 +446,9 @@ def test_install_all_warns_path_for_non_root(mocker, tmp_path, capsys):
     mocker.patch("opcli.core.install.install_charmcraft")
     mocker.patch("opcli.core.install.install_rockcraft")
     mocker.patch("opcli.core.install.install_snapcraft")
-    install_all()
-    captured = capsys.readouterr()
-    assert "export PATH" in captured.out
+    with caplog.at_level("WARNING"):
+        install_all()
+    assert "export PATH" in caplog.text
 
 
 def test_install_all_raises_on_non_linux(mocker):
@@ -584,31 +586,31 @@ def test_cli_install_doctor_missing_tool(mocker):
 # ---------------------------------------------------------------------------
 
 
-def test_path_warning_printed_when_local_bin_missing(mocker, tmp_path, capsys):
+def test_path_warning_printed_when_local_bin_missing(mocker, tmp_path, caplog):
     mocker.patch("pathlib.Path.home", return_value=tmp_path)
     mocker.patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "SHELL": "/bin/bash"}, clear=False)
-    _warn_if_local_bin_not_on_path(prefix=True)
-    captured = capsys.readouterr()
-    assert ".local/bin" in captured.out
-    assert "export PATH" in captured.out
-    assert ".bashrc" in captured.out
+    with caplog.at_level("WARNING"):
+        _warn_if_local_bin_not_on_path(prefix=True)
+    assert ".local/bin" in caplog.text
+    assert "export PATH" in caplog.text
+    assert ".bashrc" in caplog.text
 
 
-def test_path_warning_uses_zshrc_for_zsh(mocker, tmp_path, capsys):
+def test_path_warning_uses_zshrc_for_zsh(mocker, tmp_path, caplog):
     mocker.patch("pathlib.Path.home", return_value=tmp_path)
     mocker.patch.dict(os.environ, {"PATH": "/usr/bin", "SHELL": "/usr/bin/zsh"}, clear=False)
-    _warn_if_local_bin_not_on_path(prefix=True)
-    captured = capsys.readouterr()
-    assert ".zshrc" in captured.out
+    with caplog.at_level("WARNING"):
+        _warn_if_local_bin_not_on_path(prefix=True)
+    assert ".zshrc" in caplog.text
 
 
-def test_path_warning_silent_when_local_bin_present(mocker, tmp_path, capsys):
+def test_path_warning_silent_when_local_bin_present(mocker, tmp_path, caplog):
     local_bin = str(tmp_path / ".local" / "bin")
     mocker.patch("pathlib.Path.home", return_value=tmp_path)
     mocker.patch.dict(os.environ, {"PATH": f"{local_bin}:/usr/bin"}, clear=False)
-    _warn_if_local_bin_not_on_path(prefix=False)
-    captured = capsys.readouterr()
-    assert captured.out == ""
+    with caplog.at_level("WARNING"):
+        _warn_if_local_bin_not_on_path(prefix=False)
+    assert caplog.text == ""
 
 
 # ---------------------------------------------------------------------------

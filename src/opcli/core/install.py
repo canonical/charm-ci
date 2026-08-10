@@ -10,6 +10,7 @@ script) or as a regular user (developer workstation).
 """
 
 import grp
+import logging
 import os
 import platform
 import shutil
@@ -18,6 +19,8 @@ from pathlib import Path
 from opcli.core.exceptions import ConfigurationError, SubprocessError
 from opcli.core.progress import status, step
 from opcli.core.subprocess import run_command
+
+logger = logging.getLogger(__name__)
 
 
 def install_all() -> None:
@@ -216,9 +219,10 @@ def install_lxd() -> None:
             if user not in lxd_group.gr_mem:
                 with step(f"Adding {user} to lxd group"):
                     run_command(["sudo", "usermod", "-aG", "lxd", user])
-                print(
-                    f"  ⚠ {user} added to lxd group (root-equivalent access).\n"
-                    f"    Log out and back in for this to take effect."
+                logger.warning(
+                    "%s added to lxd group (root-equivalent access). "
+                    "Log out and back in for this to take effect.",
+                    user,
                 )
         except KeyError:
             pass  # lxd group not yet created; snap post-install hook will create it
@@ -282,10 +286,10 @@ def _get_version(tool: str, path: str) -> str | None:
 
 
 def _warn_if_local_bin_not_on_path(*, prefix: bool) -> None:
-    """Print a warning when ~/.local/bin is missing from PATH.
+    """Log a warning when ~/.local/bin is missing from PATH.
 
     Args:
-        prefix: If True print a pre-install warning; if False a post-install reminder.
+        prefix: If True log a pre-install warning; if False a post-install reminder.
     """
     local_bin = str(Path.home() / ".local" / "bin")
     if local_bin in os.environ.get("PATH", "").split(":"):
@@ -293,8 +297,11 @@ def _warn_if_local_bin_not_on_path(*, prefix: bool) -> None:
     shell = os.environ.get("SHELL", "")
     rc_file = ".zshrc" if "zsh" in shell else ".bashrc"
     verb = "Warning" if prefix else "Reminder"
-    print(
-        f"\n⚠ {verb}: {local_bin} is not on PATH.\n"
-        f'  Add to ~/{rc_file}:  export PATH="{local_bin}:$PATH"\n'
-        f"  Then run:           source ~/{rc_file}"
+    logger.warning(
+        '%s: %s is not on PATH. Add to ~/%s:  export PATH="%s:$PATH"  Then run: source ~/%s',
+        verb,
+        local_bin,
+        rc_file,
+        local_bin,
+        rc_file,
     )
