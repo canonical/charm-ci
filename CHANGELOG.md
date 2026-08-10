@@ -13,6 +13,11 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ## [Unreleased]
 
+## [v0.0.1-alpha.10] - 2026-08-10
+
+This is expected to be the last `alpha` release before `1.0.0`, pending no
+new issues surfacing. See [Versioning policy](README.md#versioning-policy).
+
 ### Changed
 
 - **Breaking:** `artifacts.build.yaml` and the expanded `spread.yaml`/`task.yaml`
@@ -24,6 +29,10 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
   also reduced. (#122, #129)
 - `opcli spread jobs` output is now sorted for deterministic CI matrix
   ordering. (#119)
+- Renamed the `concierge-microk8s.yaml` example to `concierge-k8s.yaml` and
+  switched it to the canonical `k8s` provider. (#124)
+- CI's `test` job now runs against an explicit Python `3.12`/`3.13` matrix
+  instead of relying on `uv`'s default interpreter resolution.
 
 ### Fixed
 
@@ -36,22 +45,33 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
   `charmcraft.yaml`'s `base:` field with arch-only `platforms:` keys (e.g.
   `platforms: {amd64:}`); the base is now read from `charmcraft.yaml` as a
   fallback when it cannot be parsed from the packed filename. (#107)
+- Fixed `pyproject.toml`/`__init__.py`'s hardcoded version string (stuck at
+  `0.0.1-alpha.2` since alpha.2 despite 8 subsequent tagged releases);
+  `__version__` is now derived from installed package metadata.
 
 ### Added
 
 - Support for GitHub Environment-scoped secrets via an optional `environment`
   input on `integration-test.yml` and `publish-artifacts.yml`, forwarded to
   the relevant jobs. (#123)
+- `opcli --version` flag.
+- `--verbose`/`-v` global flag to surface internal `logger.info()` output
+  (previously invisible by default).
+- Complete PyPI-style package metadata (`readme`, `license`, `authors`,
+  `keywords`, `classifiers`) in `pyproject.toml`. (#131)
 
 ### Docs
 
 - Documented the `TOX_ENV` environment variable for overriding the default
   tox environment. (#87)
 - Clarified `AI agents must never merge PRs` policy in `AGENTS.md`.
+- Added a [Versioning policy](README.md#versioning-policy) section to
+  `README.md` and this `CHANGELOG.md`.
 
 ## [v0.0.1-alpha.9] - 2026-07-13
 
 See [GitHub Releases](https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.9).
 
-[Unreleased]: https://github.com/canonical/charm-ci/compare/v0.0.1-alpha.9...HEAD
+[Unreleased]: https://github.com/canonical/charm-ci/compare/v0.0.1-alpha.10...HEAD
+[v0.0.1-alpha.10]: https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.10
 [v0.0.1-alpha.9]: https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.9
