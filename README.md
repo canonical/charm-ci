@@ -122,6 +122,8 @@ name, e.g. `opcli -v artifacts fetch ...`) that surfaces INFO-level detail
 from opcli's internal operations (per-artifact download/localize/publish
 results). Warnings and errors are always shown regardless of this flag.
 
+Run `opcli --version` to print the installed opcli version and exit.
+
 ### `opcli artifacts`
 
 | Command | Description |
