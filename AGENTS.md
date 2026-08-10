@@ -304,6 +304,7 @@ The table below distinguishes *mechanically enforced* rules from *advisory* ones
 | CI green before merge | ⚠️ Advisory | Branch protection (enable on canonical/charm-ci) |
 | AI agents never merge PRs | ⚠️ Advisory | Agent discipline — see "Git workflow" below |
 | Docs updated with code | ⚠️ Advisory | PR review discipline |
+| `CHANGELOG.md` updated with user-facing changes | ⚠️ Advisory | PR review discipline — no CI check yet |
 | Mock at `run_command` only | ⚠️ Advisory | Code review |
 | Avoid `Any` | ✅ CI blocks | `mypy --strict` rejects new `Any` |
 

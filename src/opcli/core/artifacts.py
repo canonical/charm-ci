@@ -1230,6 +1230,13 @@ def _read_charmcraft_base(yaml_path: Path) -> str | None:
 
     Returns ``None`` on any IO/parse error, or if the file has no top-level
     ``base`` field, so callers can rely on this always degrading gracefully.
+
+    Note: this returns the *declared* base from ``charmcraft.yaml``, not a
+    value verified against what charmcraft actually built. Today ``base`` is
+    used only for display/informational purposes (e.g. in publish output),
+    never as a lookup/matching key, so this distinction has no functional
+    impact — but any future code that keys logic off ``base`` should keep
+    that in mind.
     """
     try:
         data = load_yaml_optional(yaml_path)
