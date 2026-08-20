@@ -13,6 +13,20 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ## [Unreleased]
 
+## [v1.0.0] - 2026-08-20
+
+The first official stable release of `opcli`. This release contains no
+functional changes over `v0.0.1-alpha.10`; it marks the project's commitment
+to [Semantic Versioning](README.md#versioning-policy) going forward.
+
+### Changed
+
+- **Breaking:** Project status is now `Development Status :: 5 -
+  Production/Stable` (was `3 - Alpha`). From this release onward, breaking
+  changes to the CLI, `artifacts.yaml`/`artifacts.build.yaml` schemas,
+  `spread.yaml` virtual-backend keys, or reusable-workflow inputs require a
+  major version bump per the [Versioning policy](README.md#versioning-policy).
+
 ## [v0.0.1-alpha.10] - 2026-08-10
 
 This is expected to be the last `alpha` release before `1.0.0`, pending no
@@ -72,6 +86,7 @@ new issues surfacing. See [Versioning policy](README.md#versioning-policy).
 
 See [GitHub Releases](https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.9).
 
-[Unreleased]: https://github.com/canonical/charm-ci/compare/v0.0.1-alpha.10...HEAD
+[Unreleased]: https://github.com/canonical/charm-ci/compare/v1.0.0...HEAD
+[v1.0.0]: https://github.com/canonical/charm-ci/releases/tag/v1.0.0
 [v0.0.1-alpha.10]: https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.10
 [v0.0.1-alpha.9]: https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.9
