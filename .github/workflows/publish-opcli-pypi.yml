@@ -5,13 +5,21 @@ name: Publish opcli to PyPI
 # Builds and publishes the `opcli` package to PyPI using PyPI Trusted
 # Publishing (OIDC) -- no API token is stored in this repository.
 #
-# Trigger: `workflow_dispatch` only. Publishing is deliberately NOT tied to
-# `release: published` so that a public GitHub Release can never go out
-# ahead of (or independent of) a successful PyPI publish, and so a failed
-# publish can always be safely retried by re-running this workflow (the
-# `skip-existing` option below makes re-runs idempotent even if a previous
-# attempt partially succeeded). A maintainer runs this manually, from the
-# tag/ref they intend to publish, after cutting the GitHub Release.
+# Trigger: `workflow_dispatch` only, run manually by a maintainer against the
+# release tag, after cutting the GitHub Release. This is deliberately
+# decoupled from `release: published` so a failed publish can always be
+# safely retried by re-running this workflow (`skip-existing` below makes
+# retries idempotent after a partial failure) without needing to touch the
+# GitHub Release at all.
+#
+# Known, accepted limitation: because publishing is a separate manual step
+# run after the GitHub Release is already public, a failed PyPI publish
+# leaves a public GitHub Release with no matching PyPI package until a
+# maintainer notices and re-runs this workflow. This is considered
+# acceptable for a manually-operated release process (the failure is
+# immediately visible to whoever runs this workflow, and retrying is safe),
+# rather than restructuring the release process around draft releases to
+# make this atomic.
 on:
   workflow_dispatch:
 
@@ -49,6 +57,23 @@ jobs:
       - name: Build sdist and wheel
         run: uv build
 
+      - name: Smoke-test the built wheel
+        # Installs the just-built wheel into a throwaway venv and runs the
+        # CLI, so a broken build (bad entry point, missing package data,
+        # import error, ...) is caught here rather than after it's
+        # published. This matters especially for `opcli`'s first-ever
+        # release to a brand-new PyPI project name: PyPI never allows
+        # re-uploading a different file under the same filename/version, so
+        # a bad build published here can only be fixed by cutting a new
+        # version -- there is no in-place repair.
+        run: |
+          uv venv /tmp/opcli-smoke-test
+          # shellcheck disable=SC1091
+          source /tmp/opcli-smoke-test/bin/activate
+          wheel="$(ls dist/*.whl)"
+          uv pip install "${wheel}[cli]"
+          opcli --version
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -84,4 +109,12 @@ jobs:
           # the wheel upload then failed), PyPI's "already exists" error for
           # that specific file is treated as success instead of failing the
           # whole job.
+          #
+          # This does NOT make it safe to "fix and retry" a build whose
+          # published file was itself broken/wrong: PyPI filenames are
+          # immutable, so a different file can never be uploaded under an
+          # already-published version's filename, skip-existing or not. If
+          # a bad release is discovered after publishing, the fix is to cut
+          # a new version, not to rebuild and re-run this workflow against
+          # the same tag.
           skip-existing: true
