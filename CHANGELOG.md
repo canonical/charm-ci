@@ -20,10 +20,11 @@ PyPI.
 
 ### Added
 
-- `opcli` is now published to [PyPI](https://pypi.org/project/opcli/) on
-  every tagged GitHub Release, via a new `.github/workflows/release-pypi.yml`
-  workflow using PyPI Trusted Publishing (OIDC) — no API token is stored in
-  this repository. `pip install`/`uv tool install "opcli[cli]"` now works
+- `opcli` is now published to [PyPI](https://pypi.org/project/opcli/) via a
+  new, manually-triggered `.github/workflows/publish-opcli-pypi.yml`
+  workflow (run against a release tag after the GitHub Release is cut),
+  using PyPI Trusted Publishing (OIDC) — no API token is stored in this
+  repository. `pip install`/`uv tool install "opcli[cli]"` now works
   without a `git+https://...` source.
 
 ### Changed

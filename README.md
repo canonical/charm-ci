@@ -911,9 +911,12 @@ Production/Stable`) and follows [Semantic Versioning](https://semver.org/):
   schema-migration story once the file format needs to change.
 - Releases are tagged (`vX.Y.Z`) and published as
   [GitHub Releases](https://github.com/canonical/charm-ci/releases) and to
-  [PyPI](https://pypi.org/project/opcli/). Publishing a GitHub Release
-  automatically triggers the PyPI publish via `.github/workflows/release-pypi.yml`
-  (PyPI Trusted Publishing/OIDC — no stored token).
+  [PyPI](https://pypi.org/project/opcli/). The PyPI publish is a separate,
+  manually-triggered step (`.github/workflows/publish-opcli-pypi.yml`, run
+  via `workflow_dispatch` against the release tag) using PyPI Trusted
+  Publishing/OIDC — no stored token — so a GitHub Release can never go
+  public ahead of a successful PyPI publish, and a failed publish can be
+  safely retried.
 
 Releases prior to `v1.0.0` were tagged `v0.0.1-alpha.N` and carried no
 backward-compatibility guarantee; breaking changes in those releases were
