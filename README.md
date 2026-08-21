@@ -40,9 +40,17 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 ```bash
 sudo snap install astral-uv --classic
-uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git"
+uv tool install "opcli[cli]"
 export PATH="$HOME/.local/bin:$PATH"  # or: uv tool update-shell && exec $SHELL
 opcli --help
+```
+
+`opcli` is published on [PyPI](https://pypi.org/project/opcli/) as of
+`v1.0.0`. To install directly from this repository instead (e.g. to track
+`main` or a specific commit/branch), use:
+
+```bash
+uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git"
 ```
 
 > **Note:** The `[cli]` extra is required for the CLI. The bare `opcli` package (without `[cli]`) installs only the pytest plugin — useful when your project already has a conflicting `typer` pin.
@@ -890,28 +898,29 @@ examples/      # Example project layout
 
 ### Versioning policy
 
-`opcli` is currently in **alpha** (`Development Status :: 3 - Alpha`,
-versions `0.0.1-alpha.N`). While in alpha:
+As of `v1.0.0`, `opcli` is **stable** (`Development Status :: 5 -
+Production/Stable`) and follows [Semantic Versioning](https://semver.org/):
 
-- **No backward-compatibility guarantee.** Any release may change
-  `artifacts.yaml`/`artifacts.build.yaml` schema behavior, CLI flags,
-  `spread.yaml` virtual-backend keys, or reusable-workflow inputs without a
-  major version bump. Breaking changes are called out in
-  [CHANGELOG.md](CHANGELOG.md) and, where practical, kept backward-compatible
-  with a deprecation window instead of an outright break.
+- **Backward-compatibility guarantee.** Breaking changes to the CLI,
+  `artifacts.yaml`/`artifacts.build.yaml` schemas, `spread.yaml`
+  virtual-backend keys, or reusable-workflow inputs require a major version
+  bump and are documented in [CHANGELOG.md](CHANGELOG.md) with a migration
+  note.
 - `artifacts.yaml` and `artifacts.build.yaml` carry an explicit
-  `version: 1` schema field (see `src/opcli/models/`) — this is the seed for
-  a real schema-migration story once the file format needs to change after
-  a stable release.
-- Alpha releases are tagged (`vX.Y.Z-alpha.N`) and published as
-  [GitHub Releases](https://github.com/canonical/charm-ci/releases); there is
-  no PyPI package yet.
+  `version: 1` schema field (see `src/opcli/models/`) — the seed for a real
+  schema-migration story once the file format needs to change.
+- Releases are tagged (`vX.Y.Z`) and published as
+  [GitHub Releases](https://github.com/canonical/charm-ci/releases) and to
+  [PyPI](https://pypi.org/project/opcli/). The PyPI publish is a separate,
+  manually-triggered step (`.github/workflows/publish-opcli-pypi.yml`, run
+  via `workflow_dispatch` against the release tag) using PyPI Trusted
+  Publishing/OIDC — no stored token — so a GitHub Release can never go
+  public ahead of a successful PyPI publish, and a failed publish can be
+  safely retried.
 
-Once `opcli` reaches `1.0.0`, it will follow
-[Semantic Versioning](https://semver.org/): breaking changes to the CLI,
-`artifacts.yaml`/`artifacts.build.yaml` schemas, `spread.yaml` virtual-backend
-keys, or reusable-workflow inputs will require a major version bump and will
-be documented in [CHANGELOG.md](CHANGELOG.md) with a migration note.
+Releases prior to `v1.0.0` were tagged `v0.0.1-alpha.N` and carried no
+backward-compatibility guarantee; breaking changes in those releases were
+called out in [CHANGELOG.md](CHANGELOG.md) instead of a major version bump.
 
 ## License
 
