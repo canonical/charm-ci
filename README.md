@@ -40,9 +40,17 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 ```bash
 sudo snap install astral-uv --classic
-uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git"
+uv tool install "opcli[cli]"
 export PATH="$HOME/.local/bin:$PATH"  # or: uv tool update-shell && exec $SHELL
 opcli --help
+```
+
+`opcli` is published on [PyPI](https://pypi.org/project/opcli/) as of
+`v1.0.0`. To install directly from this repository instead (e.g. to track
+`main` or a specific commit/branch), use:
+
+```bash
+uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git"
 ```
 
 > **Note:** The `[cli]` extra is required for the CLI. The bare `opcli` package (without `[cli]`) installs only the pytest plugin — useful when your project already has a conflicting `typer` pin.
@@ -902,8 +910,10 @@ Production/Stable`) and follows [Semantic Versioning](https://semver.org/):
   `version: 1` schema field (see `src/opcli/models/`) — the seed for a real
   schema-migration story once the file format needs to change.
 - Releases are tagged (`vX.Y.Z`) and published as
-  [GitHub Releases](https://github.com/canonical/charm-ci/releases); there is
-  no PyPI package yet.
+  [GitHub Releases](https://github.com/canonical/charm-ci/releases) and to
+  [PyPI](https://pypi.org/project/opcli/). Publishing a GitHub Release
+  automatically triggers the PyPI publish via `.github/workflows/release-pypi.yml`
+  (PyPI Trusted Publishing/OIDC — no stored token).
 
 Releases prior to `v1.0.0` were tagged `v0.0.1-alpha.N` and carried no
 backward-compatibility guarantee; breaking changes in those releases were

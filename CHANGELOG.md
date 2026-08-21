@@ -15,9 +15,16 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ## [v1.0.0] - 2026-08-20
 
-The first official stable release of `opcli`. This release contains no
-functional changes over `v0.0.1-alpha.10`; it marks the project's commitment
-to [Semantic Versioning](README.md#versioning-policy) going forward.
+The first official stable release of `opcli`, and its first publication to
+PyPI.
+
+### Added
+
+- `opcli` is now published to [PyPI](https://pypi.org/project/opcli/) on
+  every tagged GitHub Release, via a new `.github/workflows/release-pypi.yml`
+  workflow using PyPI Trusted Publishing (OIDC) — no API token is stored in
+  this repository. `pip install`/`uv tool install "opcli[cli]"` now works
+  without a `git+https://...` source.
 
 ### Changed
 
