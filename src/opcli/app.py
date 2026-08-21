@@ -14,7 +14,7 @@ try:
 except ImportError:
     print(
         "error: the 'cli' extra is required to run opcli.\n"
-        "       Install with: pip install 'opcli[cli]'",
+        "       Install with: pip install 'charm-opcli[cli]'",
         file=sys.stderr,
     )
     sys.exit(1)

@@ -6,7 +6,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version("opcli")
+    __version__ = version("charm-opcli")
 except PackageNotFoundError:
     # Running from a raw source checkout without an installed distribution
     # (e.g. PYTHONPATH=src without `uv sync`/`pip install`) — package

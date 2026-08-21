@@ -20,12 +20,15 @@ PyPI.
 
 ### Added
 
-- `opcli` is now published to [PyPI](https://pypi.org/project/opcli/) via a
-  new, manually-triggered `.github/workflows/publish-opcli-pypi.yml`
-  workflow (run against a release tag after the GitHub Release is cut),
-  using PyPI Trusted Publishing (OIDC) — no API token is stored in this
-  repository. `pip install`/`uv tool install "opcli[cli]"` now works
-  without a `git+https://...` source.
+- `opcli` is now published to PyPI as
+  [`charm-opcli`](https://pypi.org/project/charm-opcli/) (the plain `opcli`
+  name was already taken by an unrelated package) via a new,
+  manually-triggered `.github/workflows/publish-opcli-pypi.yml` workflow
+  (run against a release tag after the GitHub Release is cut), using PyPI
+  Trusted Publishing (OIDC) — no API token is stored in this repository.
+  `pip install`/`uv tool install "charm-opcli[cli]"` now works without a
+  `git+https://...` source; the installed command and `import opcli` are
+  unchanged.
 
 ### Changed
 

@@ -68,7 +68,7 @@ jobs:
     needs: [build]
     environment:
       name: pypi-release
-      url: https://pypi.org/p/opcli
+      url: https://pypi.org/p/charm-opcli
     # Required for PyPI Trusted Publishing (OIDC); no secrets.PYPI_API_TOKEN
     # is used or needed.
     permissions:

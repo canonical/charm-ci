@@ -169,10 +169,10 @@ jobs:
 
       - name: Install opcli
         run: |
-          if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
-            uv tool install "opcli[cli] @ ${GITHUB_WORKSPACE}"
+          if grep -q 'name = "charm-opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
+            uv tool install "charm-opcli[cli] @ ${GITHUB_WORKSPACE}"
           else
-            uv tool install "opcli[cli] @ ${GITHUB_WORKSPACE}/.charm-ci"
+            uv tool install "charm-opcli[cli] @ ${GITHUB_WORKSPACE}/.charm-ci"
           fi
 
       - name: Install charmcraft

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "opcli"
+name = "charm-opcli"
 version = "1.0.0"
 description = "CLI tool for operator development workflows (Charms, Rocks, Snaps)"
 readme = "README.md"

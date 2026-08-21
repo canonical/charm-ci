@@ -1,5 +1,13 @@
 # opcli
 
+> **⚠️ PyPI package name note:** the PyPI *distribution* for `opcli` is
+> published as **`charm-opcli`** (`pip install charm-opcli` / `uv tool
+> install "charm-opcli[cli]"`), not `opcli` — the plain `opcli` name was
+> already registered on PyPI. The CLI command (`opcli`), Python import
+> (`import opcli`), and pytest plugin are all unaffected; only the
+> `pip install` / `uv tool install` name differs. See
+> [Install opcli](#install-opcli) below.
+
 A **local-first CLI tool** for Canonical operator developers to build charms, rocks, and snaps; manage test environments; and run integration tests — identically on a developer laptop and inside a CI job.
 
 `opcli` replaces the monolithic [`operator-workflows`](https://github.com/canonical/operator-workflows) approach with a modular pipeline based on explicit build plans (`artifacts.yaml`), stable build output (`artifacts.build.yaml`), and [spread](https://github.com/canonical/spread)-based test execution.
@@ -40,20 +48,24 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 ```bash
 sudo snap install astral-uv --classic
-uv tool install "opcli[cli]"
+uv tool install "charm-opcli[cli]"
 export PATH="$HOME/.local/bin:$PATH"  # or: uv tool update-shell && exec $SHELL
 opcli --help
 ```
 
-`opcli` is published on [PyPI](https://pypi.org/project/opcli/) as of
-`v1.0.0`. To install directly from this repository instead (e.g. to track
+`opcli` is published on PyPI as [`charm-opcli`](https://pypi.org/project/charm-opcli/)
+as of `v1.0.0` (the plain `opcli` name is already taken by an unrelated
+package). The installed command is still `opcli`, and `import opcli` works
+as normal. To install directly from this repository instead (e.g. to track
 `main` or a specific commit/branch), use:
 
 ```bash
-uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git"
+uv tool install "charm-opcli[cli] @ git+https://github.com/canonical/charm-ci.git"
 ```
 
-> **Note:** The `[cli]` extra is required for the CLI. The bare `opcli` package (without `[cli]`) installs only the pytest plugin — useful when your project already has a conflicting `typer` pin.
+> **Note:** The `[cli]` extra is required for the CLI. The bare
+> `charm-opcli` package (without `[cli]`) installs only the pytest
+> plugin — useful when your project already has a conflicting `typer` pin.
 
 ### Install all local dev tools
 
@@ -911,12 +923,11 @@ Production/Stable`) and follows [Semantic Versioning](https://semver.org/):
   schema-migration story once the file format needs to change.
 - Releases are tagged (`vX.Y.Z`) and published as
   [GitHub Releases](https://github.com/canonical/charm-ci/releases) and to
-  [PyPI](https://pypi.org/project/opcli/). The PyPI publish is a separate,
-  manually-triggered step (`.github/workflows/publish-opcli-pypi.yml`, run
-  via `workflow_dispatch` against the release tag) using PyPI Trusted
-  Publishing/OIDC — no stored token — so a GitHub Release can never go
-  public ahead of a successful PyPI publish, and a failed publish can be
-  safely retried.
+  PyPI as [`charm-opcli`](https://pypi.org/project/charm-opcli/). The PyPI
+  publish is a separate, manually-triggered step
+  (`.github/workflows/publish-opcli-pypi.yml`, run via `workflow_dispatch`
+  against the release tag) using PyPI Trusted Publishing/OIDC — no stored
+  token.
 
 Releases prior to `v1.0.0` were tagged `v0.0.1-alpha.N` and carried no
 backward-compatibility guarantee; breaking changes in those releases were
