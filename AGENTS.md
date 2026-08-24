@@ -144,6 +144,8 @@ opcli spread jobs --include "integration-test-ci:ubuntu-24.04:tests/integration/
 
 
 
+### Per-suite integration-suites keys
+
 These keys live in `integration-suites` entries and are consumed by opcli during expansion (not passed to spread). The first group controls suite identity and test discovery; the second group controls how artifacts are passed to pytest.
 
 **Discovery and identity keys:**
@@ -183,7 +185,7 @@ passenv =
     GITHUB_TOKEN
 ```
 
-**Default behavior (no template):** Generates `--charm-file=<path>` and `--<rock>-image=<ref>` CLI flags (pfe-style), filtered to the current machine's architecture.
+**Default behavior (no template):** No CLI flags are generated. Artifact paths are injected into test functions via the `pytest-opcli` plugin fixtures (`charm_path`, `rock_images`, etc.) instead.
 
 **Example — env in pytest-arguments-template:**
 ```yaml
@@ -259,6 +261,12 @@ These encode hard-won correctness lessons — do not violate.
 5. **Fork PR rock handling.** Fork PRs get read-only `GITHUB_TOKEN` and cannot push to GHCR. The workflow sets `OPCLI_ROCK_UPLOAD=artifact`; `artifacts_build` keeps the `.rock` file local and writes `artifact:` + `run-id:` metadata. After `artifacts_fetch` downloads the `.rock`, `push-images --missing-registry deploy` auto-deploys a local registry and pushes there. This converges with the local development path.
 
 6. **Publish retry behavior.** `opcli artifacts publish` retries known-transient charmcraft/CharmHub failures automatically: up to 3 total attempts (1 initial + 2 retries) with exponential backoff (5s, 15s, 45s), implemented via `run_command(..., retries=, retry_on=)` in `core/subprocess.py`. Only failures whose output matches `_RETRYABLE_CHARMHUB_ERRORS` in `core/publish.py` (Charmhub upload-status polling timeouts, `RemoteDisconnected`, connection resets/aborts) are retried — this is applied to the `charmcraft upload`, `upload-resource`, and `release` calls. Permanent errors (e.g. `permission-required: No publisher or collaborator permission`) do not match and fail immediately on the first attempt, since retrying them would never help. Retry logic intentionally lives in opcli, not as a GitHub Actions step-level retry wrapper, per the ownership split above (opcli owns publishing to CharmHub).
+
+7. **CI fetch ↔ build-job naming coupling.** `_artifact_name_to_build_job_name()` in `core/artifacts.py` derives a workflow job name (e.g. `Build charm my-charm (amd64)`) from a partial artifact name (e.g. `artifacts-build-charm-my-charm-amd64`) — both are generated from the same `build-artifacts.yml` matrix variables, so the derivation must stay deterministic. `opcli artifacts fetch --wait` polls these derived job names' individual conclusions (via a `"/ {bare_name}"` suffix match, to handle nested reusable-workflow name prefixing) so it can detect a build failure while the enclosing workflow run is still in progress, rather than waiting for the whole run to finish. Renaming the artifact-upload convention or the matrix job's `name:` field on one side without the other silently breaks this.
+
+8. **`artifacts fetch` arch scope.** By default (`arch=None`), `artifacts_fetch` auto-detects and downloads only the current machine's architecture (via `current_arch()`); pass `--arch <arch>` for a specific one or `--arch all` to merge every architecture's partial build manifests. A "missing" cross-arch artifact after fetch is usually this default, not a bug.
+
+9. **OCI resources don't require a declared rock.** `ArtifactResource.rock` (in `models/artifacts.py`) is optional. When absent, `artifacts_publish` resolves the image reference from the charm's own `upstream-source` field in `charmcraft.yaml`/`metadata.yaml` (`_resolve_upstream_source` in `core/publish.py`) instead of a locally built rock — this supports resources backed by externally hosted images.
 
 ---
 
