@@ -4,6 +4,9 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 `opcli` replaces the monolithic [`operator-workflows`](https://github.com/canonical/operator-workflows) approach with a modular pipeline based on explicit build plans (`artifacts.yaml`), stable build output (`artifacts.build.yaml`), and [spread](https://github.com/canonical/spread)-based test execution.
 
+**What `opcli` owns:** file-based contracts (`artifacts.yaml`/`artifacts.build.yaml`), artifact discovery/download, subprocess execution (charmcraft/rockcraft/snapcraft/spread/concierge), YAML transforms, and publishing to CharmHub.
+**What `opcli` does NOT own:** GitHub Actions workflow orchestration, artifact upload, or CI runner selection — those stay in each consumer's own `.github/workflows/` files, which call the [reusable workflows](#github-actions-reusable-workflows) `opcli` provides.
+
 ## Contents
 
 - [Documentation](#documentation)
@@ -11,6 +14,8 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 - [Quick start](#quick-start)
 - [Commands](#commands)
 - [`artifacts.yaml` schema](#artifactsyaml-schema)
+- [`artifacts.build.yaml` schema](#artifactsbuildyaml-schema)
+- [`concierge.yaml` contract](#conciergeyaml-contract)
 - [`spread.yaml` virtual backends](#spreadyaml-virtual-backends)
 - [`integration-suites` in `spread.yaml`](#integration-suites-in-spreadyaml)
 - [pytest-opcli plugin](#pytest-opcli-plugin)
@@ -24,7 +29,6 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 | Document | Purpose |
 |---|---|
-| [docs/ISD283.md](docs/ISD283.md) | Functional specification |
 | [AGENTS.md](AGENTS.md) | Developer guide for AI coding agents |
 | [CHANGELOG.md](CHANGELOG.md) | Notable changes per release |
 | [examples/](examples/) | Example project layout with `artifacts.yaml`, `spread.yaml`, and `concierge.yaml` |
@@ -115,6 +119,8 @@ Publish channel resolution is:
 The command reads `artifacts.build.yaml` to resolve charm files and resource→rock mappings, then:
 1. Uploads OCI-image resources (rocks from registry or local file, external images from `upstream-source`)
 2. Uploads each `.charm` file and releases it to the channel with bound resource revisions
+
+**Automatic retries:** known-transient CharmHub failures (upload-status polling timeouts, connection resets/aborts) are retried automatically — up to 3 total attempts with exponential backoff (5s, 15s, 45s) — for the upload/upload-resource/release calls. Permanent errors (e.g. missing publisher permission) fail immediately without retrying.
 
 ## Commands
 
@@ -286,6 +292,63 @@ Key fields:
 - **`pack-dir`**: working directory for the build tool (defaults to the YAML's parent dir).
 - **`platforms[].runner`**: GitHub Actions runner labels (used by `opcli artifacts matrix`; defaults to `["ubuntu-latest"]` at matrix generation time when omitted).
 - **`channel`**: optional CharmHub channel for `opcli artifacts publish`; used when `--channel` is not passed.
+
+## `artifacts.build.yaml` schema
+
+Written by `opcli artifacts build`/`collect` to `build/artifacts.build.yaml` (`build/` should be in `.gitignore`). Same `charms`/`rocks`/`snaps` shape as `artifacts.yaml`, but each `builds[]` entry records where the built artifact actually is, in a form that differs between local and CI runs:
+
+```yaml
+# Locally — plain file paths:
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: rocks/my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        file: ./rocks/my-rock/my-rock_1.0_amd64.rock
+charms:
+  - name: my-charm
+    charmcraft-yaml: charmcraft.yaml
+    builds:
+      - arch: amd64
+        base: ubuntu-24.04
+        path: ./my-charm_ubuntu-24.04-amd64.charm
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+```
+
+```yaml
+# In CI — OCI images pushed to GHCR, charms as downloadable GH artifacts:
+version: 1
+rocks:
+  - name: my-rock
+    rockcraft-yaml: rocks/my-rock/rockcraft.yaml
+    builds:
+      - arch: amd64
+        image: ghcr.io/canonical/my-rock:abc1234-amd64
+charms:
+  - name: my-charm
+    charmcraft-yaml: charmcraft.yaml
+    builds:
+      - arch: amd64
+        artifact: charm-my-charm
+        run-id: "1234567890"
+    resources:
+      my-rock-image:
+        type: oci-image
+        rock: my-rock
+```
+
+- **`file`/`path`** (local) vs **`image`** (rock, CI) / **`artifact`+`run-id`** (charm/snap, CI) are mutually exclusive per-build location fields — opcli picks the right one based on `GITHUB_ACTIONS`/`OPCLI_ROCK_UPLOAD` (see [CI vs local](#ci-vs-local)).
+- Consumed by `opcli artifacts publish`, the `pytest-opcli` plugin (see [pytest-opcli plugin](#pytest-opcli-plugin)), and `opcli artifacts fetch` (which downloads the CI-form artifacts back to local paths).
+
+## `concierge.yaml` contract
+
+Standard [concierge](https://github.com/canonical/concierge) configuration file — see `examples/concierge.yaml`/`examples/concierge-k8s.yaml`. `opcli env provision` runs `concierge prepare` against it (auto-elevating with `sudo` as needed).
+
+In CI, `opcli env provision` patches a copy of this file in place before running concierge, injecting Docker Hub/GHCR mirror credentials so provisioning doesn't hit registry rate limits. This patching is transparent — no user action needed — but is worth knowing about if you're debugging a provisioning step that behaves differently in CI vs. locally. See [canonical/concierge#181](https://github.com/canonical/concierge/issues/181) for the underlying upstream limitation this works around.
 
 ## `spread.yaml` virtual backends
 

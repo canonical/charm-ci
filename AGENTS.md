@@ -8,7 +8,6 @@ Instructions for AI coding agents working on this repository.
 
 `opcli` — local-first CLI for Canonical operator developers to build charms/rocks/snaps, manage test environments, and run integration tests.
 
-- **Spec:** [`docs/ISD283.md`](docs/ISD283.md) — read before implementing new features.
 - **opcli owns:** file-based contracts, artifact discovery, subprocess execution, YAML transforms, artifact download (`gh run download`), CI job status queries (`gh api`), publishing to CharmHub (`charmcraft upload`/`upload-resource`).
 - **opcli does NOT own:** GitHub workflow orchestration, artifact upload, runner selection.
 
@@ -47,7 +46,6 @@ src/opcli/
 tests/
   unit/        # Fast tests — mock external processes
   integration/ # Requires LXD/spread — skip-guarded with @pytest.mark.integration
-docs/          # Spec (ISD283)
 examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.yaml)
 ```
 
@@ -329,7 +327,7 @@ gh pr checks <number> --watch   # WAIT for CI workflow green
 
 **If a CI check fails, fix it.** Never dismiss a failure as "pre-existing" or "unrelated to this PR". If a workflow is broken, investigate and fix it in the same PR (or a preceding one) before merging. The goal is to keep `main` green at all times.
 
-**Every PR must update docs.** If a PR changes CLI behavior, adds/removes commands, modifies flags, or alters workflows, the corresponding documentation must be updated in the same PR. This includes `docs/ISD283.md` (spec), `README.md`, and `AGENTS.md` as applicable. No code-only PRs that leave docs stale.
+**Every PR must update docs.** If a PR changes CLI behavior, adds/removes commands, modifies flags, or alters workflows, the corresponding documentation must be updated in the same PR. This includes `README.md` and `AGENTS.md` as applicable. No code-only PRs that leave docs stale.
 
 **Every user-facing PR must update `CHANGELOG.md`.** Add an entry under `[Unreleased]` (using the `Added`/`Changed`/`Fixed`/`Docs` headings from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)) for any change that affects CLI behavior, `artifacts.yaml`/`artifacts.build.yaml` schema, `spread.yaml` virtual-backend keys, or reusable-workflow inputs. Mark breaking changes explicitly with **Breaking:**. Pure internal refactors/chores with no user-visible effect do not need an entry.
 
