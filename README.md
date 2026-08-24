@@ -334,6 +334,8 @@ Key fields:
 - **`platforms[].runner`**: GitHub Actions runner labels (used by `opcli artifacts matrix`; defaults to `["ubuntu-latest"]` at matrix generation time when omitted).
 - **`channel`**: optional CharmHub channel for `opcli artifacts publish`; used when `--channel` is not passed.
 
+Validation notes: `name` must be unique within each of `rocks`/`charms`/`snaps` (duplicates fail validation); `platforms[].arch` must be a hyphen-free lowercase-alphanumeric token (e.g. `amd64`, `arm64`, `s390x` — no `ubuntu-24.04`-style values); `platforms` defaults to a single `amd64` entry when omitted entirely.
+
 ## `artifacts.build.yaml` schema
 
 Written by `opcli artifacts build`/`collect` to `build/artifacts.build.yaml` (`build/` should be in `.gitignore`). Same `charms`/`rocks`/`snaps` shape as `artifacts.yaml`, but each `builds[]` entry records where the built artifact actually is, in a form that differs between local and CI runs:
@@ -428,7 +430,7 @@ backends:
 ```
 
 - Locally: expands to `my-docs-local`; installs uv and opcli only.
-- In CI: expands to `my-docs-ci`; prepare is empty (the CI workflow installs opcli before spread runs).
+- In CI: expands to `my-docs-ci`; prepare installs uv and opcli only (no concierge, no Juju, no provisioning).
 
 Users write their own `task.yaml` for this backend (or use `opcli tutorial expand` — see [Tutorial testing](#tutorial-testing)).
 
@@ -811,8 +813,11 @@ jobs:
     with:
       working-directory: .
       # upload-image: artifact       # uncomment for fork PRs (no GHCR push)
+      # pre-build-rock-script: ./download_netbox.sh  # forwarded to build-artifacts; runs before each rock build (skipped on cache hits)
       # build-timeout-minutes: 60    # forwarded to build-artifacts (default: 60)
       # test-timeout-minutes: 120    # max minutes per spread test job (default: 120)
+      # charmcraft-channel: latest/stable  # forwarded to build-artifacts (snap channel for charmcraft)
+      # rockcraft-channel: latest/stable   # forwarded to build-artifacts (snap channel for rockcraft)
       # environment: integration-tests  # optional: scope secrets to a GitHub Environment
 ```
 
