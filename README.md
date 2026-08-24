@@ -10,6 +10,7 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 - [Installation](#installation)
 - [Troubleshooting installation](#troubleshooting-installation)
 - [Quick start](#quick-start)
+- [How it works](#how-it-works)
 - [Commands](#commands)
 - [`artifacts.yaml` schema](#artifactsyaml-schema)
 - [`artifacts.build.yaml` schema](#artifactsbuildyaml-schema)
@@ -139,6 +140,17 @@ Publish channel resolution is:
 The command reads `artifacts.build.yaml` to resolve charm files and resource→rock mappings, then:
 1. Uploads OCI-image resources (rocks from registry or local file, external images from `upstream-source`)
 2. Uploads each `.charm` file and releases it to the channel with bound resource revisions
+
+## How it works
+
+`opcli` chains four file-based contracts into one pipeline that runs identically on a laptop and in CI. Each stage reads/writes a file, so any stage can be inspected, re-run, or swapped independently:
+
+1. **`artifacts.yaml`** declares what to build — charms, rocks, snaps, and which rocks back which charm resources. Generated once with `opcli artifacts init`, then edited as your project's build plan changes.
+2. **`opcli artifacts build`** builds everything the plan declares and writes **`artifacts.build.yaml`** — the same build plan, extended with the paths (local) or registry refs (CI) of what was actually built. This file is the stable interface the rest of the pipeline (and the pytest-opcli plugin) consumes — no other step needs to know how or where the build happened.
+3. **`concierge.yaml`** declares the test environment (LXD, MicroK8s, Juju controller, etc.), consumed by [concierge](https://github.com/canonical/concierge) via `opcli env provision`. The same file works locally and in CI; CI-only differences (like an image-registry mirror) are patched in, not hardcoded separately.
+4. **`spread.yaml`** orchestrates provisioning + test execution through [spread](https://github.com/canonical/spread). You declare one logical `integration-test` backend; `opcli spread expand` resolves it to a concrete local (LXD VM) or CI (current runner) backend depending on where it runs, so the same `spread.yaml` drives both.
+
+Two paths run this pipeline: **`opcli spread run`** drives all four stages end-to-end through spread (closest to what CI does), or you can run each command yourself — `artifacts build` → `env provision` → `pytest run` — for faster local iteration without spread's VM overhead (see [Quick start](#quick-start)).
 
 ## Commands
 
