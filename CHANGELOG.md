@@ -85,6 +85,7 @@ new issues surfacing. See [Versioning policy](README.md#versioning-policy).
 
 See [GitHub Releases](https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.9).
 
-[Unreleased]: https://github.com/canonical/charm-ci/compare/v0.0.1-alpha.10...HEAD
+[Unreleased]: https://github.com/canonical/charm-ci/compare/v1.0.0...HEAD
+[v1.0.0]: https://github.com/canonical/charm-ci/releases/tag/v1.0.0
 [v0.0.1-alpha.10]: https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.10
 [v0.0.1-alpha.9]: https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.9
