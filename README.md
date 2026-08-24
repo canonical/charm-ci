@@ -542,13 +542,28 @@ The plugin is bundled inside `opcli` and activates automatically whenever `opcli
 
 The bare `opcli` package (without `[cli]`) installs only `pydantic` and `ruamel.yaml` — no `typer` dependency. This makes it safe to add as a test dependency even when your project pins an older `typer` version.
 
-**With uv — add to your project:**
+**With uv — add to your project (recommended — Renovate can track this):**
+
+`uv`'s `[tool.uv.sources]` table lets you pin the Git tag separately from the plain dependency name, which is what makes the pin visible to Renovate's `pep621` manager (the inline `name @ git+URL@tag` form below is not tracked by any Renovate manager). [`canonical/charm-ubuntu`](https://github.com/canonical/charm-ubuntu/blob/main/pyproject.toml) uses this pattern in production:
 
 ```bash
-uv add --group integration "opcli @ git+https://github.com/canonical/charm-ci.git@v1.0.0"
+uv add --group integration "opcli @ git+https://github.com/canonical/charm-ci.git" --tag v1.0.0
 ```
 
-Or in `pyproject.toml` directly:
+This writes both blocks below automatically:
+
+```toml
+[dependency-groups]
+integration = [
+    "opcli",
+    "pytest-jubilant",
+]
+
+[tool.uv.sources]
+opcli = { git = "https://github.com/canonical/charm-ci.git", tag = "v1.0.0" }
+```
+
+**Quick/manual alternative (not Renovate-trackable):**
 
 ```toml
 [dependency-groups]
@@ -559,6 +574,8 @@ integration = [
 ```
 
 **With tox — add to the integration test env:**
+
+`tox.ini` has no equivalent to `[tool.uv.sources]`, so a plain `deps:` pin is never Renovate-trackable out of the box. Either move the pytest-plugin dependency into `pyproject.toml` (`[dependency-groups]`, as above) and drive tox from it with `uv sync --group integration`, or add a Renovate `customManagers` regex manager targeting this line:
 
 ```ini
 [testenv:integration]
