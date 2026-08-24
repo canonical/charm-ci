@@ -3,9 +3,9 @@
 All notable changes to `opcli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Until version `1.0.0`, this project does not yet follow strict [Semantic
+As of `v1.0.0`, this project follows [Semantic
 Versioning](https://semver.org/) — see [Versioning policy](README.md#versioning-policy)
-in the README for what "alpha" currently guarantees (and doesn't).
+in the README for what is covered by that guarantee.
 
 Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 [GitHub Releases](https://github.com/canonical/charm-ci/releases) page and

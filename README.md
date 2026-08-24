@@ -890,11 +890,17 @@ examples/      # Example project layout
 
 ### Versioning policy
 
-`opcli` follows [Semantic Versioning](https://semver.org/) as of `v1.0.0`:
-breaking changes to the CLI, `artifacts.yaml`/`artifacts.build.yaml` schemas,
-`spread.yaml` virtual-backend keys, or reusable-workflow inputs require a
-major version bump and are documented in [CHANGELOG.md](CHANGELOG.md) with a
-migration note.
+`opcli` follows [Semantic Versioning](https://semver.org/) as of `v1.0.0`.
+This covers the **documented public surface**: CLI commands/flags and their
+documented behavior, the `artifacts.yaml`/`artifacts.build.yaml` schemas, the
+`spread.yaml` virtual-backend keys, and reusable-workflow inputs. Breaking
+changes to any of these require a major version bump and are documented in
+[CHANGELOG.md](CHANGELOG.md) with a migration note.
+
+Internal Python modules/functions (anything under `src/opcli/` not exposed as
+a CLI command, schema field, or workflow input), undocumented output
+formatting, and unspecified behavior are **not** covered by this guarantee
+and may change in any release.
 
 Releases are tagged (`vX.Y.Z`) and published as
 [GitHub Releases](https://github.com/canonical/charm-ci/releases). `opcli` is
