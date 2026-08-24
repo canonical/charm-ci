@@ -3,15 +3,28 @@
 All notable changes to `opcli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Until version `1.0.0`, this project does not yet follow strict [Semantic
+As of `v1.0.0`, this project follows [Semantic
 Versioning](https://semver.org/) — see [Versioning policy](README.md#versioning-policy)
-in the README for what "alpha" currently guarantees (and doesn't).
+in the README for what is covered by that guarantee.
 
 Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 [GitHub Releases](https://github.com/canonical/charm-ci/releases) page and
 `git log` for that history.
 
 ## [Unreleased]
+
+## [v1.0.0] - 2026-08-24
+
+First official stable release. `opcli` now follows
+[Semantic Versioning](https://semver.org/) — see
+[Versioning policy](README.md#versioning-policy) in the README.
+
+No functional changes from `v0.0.1-alpha.10`; this release marks the CLI,
+`artifacts.yaml`/`artifacts.build.yaml` schemas, `spread.yaml` virtual-backend
+keys, and reusable-workflow inputs as stable and ready for backward-compatible
+evolution going forward. `opcli` remains installable via
+`git+https://github.com/canonical/charm-ci.git` pins (tags or `[tool.uv.sources]`)
+— there is no PyPI package.
 
 ## [v0.0.1-alpha.10] - 2026-08-10
 
@@ -72,6 +85,7 @@ new issues surfacing. See [Versioning policy](README.md#versioning-policy).
 
 See [GitHub Releases](https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.9).
 
-[Unreleased]: https://github.com/canonical/charm-ci/compare/v0.0.1-alpha.10...HEAD
+[Unreleased]: https://github.com/canonical/charm-ci/compare/v1.0.0...HEAD
+[v1.0.0]: https://github.com/canonical/charm-ci/releases/tag/v1.0.0
 [v0.0.1-alpha.10]: https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.10
 [v0.0.1-alpha.9]: https://github.com/canonical/charm-ci/releases/tag/v0.0.1-alpha.9

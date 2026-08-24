@@ -8,7 +8,6 @@ Instructions for AI coding agents working on this repository.
 
 `opcli` — local-first CLI for Canonical operator developers to build charms/rocks/snaps, manage test environments, and run integration tests.
 
-- **Spec:** [`docs/ISD283.md`](docs/ISD283.md) — read before implementing new features.
 - **opcli owns:** file-based contracts, artifact discovery, subprocess execution, YAML transforms, artifact download (`gh run download`), CI job status queries (`gh api`), publishing to CharmHub (`charmcraft upload`/`upload-resource`).
 - **opcli does NOT own:** GitHub workflow orchestration, artifact upload, runner selection.
 
@@ -47,7 +46,6 @@ src/opcli/
 tests/
   unit/        # Fast tests — mock external processes
   integration/ # Requires LXD/spread — skip-guarded with @pytest.mark.integration
-docs/          # Spec (ISD283)
 examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.yaml)
 ```
 
@@ -88,7 +86,7 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 opcli follows a two-tier output convention:
 
 - **Data commands** (`artifacts matrix`, `spread jobs`, `spread expand`, `artifacts path`, `tutorial expand`) — always emit structured output (JSON/YAML/text) to stdout. These exist solely to produce machine-readable or script-ready data.
-- **Action commands** (`artifacts publish`, `artifacts build`, `spread run`) — print human-readable status to stdout by default. Use `--json` to opt into structured JSON output for CI consumption.
+- **Action commands** (`artifacts publish`, `artifacts build`, `spread run`) — print human-readable status to stdout by default. `artifacts publish` additionally supports `--json` to opt into structured JSON output for CI consumption; `artifacts build` and `spread run` do not currently have a `--json` flag.
 
 This mirrors the `gh` CLI pattern: action commands are human-first; `--json` switches to machine-parseable output.
 
@@ -146,6 +144,8 @@ opcli spread jobs --include "integration-test-ci:ubuntu-24.04:tests/integration/
 
 
 
+### Per-suite integration-suites keys
+
 These keys live in `integration-suites` entries and are consumed by opcli during expansion (not passed to spread). The first group controls suite identity and test discovery; the second group controls how artifacts are passed to pytest.
 
 **Discovery and identity keys:**
@@ -185,7 +185,7 @@ passenv =
     GITHUB_TOKEN
 ```
 
-**Default behavior (no template):** Generates `--charm-file=<path>` and `--<rock>-image=<ref>` CLI flags (pfe-style), filtered to the current machine's architecture.
+**Default behavior (no template):** No CLI flags are generated. Artifact paths are injected into test functions via the `pytest-opcli` plugin fixtures (`charm_path`, `rock_images`, etc.) instead.
 
 **Example — env in pytest-arguments-template:**
 ```yaml
@@ -262,6 +262,12 @@ These encode hard-won correctness lessons — do not violate.
 
 6. **Publish retry behavior.** `opcli artifacts publish` retries known-transient charmcraft/CharmHub failures automatically: up to 3 total attempts (1 initial + 2 retries) with exponential backoff (5s, 15s, 45s), implemented via `run_command(..., retries=, retry_on=)` in `core/subprocess.py`. Only failures whose output matches `_RETRYABLE_CHARMHUB_ERRORS` in `core/publish.py` (Charmhub upload-status polling timeouts, `RemoteDisconnected`, connection resets/aborts) are retried — this is applied to the `charmcraft upload`, `upload-resource`, and `release` calls. Permanent errors (e.g. `permission-required: No publisher or collaborator permission`) do not match and fail immediately on the first attempt, since retrying them would never help. Retry logic intentionally lives in opcli, not as a GitHub Actions step-level retry wrapper, per the ownership split above (opcli owns publishing to CharmHub).
 
+7. **CI fetch ↔ build-job naming coupling.** `_artifact_name_to_build_job_name()` in `core/artifacts.py` derives a workflow job name (e.g. `Build charm my-charm (amd64)`) from a partial artifact name (e.g. `artifacts-build-charm-my-charm-amd64`) — both are generated from the same `build-artifacts.yml` matrix variables, so the derivation must stay deterministic. `opcli artifacts fetch --wait` polls these derived job names' individual conclusions (via a `"/ {bare_name}"` suffix match, to handle nested reusable-workflow name prefixing) so it can detect a build failure while the enclosing workflow run is still in progress, rather than waiting for the whole run to finish. Renaming the artifact-upload convention or the matrix job's `name:` field on one side without the other silently breaks this.
+
+8. **`artifacts fetch` arch scope.** By default (`arch=None`), `artifacts_fetch` auto-detects and downloads only the current machine's architecture (via `current_arch()`); pass `--arch <arch>` for a specific one or `--arch all` to merge every architecture's partial build manifests. A "missing" cross-arch artifact after fetch is usually this default, not a bug.
+
+9. **OCI resources don't require a declared rock.** `ArtifactResource.rock` (in `models/artifacts.py`) is optional. When absent, `artifacts_publish` resolves the image reference from the charm's own `upstream-source` field in `charmcraft.yaml`/`metadata.yaml` (`_resolve_upstream_source` in `core/publish.py`) instead of a locally built rock — this supports resources backed by externally hosted images.
+
 ---
 
 ## Error hierarchy
@@ -329,7 +335,7 @@ gh pr checks <number> --watch   # WAIT for CI workflow green
 
 **If a CI check fails, fix it.** Never dismiss a failure as "pre-existing" or "unrelated to this PR". If a workflow is broken, investigate and fix it in the same PR (or a preceding one) before merging. The goal is to keep `main` green at all times.
 
-**Every PR must update docs.** If a PR changes CLI behavior, adds/removes commands, modifies flags, or alters workflows, the corresponding documentation must be updated in the same PR. This includes `docs/ISD283.md` (spec), `README.md`, and `AGENTS.md` as applicable. No code-only PRs that leave docs stale.
+**Every PR must update docs.** If a PR changes CLI behavior, adds/removes commands, modifies flags, or alters workflows, the corresponding documentation must be updated in the same PR. This includes `README.md` and `AGENTS.md` as applicable. No code-only PRs that leave docs stale.
 
 **Every user-facing PR must update `CHANGELOG.md`.** Add an entry under `[Unreleased]` (using the `Added`/`Changed`/`Fixed`/`Docs` headings from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)) for any change that affects CLI behavior, `artifacts.yaml`/`artifacts.build.yaml` schema, `spread.yaml` virtual-backend keys, or reusable-workflow inputs. Mark breaking changes explicitly with **Breaking:**. Pure internal refactors/chores with no user-visible effect do not need an entry.
 
