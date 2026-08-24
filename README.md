@@ -5,7 +5,7 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 `opcli` replaces the monolithic [`operator-workflows`](https://github.com/canonical/operator-workflows) approach with a modular pipeline based on explicit build plans (`artifacts.yaml`), stable build output (`artifacts.build.yaml`), and [spread](https://github.com/canonical/spread)-based test execution.
 
 **What `opcli` owns:** file-based contracts (`artifacts.yaml`/`artifacts.build.yaml`), artifact discovery/download, subprocess execution (charmcraft/rockcraft/snapcraft/spread/concierge), YAML transforms, and publishing to CharmHub.
-**What `opcli` does NOT own:** GitHub Actions workflow orchestration, artifact upload, or CI runner selection — those stay in each consumer's own `.github/workflows/` files, which call the [reusable workflows](#github-actions-reusable-workflows) `opcli` provides.
+**What `opcli` does NOT own:** the GitHub Actions workflow *composition* — triggers, permissions, artifact-upload policy, and runner selection stay in each consumer repo's own `.github/workflows/` files. `opcli` provides [reusable workflows](#github-actions-reusable-workflows) that those files call, but doesn't orchestrate them itself.
 
 ## Contents
 
@@ -24,14 +24,17 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 - [GitHub Actions reusable workflows](#github-actions-reusable-workflows)
 - [Secrets for integration tests](#secrets-for-integration-tests)
 - [Development](#development)
+- [License](#license)
 
 ## Documentation
 
+This README is the primary documentation for using `opcli`. Additional resources:
+
 | Document | Purpose |
 |---|---|
-| [AGENTS.md](AGENTS.md) | Developer guide for AI coding agents |
-| [CHANGELOG.md](CHANGELOG.md) | Notable changes per release |
 | [examples/](examples/) | Example project layout with `artifacts.yaml`, `spread.yaml`, and `concierge.yaml` |
+| [CHANGELOG.md](CHANGELOG.md) | Notable changes per release |
+| [AGENTS.md](AGENTS.md) | Contributor/AI-agent guide for working on `opcli` itself (not needed to use it) |
 
 ## Installation
 
@@ -120,8 +123,6 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 1. Uploads OCI-image resources (rocks from registry or local file, external images from `upstream-source`)
 2. Uploads each `.charm` file and releases it to the channel with bound resource revisions
 
-**Automatic retries:** known-transient CharmHub failures (upload-status polling timeouts, connection resets/aborts) are retried automatically — up to 3 total attempts with exponential backoff (5s, 15s, 45s) — for the upload/upload-resource/release calls. Permanent errors (e.g. missing publisher permission) fail immediately without retrying.
-
 ## Commands
 
 Every command accepts a global `--verbose`/`-v` flag (before the subcommand
@@ -144,6 +145,8 @@ Run `opcli --version` to print the installed opcli version and exit.
 | `push-images` | Load rock OCI images into a local registry. `-r` for registry (default: `localhost:32000`). `--missing-registry`: `skip` (default), `deploy` (auto-provision), or `fail`. |
 | `publish` | Upload charms and OCI resources to CharmHub. `--channel` (optional; per-charm channels supported), `--charm` (filter), `--dry-run`. |
 | `path` | Print absolute path(s) to built artifacts. Optional `NAME` arg, `--type`, `--arch`. |
+
+`publish` retries known-transient CharmHub failures automatically (upload-status polling timeouts, `RemoteDisconnected`, connection resets/aborts): up to 3 total attempts, with 5s then 15s backoff between attempts. Permanent errors (e.g. missing publisher permission) fail immediately without retrying.
 
 ### `opcli install`
 
@@ -341,14 +344,14 @@ charms:
         rock: my-rock
 ```
 
-- **`file`/`path`** (local) vs **`image`** (rock, CI) / **`artifact`+`run-id`** (charm/snap, CI) are mutually exclusive per-build location fields — opcli picks the right one based on `GITHUB_ACTIONS`/`OPCLI_ROCK_UPLOAD` (see [CI vs local](#ci-vs-local)).
+- These local/CI examples show the two common shapes, but they're not strictly mutually exclusive: rocks built on a fork PR combine `file` + `artifact` + `run-id` (uploaded as a GH artifact instead of pushed to GHCR — see [Fork PR support](#fork-pr-support)). `opcli` resolves which fields are populated based on `GITHUB_ACTIONS`/`OPCLI_ROCK_UPLOAD` (see [CI vs local](#ci-vs-local)).
 - Consumed by `opcli artifacts publish`, the `pytest-opcli` plugin (see [pytest-opcli plugin](#pytest-opcli-plugin)), and `opcli artifacts fetch` (which downloads the CI-form artifacts back to local paths).
 
 ## `concierge.yaml` contract
 
 Standard [concierge](https://github.com/canonical/concierge) configuration file — see `examples/concierge.yaml`/`examples/concierge-k8s.yaml`. `opcli env provision` runs `concierge prepare` against it (auto-elevating with `sudo` as needed).
 
-In CI, `opcli env provision` patches a copy of this file in place before running concierge, injecting Docker Hub/GHCR mirror credentials so provisioning doesn't hit registry rate limits. This patching is transparent — no user action needed — but is worth knowing about if you're debugging a provisioning step that behaves differently in CI vs. locally. See [canonical/concierge#181](https://github.com/canonical/concierge/issues/181) for the underlying upstream limitation this works around.
+When `opcli env provision` is passed a non-empty `--image-registry <url>`, it patches the concierge file **in place** first, injecting `image-registry: {url: <url>}` into each enabled `microk8s`/`k8s` provider section (other provider types are untouched). This is how the CI `integration-test` backend routes registry pulls through a mirror (via `DOCKERHUB_MIRROR`) to avoid rate limits — no patching happens if `--image-registry` isn't passed. See [canonical/concierge#181](https://github.com/canonical/concierge/issues/181) for the underlying upstream limitation this works around.
 
 ## `spread.yaml` virtual backends
 
@@ -721,7 +724,7 @@ RST equivalent uses `.. SPREAD`, `.. SPREAD END`, `.. SPREAD SKIP`, and `.. SPRE
 
 ## GitHub Actions reusable workflows
 
-Three reusable workflows are available for operator repositories:
+Four reusable workflows are available for operator repositories:
 
 | Workflow | Purpose |
 |---|---|
@@ -947,7 +950,6 @@ src/opcli/
 tests/
   unit/        # Fast tests — mock external processes
   integration/ # Requires LXD/spread — skip-guarded
-docs/          # Spec
 examples/      # Example project layout
 ```
 

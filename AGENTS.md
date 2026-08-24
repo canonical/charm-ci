@@ -86,7 +86,7 @@ examples/      # Example project layout (artifacts.yaml, spread.yaml, concierge.
 opcli follows a two-tier output convention:
 
 - **Data commands** (`artifacts matrix`, `spread jobs`, `spread expand`, `artifacts path`, `tutorial expand`) — always emit structured output (JSON/YAML/text) to stdout. These exist solely to produce machine-readable or script-ready data.
-- **Action commands** (`artifacts publish`, `artifacts build`, `spread run`) — print human-readable status to stdout by default. Use `--json` to opt into structured JSON output for CI consumption.
+- **Action commands** (`artifacts publish`, `artifacts build`, `spread run`) — print human-readable status to stdout by default. `artifacts publish` additionally supports `--json` to opt into structured JSON output for CI consumption; `artifacts build` and `spread run` do not currently have a `--json` flag.
 
 This mirrors the `gh` CLI pattern: action commands are human-first; `--json` switches to machine-parseable output.
 
