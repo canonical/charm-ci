@@ -30,7 +30,8 @@ This README is the primary documentation for using `opcli`. Additional resources
 
 | Document | Purpose |
 |---|---|
-| [examples/](examples/) | Example project layout with `artifacts.yaml`, `spread.yaml`, and `concierge.yaml` |
+| [examples/](examples/) | Minimal example project layout with `artifacts.yaml`, `spread.yaml`, and `concierge.yaml` |
+| [canonical/haproxy-operator](https://github.com/canonical/haproxy-operator) | Real-world production charm wired end-to-end with `opcli` (`artifacts.yaml`, `spread.yaml`, integration/doc-test/publish workflows) |
 | [CHANGELOG.md](CHANGELOG.md) | Notable changes per release |
 | [AGENTS.md](AGENTS.md) | Contributor/AI-agent guide for working on `opcli` itself (not needed to use it) |
 
@@ -535,7 +536,7 @@ The bare `opcli` package (without `[cli]`) installs only `pydantic` and `ruamel.
 **With uv — add to your project:**
 
 ```bash
-uv add --group integration "opcli @ git+https://github.com/canonical/charm-ci.git"
+uv add --group integration "opcli @ git+https://github.com/canonical/charm-ci.git@v1.0.0"
 ```
 
 Or in `pyproject.toml` directly:
@@ -543,7 +544,7 @@ Or in `pyproject.toml` directly:
 ```toml
 [dependency-groups]
 integration = [
-    "opcli @ git+https://github.com/canonical/charm-ci.git",
+    "opcli @ git+https://github.com/canonical/charm-ci.git@v1.0.0",
     "pytest-jubilant",
 ]
 ```
@@ -553,7 +554,7 @@ integration = [
 ```ini
 [testenv:integration]
 deps =
-    opcli @ git+https://github.com/canonical/charm-ci.git
+    opcli @ git+https://github.com/canonical/charm-ci.git@v1.0.0
     pytest-jubilant
 ```
 
