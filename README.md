@@ -779,8 +779,8 @@ RST equivalent uses `.. SPREAD`, `.. SPREAD END`, `.. SPREAD SKIP`, and `.. SPRE
 | Env var | Controls | Local | CI |
 |---|---|---|---|
 | `CI` | Spread backend expansion | `*-local` (LXD VM) | `*-ci` (current runner) |
-| `GITHUB_ACTIONS` | Artifact output format | Local file paths | GHCR images + artifact refs |
-| `OPCLI_ROCK_UPLOAD` | Rock build output mode | — (not set) | `registry` (push to GHCR) or `artifact` (upload `.rock` as GH artifact, for fork PRs) |
+| `GITHUB_ACTIONS` | Artifact output format | Local file paths | Artifact files by default for pull-request tests; GHCR refs for other events or explicit registry mode |
+| `OPCLI_ROCK_UPLOAD` | Rock build output mode | — (not set) | `artifact` for pull-request test events by default, or `registry` (push to GHCR) for other events or when explicitly selected |
 | `OPCLI_GIT_REF` | opcli version inside spread VM | defaults to `main` | set by workflow |
 
 ### Scope
@@ -812,7 +812,8 @@ jobs:
     secrets: inherit
     with:
       working-directory: .
-      # upload-image: artifact       # uncomment for fork PRs (no GHCR push)
+      # upload-image: registry       # opt in when a remote GHCR image is required
+      # artifact-retention-days: 30  # retain test artifacts for 30 days
       # pre-build-rock-script: ./download_netbox.sh  # forwarded to build-artifacts; runs before each rock build (skipped on cache hits)
       # build-timeout-minutes: 60    # forwarded to build-artifacts (default: 60)
       # test-timeout-minutes: 120    # max minutes per spread test job (default: 120)
@@ -890,7 +891,7 @@ Pinning to a SHA or tag automatically installs the matching `opcli` version via 
 
 When a pull request comes from a fork, the `GITHUB_TOKEN` is read-only and cannot push OCI images to GHCR. The `build-artifacts.yml` workflow handles this automatically:
 
-1. **Fork detection** — checks `github.event.pull_request.head.repo.fork` and sets `OPCLI_ROCK_UPLOAD=artifact`.
+1. **Pull-request handling** — pull-request events use artifact mode, so fork PRs do not need to push to GHCR with a read-only `GITHUB_TOKEN`.
 2. **Artifact mode** — the `.rock` file is uploaded as a GitHub Actions artifact instead of being pushed to GHCR.
 3. **Test phase** — `opcli artifacts fetch` downloads the `.rock` artifact, `opcli artifacts localize` rewrites paths, and `opcli artifacts push-images --missing-registry deploy` provisions a local registry and pushes the rock there.
 4. **Debugging** — when GitHub Actions debug logging is enabled, the build job opens a detached tmate session; self-hosted runners use `canonical/action-tmate`, GitHub-hosted runners use `mxschmitt/action-tmate`.

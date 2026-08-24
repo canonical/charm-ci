@@ -61,6 +61,10 @@ on:
         description: "Rock upload mode passed to build-artifacts (registry or artifact)"
         type: string
         default: ""
+      artifact-retention-days:
+        description: "Number of days to retain build artifacts."
+        type: number
+        default: 30
       spread-jobs-include:
         description: "fnmatch pattern to include only matching spread jobs (e.g. 'my-backend-ci:*'). When empty all jobs are included."
         type: string
@@ -97,6 +101,7 @@ jobs:
     with:
       working-directory: ${{ inputs.working-directory }}
       upload-image: ${{ inputs.upload-image }}
+      artifact-retention-days: ${{ inputs.artifact-retention-days }}
       pre-build-rock-script: ${{ inputs.pre-build-rock-script }}
       build-timeout-minutes: ${{ inputs.build-timeout-minutes }}
       charmcraft-channel: ${{ inputs.charmcraft-channel }}

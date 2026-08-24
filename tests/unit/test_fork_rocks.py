@@ -339,3 +339,19 @@ class TestRockLocalize:
         assert (
             result.rocks[0].builds[0].file == "./built-rock-k8s-rock-amd64/k8s-rock_1.0_amd64.rock"
         )
+
+
+def test_build_artifacts_defaults_test_events_to_artifact_mode() -> None:
+    """Pull-request builds must avoid GHCR by default."""
+    workflow = (Path(__file__).parents[2] / ".github/workflows/build-artifacts.yml").read_text()
+
+    assert "pull_request)" in workflow
+    assert 'echo "mode=artifact"' in workflow
+
+
+def test_build_artifacts_sets_configured_artifact_retention() -> None:
+    """Build archives must use the reusable workflow retention input."""
+    workflow = (Path(__file__).parents[2] / ".github/workflows/build-artifacts.yml").read_text()
+
+    assert "artifact-retention-days:" in workflow
+    assert "retention-days: ${{ inputs.artifact-retention-days }}" in workflow

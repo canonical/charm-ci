@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       upload-image:
-        description: "Rock upload mode: 'artifact' to test fork-PR path, empty for default (registry)"
+        description: "Rock upload mode: 'artifact' or 'registry'; empty uses artifact mode for pull-request test events"
         type: string
         default: ""
 

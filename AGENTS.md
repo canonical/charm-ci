@@ -109,7 +109,7 @@ Concierge respects `SUDO_USER` (via its `realUser()` function) to write configs 
 |---|---|---|
 | `CI` | Spread backend expansion (`-local` vs `-ci`) | `core/spread.py` |
 | `GITHUB_ACTIONS=true` | CI-format artifact output (GHCR + artifact refs) | `core/artifacts.py` |
-| `OPCLI_ROCK_UPLOAD` | Rock upload mode: `registry` (default, push to GHCR) or `artifact` (keep local `.rock`, upload as GH artifact — used for fork PRs) | `core/artifacts.py` |
+| `OPCLI_ROCK_UPLOAD` | Rock upload mode: `artifact` for pull-request test events by default, or `registry` (push to GHCR) for other events or when explicitly selected | `core/artifacts.py` |
 
 ---
 
