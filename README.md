@@ -4,9 +4,6 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 `opcli` replaces the monolithic [`operator-workflows`](https://github.com/canonical/operator-workflows) approach with a modular pipeline based on explicit build plans (`artifacts.yaml`), stable build output (`artifacts.build.yaml`), and [spread](https://github.com/canonical/spread)-based test execution.
 
-**What `opcli` owns:** file-based contracts (`artifacts.yaml`/`artifacts.build.yaml`), artifact discovery/download, subprocess execution (charmcraft/rockcraft/snapcraft/spread/concierge), YAML transforms, and publishing to CharmHub.
-**What `opcli` does NOT own:** the GitHub Actions workflow *composition* — triggers, permissions, artifact-upload policy, and runner selection stay in each consumer repo's own `.github/workflows/` files. `opcli` provides [reusable workflows](#github-actions-reusable-workflows) that those files call, but doesn't orchestrate them itself.
-
 ## Contents
 
 - [Documentation](#documentation)
@@ -735,6 +732,11 @@ RST equivalent uses `.. SPREAD`, `.. SPREAD END`, `.. SPREAD SKIP`, and `.. SPRE
 | `GITHUB_ACTIONS` | Artifact output format | Local file paths | GHCR images + artifact refs |
 | `OPCLI_ROCK_UPLOAD` | Rock build output mode | — (not set) | `registry` (push to GHCR) or `artifact` (upload `.rock` as GH artifact, for fork PRs) |
 | `OPCLI_GIT_REF` | opcli version inside spread VM | defaults to `main` | set by workflow |
+
+### Scope
+
+**What `opcli` owns:** file-based contracts (`artifacts.yaml`/`artifacts.build.yaml`), artifact discovery/download, subprocess execution (charmcraft/rockcraft/snapcraft/spread/concierge), YAML transforms, and publishing to CharmHub.
+**What `opcli` does NOT own:** the GitHub Actions workflow *composition* — triggers, permissions, artifact-upload policy, and runner selection stay in each consumer repo's own `.github/workflows/` files. `opcli` provides [reusable workflows](#github-actions-reusable-workflows) below that those files call, but doesn't orchestrate them itself.
 
 ## GitHub Actions reusable workflows
 
