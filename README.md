@@ -4,6 +4,8 @@ A **local-first CLI tool** for Canonical operator developers to build charms, ro
 
 `opcli` replaces the monolithic [`operator-workflows`](https://github.com/canonical/operator-workflows) approach with a modular pipeline based on explicit build plans (`artifacts.yaml`), stable build output (`artifacts.build.yaml`), and [spread](https://github.com/canonical/spread)-based test execution.
 
+If your charm repo already builds with `charmcraft`/`rockcraft`, provisions Juju with `concierge`, and runs `pytest-jubilant` through `tox` or hand-written `spread` tasks, `opcli` doesn't replace any of that — it wires those same tools together behind one build manifest and one test config, so the exact same commands run locally and in CI without duplicating charm-file paths, image refs, or provisioning steps by hand.
+
 ## Contents
 
 - [Documentation](#documentation)
@@ -89,6 +91,11 @@ Both paths below assume `opcli install all` has already been run (see [Installat
 
 ```bash
 opcli artifacts init     # discover charms/rocks/snaps → artifacts.yaml
+
+# Review artifacts.yaml before building: check each charm's OCI resources
+# map to the intended rock, and add per-charm channels/platforms if needed
+# — see the artifacts.yaml schema section below.
+
 opcli artifacts build    # build all → build/artifacts.build.yaml
 opcli spread init        # generate spread.yaml with integration-suites
 opcli spread expand      # preview expanded spread config
@@ -150,7 +157,9 @@ The command reads `artifacts.build.yaml` to resolve charm files and resource→r
 3. **`concierge.yaml`** declares the test environment (LXD, MicroK8s, Juju controller, etc.), consumed by [concierge](https://github.com/canonical/concierge) via `opcli env provision`. The same file works locally and in CI; CI-only differences (like an image-registry mirror) are patched in, not hardcoded separately.
 4. **`spread.yaml`** orchestrates provisioning + test execution through [spread](https://github.com/canonical/spread). You declare one logical `integration-test` backend; `opcli spread expand` resolves it to a concrete local (LXD VM) or CI (current runner) backend depending on where it runs, so the same `spread.yaml` drives both.
 
-Two paths run this pipeline: **`opcli spread run`** drives all four stages end-to-end through spread (closest to what CI does), or you can run each command yourself — `artifacts build` → `env provision` → `pytest run` — for faster local iteration without spread's VM overhead (see [Quick start](#quick-start)).
+In familiar terms: `artifacts.build.yaml` is the recorded equivalent of the `--charm-file`/OCI-image refs you'd otherwise track down and pass into `pytest-jubilant` by hand (or wire up manually between CI jobs). The `integration-suites` block in `spread.yaml` generates the spread `task.yaml` boilerplate that would otherwise provision concierge and invoke `tox` by hand for each suite.
+
+Artifacts must be built (stage 2) *before* running spread — **`opcli spread run`** only drives stages 3–4 (provision + test) using whatever `artifacts.build.yaml` already exists; it doesn't build for you. Two paths cover the full pipeline: `opcli artifacts build` → `opcli spread run` (closest to what CI does — CI runs the two as separate parallel/sequential jobs), or `opcli artifacts build` → `opcli env provision` → `opcli pytest run` for faster local iteration without spread's VM overhead (see [Quick start](#quick-start)).
 
 ## Commands
 
