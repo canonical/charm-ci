@@ -13,6 +13,19 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ## [Unreleased]
 
+## [v1.0.0] - 2026-08-24
+
+First official stable release. `opcli` now follows
+[Semantic Versioning](https://semver.org/) — see
+[Versioning policy](README.md#versioning-policy) in the README.
+
+No functional changes from `v0.0.1-alpha.10`; this release marks the CLI,
+`artifacts.yaml`/`artifacts.build.yaml` schemas, `spread.yaml` virtual-backend
+keys, and reusable-workflow inputs as stable and ready for backward-compatible
+evolution going forward. `opcli` remains installable via
+`git+https://github.com/canonical/charm-ci.git` pins (tags or `[tool.uv.sources]`)
+— there is no PyPI package.
+
 ## [v0.0.1-alpha.10] - 2026-08-10
 
 This is expected to be the last `alpha` release before `1.0.0`, pending no

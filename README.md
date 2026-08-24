@@ -890,28 +890,21 @@ examples/      # Example project layout
 
 ### Versioning policy
 
-`opcli` is currently in **alpha** (`Development Status :: 3 - Alpha`,
-versions `0.0.1-alpha.N`). While in alpha:
+`opcli` follows [Semantic Versioning](https://semver.org/) as of `v1.0.0`:
+breaking changes to the CLI, `artifacts.yaml`/`artifacts.build.yaml` schemas,
+`spread.yaml` virtual-backend keys, or reusable-workflow inputs require a
+major version bump and are documented in [CHANGELOG.md](CHANGELOG.md) with a
+migration note.
 
-- **No backward-compatibility guarantee.** Any release may change
-  `artifacts.yaml`/`artifacts.build.yaml` schema behavior, CLI flags,
-  `spread.yaml` virtual-backend keys, or reusable-workflow inputs without a
-  major version bump. Breaking changes are called out in
-  [CHANGELOG.md](CHANGELOG.md) and, where practical, kept backward-compatible
-  with a deprecation window instead of an outright break.
-- `artifacts.yaml` and `artifacts.build.yaml` carry an explicit
-  `version: 1` schema field (see `src/opcli/models/`) — this is the seed for
-  a real schema-migration story once the file format needs to change after
-  a stable release.
-- Alpha releases are tagged (`vX.Y.Z-alpha.N`) and published as
-  [GitHub Releases](https://github.com/canonical/charm-ci/releases); there is
-  no PyPI package yet.
+Releases are tagged (`vX.Y.Z`) and published as
+[GitHub Releases](https://github.com/canonical/charm-ci/releases). `opcli` is
+installed via `git+https://github.com/canonical/charm-ci.git` pins (a tag,
+or via `[tool.uv.sources]` for Renovate-trackable updates) — there is no
+PyPI package.
 
-Once `opcli` reaches `1.0.0`, it will follow
-[Semantic Versioning](https://semver.org/): breaking changes to the CLI,
-`artifacts.yaml`/`artifacts.build.yaml` schemas, `spread.yaml` virtual-backend
-keys, or reusable-workflow inputs will require a major version bump and will
-be documented in [CHANGELOG.md](CHANGELOG.md) with a migration note.
+Prior to `v1.0.0` (the `0.0.1-alpha.N` releases), no backward-compatibility
+guarantee applied; see [CHANGELOG.md](CHANGELOG.md) for what changed at the
+`v1.0.0` boundary.
 
 ## License
 
