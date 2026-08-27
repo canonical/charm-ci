@@ -940,9 +940,9 @@ jobs:
       test-secret-2-name: DATABASE_URL
 ```
 
-The workflow resolves values from your repository's GitHub Secrets, masks them with `::add-mask::`, and exports them to the environment before spread runs.
+The workflow resolves values from your repository's GitHub Secrets, masks them with `::add-mask::`, and exports them to the environment before spread runs. It also generates a random Spread SSH password, masks it, and passes it to Spread with `-pass` so verbose allocation traces cannot expose the credential.
 
-> **Note:** Running `opcli spread run -- -vv` locally will print secret values to the terminal (spread's verbose mode). This is acceptable for a local dev environment. In CI, GitHub Actions log masking covers all output.
+> **Note:** Running `opcli spread run -- -vv` locally will print secret values to the terminal (spread's verbose mode). The reusable workflows mask known secrets before invoking Spread. Custom CI using `-vv` must similarly register a generated password with its log-masking mechanism and pass that password to Spread with `-pass`.
 
 ### Scoping secrets to a GitHub Environment
 
