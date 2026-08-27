@@ -122,8 +122,15 @@ jobs:
           go install github.com/canonical/spread/cmd/spread@latest
           sudo ln -sf ~/go/bin/spread /usr/local/bin/spread
 
+      - name: Generate Spread SSH password
+        shell: bash
+        run: |
+          password="$(openssl rand -hex 32)"
+          echo "::add-mask::$password"
+          echo "SPREAD_CI_PASSWORD=$password" >> "$GITHUB_ENV"
+
       - name: Run spread task
         env:
           CI: "true"
           OPCLI_GIT_REF: ${{ needs.test-matrix.outputs.opcli-sha }}
-        run: opcli spread run -- -vv ${{ matrix.selector }}
+        run: opcli spread run -- -vv -pass "$SPREAD_CI_PASSWORD" ${{ matrix.selector }}

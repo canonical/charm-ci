@@ -13,6 +13,11 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevent verbose Spread allocation logs from exposing the generated SSH
+  password by registering it with GitHub Actions masking before execution.
+
 ## [v1.0.0] - 2026-08-24
 
 First official stable release. `opcli` now follows
