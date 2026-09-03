@@ -12,10 +12,10 @@ name: Build Artifacts
 #       permissions:
 #         contents: read
 #         packages: write
-#         actions: read   # required for get-workflow-version-action
+#         actions: read   # required for workflow metadata and artifact access
 #
 # opcli is installed at the exact commit SHA this workflow was called with,
-# resolved via canonical/get-workflow-version-action (workaround for
+# resolved via the reusable workflow SHA (workaround for
 # https://github.com/actions/toolkit/issues/1264).
 
 on:
@@ -27,12 +27,16 @@ on:
         default: "."
       upload-image:
         description: >-
-          How rock images are published. "registry" pushes to GHCR (default for
-          same-repo PRs). "artifact" uploads the .rock as a GitHub artifact
-          (required for fork PRs with read-only GITHUB_TOKEN). Empty string
-          auto-detects based on fork status.
+          How rock images are published. "registry" pushes to GHCR and
+          "artifact" uploads the .rock as a GitHub artifact. Empty string uses
+          artifact mode for pull-request test runs; use "registry" explicitly for
+          other events or when a remote image is required.
         type: string
         default: ""
+      artifact-retention-days:
+        description: "Number of days to retain uploaded build artifacts and partial manifests."
+        type: number
+        default: 30
       pre-build-rock-script:
         description: "Optional shell command to run before building each rock (e.g. './download_netbox.sh'). Skipped on cache hits."
         type: string
@@ -75,20 +79,21 @@ jobs:
           input="${{ inputs.upload-image }}"
           if [ -n "$input" ]; then
             echo "mode=$input" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
-            echo "mode=artifact" >> "$GITHUB_OUTPUT"
           else
-            echo "mode=registry" >> "$GITHUB_OUTPUT"
+            case "${{ github.event_name }}" in
+              pull_request)
+                echo "mode=artifact" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                echo "mode=registry" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
           fi
         working-directory: .
 
       - name: Get workflow version
         id: workflow-version
-        uses: canonical/get-workflow-version-action@v1
-        with:
-          repository-name: canonical/charm-ci
-          file-name: build-artifacts.yml
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "sha=${{ job.workflow_sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Install uv
         run: sudo snap install astral-uv --classic
@@ -249,6 +254,7 @@ jobs:
         with:
           name: built-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
           path: ${{ inputs.working-directory }}/**/*.${{ matrix.type }}
+          retention-days: ${{ inputs.artifact-retention-days }}
           if-no-files-found: error
 
       - name: Upload partial build manifest
@@ -259,4 +265,5 @@ jobs:
           # in src/opcli/core/artifacts.py.
           name: artifacts-build-${{ matrix.type }}-${{ matrix.name }}-${{ matrix.arch }}
           path: ${{ inputs.working-directory }}/build/artifacts.build.yaml
+          retention-days: ${{ inputs.artifact-retention-days }}
           if-no-files-found: error
