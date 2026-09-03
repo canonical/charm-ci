@@ -12,10 +12,10 @@ name: Build Artifacts
 #       permissions:
 #         contents: read
 #         packages: write
-#         actions: read   # required for get-workflow-version-action
+#         actions: read   # required for workflow metadata and artifact access
 #
 # opcli is installed at the exact commit SHA this workflow was called with,
-# resolved via canonical/get-workflow-version-action (workaround for
+# resolved via the reusable workflow SHA (workaround for
 # https://github.com/actions/toolkit/issues/1264).
 
 on:
@@ -93,11 +93,7 @@ jobs:
 
       - name: Get workflow version
         id: workflow-version
-        uses: canonical/get-workflow-version-action@v1
-        with:
-          repository-name: canonical/charm-ci
-          file-name: build-artifacts.yml
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "sha=${{ job.workflow_sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Install uv
         run: sudo snap install astral-uv --classic
