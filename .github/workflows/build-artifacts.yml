@@ -34,7 +34,7 @@ on:
         type: string
         default: ""
       artifact-retention-days:
-        description: "Number of days to retain build artifacts when artifact mode is used."
+        description: "Number of days to retain uploaded build artifacts and partial manifests."
         type: number
         default: 30
       pre-build-rock-script:

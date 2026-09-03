@@ -12,6 +12,7 @@ Covers:
 """
 
 import os
+import re
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
@@ -345,8 +346,21 @@ def test_build_artifacts_defaults_test_events_to_artifact_mode() -> None:
     """Pull-request builds must avoid GHCR by default."""
     workflow = (Path(__file__).parents[2] / ".github/workflows/build-artifacts.yml").read_text()
 
-    assert "pull_request)" in workflow
-    assert 'echo "mode=artifact"' in workflow
+    mode_step = re.search(
+        r"name: Determine rock upload mode(?P<body>.*?)(?=\n\s*- name:|\Z)",
+        workflow,
+        flags=re.DOTALL,
+    )
+    assert mode_step is not None
+    mode_logic = mode_step.group("body")
+
+    explicit_input = mode_logic.index('echo "mode=$input"')
+    pull_request = mode_logic.index("pull_request)")
+    artifact = mode_logic.index('echo "mode=artifact"', pull_request)
+    fallback = mode_logic.index("*)", artifact)
+    registry = mode_logic.index('echo "mode=registry"', fallback)
+
+    assert explicit_input < pull_request < artifact < fallback < registry
 
 
 def test_build_artifacts_sets_configured_artifact_retention() -> None:
