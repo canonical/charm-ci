@@ -25,4 +25,5 @@ header:
     - '.gitignore'
     - '.licenserc.yaml'
     - 'LICENSE'
+    - 'CODEOWNERS'
   comment: on-failure
