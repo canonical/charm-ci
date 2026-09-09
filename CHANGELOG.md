@@ -13,6 +13,11 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ## [Unreleased]
 
+### Added
+
+- `build-artifacts.yml` and `integration-test.yml` accept
+  `charmcraft-environments` and `rockcraft-environments` to set environment
+  during charmcraft pack or rockcraft pack.
 ### Fixed
 
 - Prevent verbose Spread allocation logs from exposing the generated SSH
