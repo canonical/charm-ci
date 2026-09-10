@@ -886,6 +886,26 @@ Local `opcli artifacts publish` never modifies charm archives.
 
 Pinning to a SHA or tag automatically installs the matching `opcli` version via `canonical/get-workflow-version-action`.
 
+### Build environment variables
+
+`build-artifacts.yml` (and `integration-test.yml`, which forwards them) accepts
+`charmcraft-environments` and `rockcraft-environments`. Each takes
+**environment-file (dotenv) format** text — one `KEY=VALUE` per line. The build
+job sources the file for the artifact type it is building and exports every
+variable, so the `charmcraft pack` / `rockcraft pack` process started by
+`opcli artifacts build` inherits them:
+
+```yaml
+with:
+  charmcraft-environments: |
+    # comments and blank lines are ignored
+    CHARMCRAFT_SHARED_CACHE=/tmp/charmcraft-cache
+    CHARMCRAFT_STORE_API_URL=https://api.staging.charmhub.io
+  rockcraft-environments: |
+    http_proxy=http://proxy.internal:3128
+    https_proxy=http://proxy.internal:3128
+```
+
 ### Fork PR support
 
 When a pull request comes from a fork, the `GITHUB_TOKEN` is read-only and cannot push OCI images to GHCR. The `build-artifacts.yml` workflow handles this automatically:

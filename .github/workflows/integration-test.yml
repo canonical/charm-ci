@@ -85,6 +85,14 @@ on:
         description: "Snap channel to install rockcraft from when building rocks. Passed to build-artifacts."
         type: string
         default: "latest/stable"
+      charmcraft-environments:
+        description: "Environment variables in environment file format used during `charmcraft pack`. Passed to build-artifacts."
+        type: string
+        default: ""
+      rockcraft-environments:
+        description: "Environment variables in environment file format used during `rockcraft pack`. Passed to build-artifacts."
+        type: string
+        default: ""
       environment:
         description: "GitHub Environment name to scope the test job (and its secrets) to (optional)"
         type: string
@@ -101,6 +109,8 @@ jobs:
       build-timeout-minutes: ${{ inputs.build-timeout-minutes }}
       charmcraft-channel: ${{ inputs.charmcraft-channel }}
       rockcraft-channel: ${{ inputs.rockcraft-channel }}
+      charmcraft-environments: ${{ inputs.charmcraft-environments }}
+      rockcraft-environments: ${{ inputs.rockcraft-environments }}
     permissions:
       contents: read
       packages: write
