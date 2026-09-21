@@ -110,6 +110,34 @@ Concierge respects `SUDO_USER` (via its `realUser()` function) to write configs 
 | `CI` | Spread backend expansion (`-local` vs `-ci`) | `core/spread.py` |
 | `GITHUB_ACTIONS=true` | CI-format artifact output (GHCR + artifact refs) | `core/artifacts.py` |
 | `OPCLI_ROCK_UPLOAD` | Rock upload mode: `registry` (default, push to GHCR) or `artifact` (keep local `.rock`, upload as GH artifact — used for fork PRs) | `core/artifacts.py` |
+| `OPCLI_DEFER_ARTIFACTS=1` | Opt-in deferred CI fetch/push on first pytest artifact fixture access; requires `GITHUB_ACTIONS=true` | `core/artifact_preparation.py`, `pytest_plugin.py`, `core/spread.py` |
+
+### Deferred CI artifact preparation
+
+Set `OPCLI_DEFER_ARTIFACTS: "1"` in the virtual integration backend's
+`environment:` block. Only opted-in CI backends inject `GITHUB_ACTIONS=true`.
+Generated tasks preserve the required environment across the ubuntu login
+without embedding credentials in command arguments. Tox must `passenv`
+`OPCLI_DEFER_ARTIFACTS`, `GITHUB_ACTIONS`, `GITHUB_RUN_ID`, `GITHUB_REPOSITORY`,
+`GITHUB_TOKEN`, and `OPCLI_FETCH_WAIT_TIMEOUT`. Do not also render the token into
+an environment template.
+
+All manifest-discovering pytest fixtures share a successful-only `Config.stash`
+cache. Before automatic discovery, `core/artifact_preparation.py` locates the
+build plan independently of stale/missing output, reuses `artifacts_fetch` for
+the current run/architecture with the configured timeout, then calls
+`provision_load(..., missing_registry="deploy")`. Missing registry/image
+preparation is an error, not readiness. Downloads/writes belong to the pytest
+user; standalone kubectl uses that user's kubeconfig while snap k8s providers
+and skopeo retain sudo. Failures must never turn into local repacking.
+
+Explicit manifest overrides and per-fixture CLI flags retain their bypass
+semantics. Local mode and eager defaults remain unchanged. Artifact-dependent
+Jinja templates are rejected in deferred CI using the parsed template's
+undeclared variables; env/arch-only templates need no manifest. Consumers must
+request artifact fixtures only after selected external deployments start.
+The reusable workflow job graph/status aggregation is unchanged. Concurrent
+pytest processes must not share an artifact directory.
 
 ---
 
