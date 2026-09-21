@@ -689,8 +689,90 @@ The plugin locates `artifacts.build.yaml` in this order:
 
 1. `--artifacts-build-yaml` pytest CLI option.
 2. `OPCLI_ARTIFACTS_BUILD_YAML` environment variable (path; relative paths are resolved from the current working directory, so an absolute path is recommended for CI).
-3. Walk up from pytest's rootdir until `build/artifacts.build.yaml` is found (stops at git root).
-4. `pytest.UsageError` if none of the above succeed — run `opcli artifacts build` first.
+3. In [deferred CI mode](#deferred-artifact-preparation-in-ci), fetch and prepare the current run's artifacts on first demand.
+4. Otherwise walk up from pytest's rootdir until `build/artifacts.build.yaml` is found (stops at git root).
+5. `pytest.UsageError` if none of the above succeed — run `opcli artifacts build` first.
+
+### Deferred artifact preparation in CI
+
+By default, the integration backend waits for builds and prepares rock images
+before starting pytest. To overlap external dependency deployment with builds,
+opt in **on the virtual integration backend**:
+
+```yaml
+backends:
+  integration-test:
+    type: integration-test
+    environment:
+      OPCLI_DEFER_ARTIFACTS: "1"
+    systems:
+      - ubuntu-24.04
+```
+
+Add these exact names to the integration environment's tox `passenv`:
+
+```ini
+[testenv:integration]
+passenv =
+    OPCLI_DEFER_ARTIFACTS
+    GITHUB_ACTIONS
+    GITHUB_RUN_ID
+    GITHUB_REPOSITORY
+    GITHUB_TOKEN
+    OPCLI_FETCH_WAIT_TIMEOUT
+```
+
+The opted-in CI backend supplies `GITHUB_ACTIONS=true`; generated tasks preserve
+only the required variables across the login switch to `ubuntu`, without putting
+the token in the shell command. Do not also interpolate `GITHUB_TOKEN` in a
+`pytest-environment-template`. Custom tasks must forward these variables
+themselves. Align the reusable workflow revision, `OPCLI_GIT_REF` used to install
+the CLI, and the pytest plugin dependency on a revision supporting this feature.
+No workflow job dependencies or aggregate status behavior change.
+
+Pytest can now start with no `build/artifacts.build.yaml`. The first automatic
+artifact fixture access finds `artifacts.yaml` by walking up from pytest's
+rootdir (stopping at the Git root), calls the existing current-architecture
+fetch with `--wait` for `GITHUB_RUN_ID` / `GITHUB_REPOSITORY`, and prepares local
+rock images with the equivalent of `push-images --missing-registry deploy`.
+`OPCLI_FETCH_WAIT_TIMEOUT` preserves the existing fetch timeout budget; absent
+or empty means the usual 1800-second default. Downloads and manifest writes run
+as the pytest user; registry/image operations retain their existing privilege
+handling, and standalone kubectl uses that user's kubeconfig.
+
+Successful preparation is cached once per pytest session (per worker when using
+pytest-xdist). Failures are not cached as readiness. Existing manifests never
+skip the current-run fetch. Build failure/cancellation, authentication failures,
+timeouts, download errors, and image preparation failures propagate to the test;
+there is no local-build fallback.
+
+This gate covers `opcli_build_yaml_path`, `opcli_artifacts`, `charm_path`,
+`charm_paths`, `resource_images`, and `charm_resource_images`, including custom
+`rock_images` fixtures that depend on `opcli_artifacts`. Directly reading YAML or
+calling `build_rock_images` on an independently loaded model bypasses the gate.
+Explicit `--artifacts-build-yaml` / `OPCLI_ARTIFACTS_BUILD_YAML` paths still bypass
+fetching, as do each fixture's `--charm-file` / `--resource-image` overrides.
+Do not set a manifest override in the normal deferred path.
+
+Deploy the selected external dependencies **before requesting** artifact
+fixtures; simply reordering fixture arguments does not guarantee this:
+
+```python
+@pytest.fixture(scope="module")
+def app(juju, external_dependencies, request):
+    charm_paths = request.getfixturevalue("charm_paths")
+    images = request.getfixturevalue("charm_resource_images")
+    juju.deploy(charm_paths["app"].path, resources=images["app"])
+```
+
+Only initiate independent external deployments early. Wait for readiness and add
+relations later if dependencies need the app to become active. In deferred CI,
+argument/environment templates may reference `env` and `arch` without a build
+manifest, but templates that reference `artifacts` are rejected explicitly.
+Use artifact fixtures instead or disable deferral. Outside GitHub Actions the
+opt-in has no effect: local prebuild/push behavior and default eager CI remain
+unchanged. Concurrent pytest processes sharing one project directory are not
+supported; use separate checkouts per worker.
 
 ### CLI-flag mode (no build step)
 

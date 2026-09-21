@@ -15,11 +15,19 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ### Added
 
+- Opt-in deferred CI artifact preparation with `OPCLI_DEFER_ARTIFACTS: "1"` on
+  integration backends: pytest starts before builds finish, and its first
+  artifact fixture fetches the current run and prepares images once per session.
+  Required CI environment is forwarded safely through generated tasks; tox
+  `passenv` is still required. Env/arch-only pytest templates need no manifest
+  in this mode, while artifact-dependent templates are rejected explicitly.
 - `build-artifacts.yml` and `integration-test.yml` accept
   `charmcraft-environments` and `rockcraft-environments` to set environment
   during charmcraft pack or rockcraft pack.
 ### Fixed
 
+- Standalone kubectl registry operations use the invoking user's kubeconfig
+  rather than switching to root, including deferred preparation from pytest.
 - Prevent verbose Spread allocation logs from exposing the generated SSH
   password by registering it with GitHub Actions masking before execution.
 

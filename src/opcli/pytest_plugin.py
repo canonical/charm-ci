@@ -96,6 +96,7 @@ if TYPE_CHECKING:
     from opcli.models.artifacts_build import ArtifactsGenerated, CharmOutput, RockOutput
 
 logger = logging.getLogger(__name__)
+_prepared_manifest = pytest.StashKey[Path]()
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +618,8 @@ def _discover_artifacts_build(
 
     1. ``--artifacts-build-yaml`` pytest CLI option.
     2. ``OPCLI_ARTIFACTS_BUILD_YAML`` environment variable.
-    3. Walk up from ``config.rootpath`` until the file is found (stops at git root).
+    3. In deferred CI mode, prepare this run's artifacts once per pytest session.
+    4. Otherwise walk up from ``config.rootpath`` (stops at git root).
 
     Args:
         config: The pytest config object.
@@ -646,6 +648,10 @@ def _discover_artifacts_build(
             )
         return p
 
+    prepared = _deferred_manifest(config)
+    if prepared is not None:
+        return prepared
+
     directory = Path(config.rootpath)
     while True:
         candidate = directory / BUILD_DIR / ARTIFACTS_BUILD_YAML
@@ -664,6 +670,24 @@ def _discover_artifacts_build(
         f"ancestor directory's {BUILD_DIR!r} subdirectory. "
         f"Run 'opcli artifacts build' first, or set OPCLI_ARTIFACTS_BUILD_YAML.{suffix}"
     )
+
+
+def _deferred_manifest(config: pytest.Config) -> Path | None:
+    """Share successful preparation across all manifest-reading fixtures."""
+    from opcli.core.artifact_preparation import (
+        deferred_artifacts_enabled,
+        prepare_deferred_artifacts,
+    )
+    from opcli.core.exceptions import OpcliError
+
+    try:
+        if not deferred_artifacts_enabled():
+            return None
+        if _prepared_manifest not in config.stash:
+            config.stash[_prepared_manifest] = prepare_deferred_artifacts(Path(config.rootpath))
+        return config.stash[_prepared_manifest]
+    except OpcliError as exc:
+        raise pytest.UsageError(f"Deferred artifact preparation failed: {exc}") from exc
 
 
 def artifacts_root_from_yaml_path(yaml_path: Path) -> Path:
