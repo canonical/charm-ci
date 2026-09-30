@@ -43,14 +43,46 @@ fi
 
 echo "Integration workflow ID: ${WORKFLOW_ID} (${INPUT_WORKFLOW_FILE})"
 
-# 3. List recent successful runs and find one matching our tree SHA.
-# Checks up to 100 runs (covers ~14 days for active repos).
-# Selects the most recent matching run (API returns newest first).
-# NOTE: Multiple commits can share a tree SHA (e.g., after rebase).
-# This is by design — tree SHA guarantees the *code* was tested,
-# regardless of which specific commit triggered the test run.
-RUN_ID=$(gh api "repos/${REPO}/actions/workflows/${WORKFLOW_ID}/runs?status=success&per_page=100" \
-  --jq "[.workflow_runs[] | select(.head_commit.tree_id == \"${TREE_SHA}\")] | first | .id // empty")
+# 3. Find the most recent successful run whose *tested code* matches our tree.
+# Checks up to 100 runs (covers ~14 days for active repos) and stops at the first
+# (most recent) match, so the common case costs one extra API call.
+#
+# Two deliberate robustness choices, each guarding against an eventually-consistent
+# field in the list-workflow-runs API that previously made this gate spuriously fail
+# right after a merge even though the integration tests had passed:
+#   - We list runs unfiltered and select `.conclusion == "success"` client-side,
+#     rather than using the `?status=success` API filter. That filtered endpoint is
+#     served from a cache that can lag by hours and omit a just-finished run.
+#   - We match on each run's authoritative `.head_sha`, resolved to its tree via the
+#     git API, rather than on `.head_commit.tree_id`. For pull_request runs the list
+#     API populates `head_commit` lazily and intermittently returns a stale commit.
+#
+# Matching by tree (rather than by commit SHA) is intentional: multiple commits can
+# share a tree (e.g. a rebase, or a merge commit that preserves its PR's tree), and
+# the tree guarantees the *code* was tested regardless of which commit triggered the
+# run.
+mapfile -t RUNS < <(gh api "repos/${REPO}/actions/workflows/${WORKFLOW_ID}/runs?per_page=100" \
+  --jq '.workflow_runs[] | select(.conclusion == "success") | "\(.id) \(.head_sha)"')
+
+RUN_ID=""
+declare -A TREE_CACHE=()
+for run in "${RUNS[@]}"; do
+  run_id="${run%% *}"
+  head_sha="${run##* }"
+  [ -n "${head_sha}" ] || continue
+  if [ "${head_sha}" = "${COMMIT_SHA}" ]; then
+    run_tree="${TREE_SHA}"
+  elif [ -n "${TREE_CACHE[${head_sha}]:-}" ]; then
+    run_tree="${TREE_CACHE[${head_sha}]}"
+  else
+    run_tree=$(gh api "repos/${REPO}/git/commits/${head_sha}" --jq '.tree.sha' 2>/dev/null || true)
+    TREE_CACHE[${head_sha}]="${run_tree}"
+  fi
+  if [ "${run_tree}" = "${TREE_SHA}" ]; then
+    RUN_ID="${run_id}"
+    break
+  fi
+done
 
 if [ -z "${RUN_ID}" ] || [ "${RUN_ID}" = "null" ]; then
   echo "::error::No successful integration-test run found for tree SHA ${TREE_SHA}."

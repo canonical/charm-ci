@@ -22,6 +22,12 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 - Prevent verbose Spread allocation logs from exposing the generated SSH
   password by registering it with GitHub Actions masking before execution.
+- `resolve-run.sh` no longer spuriously fails to find a successful
+  integration-test run right after a merge. It now lists workflow runs
+  unfiltered and selects successes client-side (avoiding the stale
+  `?status=success` cache), and matches on each run's authoritative
+  `head_sha` resolved to its tree (avoiding the eventually-consistent
+  `head_commit.tree_id` field on pull_request runs).
 
 ## [v1.0.0] - 2026-08-24
 
