@@ -13,20 +13,28 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ## [Unreleased]
 
+## [v1.0.2] - 2026-10-08
+
 ### Added
 
 - `build-artifacts.yml` and `integration-test.yml` accept
   `charmcraft-environments` and `rockcraft-environments` to set environment
-  during charmcraft pack or rockcraft pack.
+  during charmcraft pack or rockcraft pack. (#143)
+
 ### Fixed
 
-- Prevent verbose Spread allocation logs from exposing the generated SSH
-  password by registering it with GitHub Actions masking before execution.
 - Make publish run resolution resilient to missing or inconsistent listings:
   filter successful runs locally, search up to 1,000 recent runs per attempt
   (continuing past short pages when the total indicates more), and retry
   missing tree matches with bounded backoff. Log lookup diagnostics
   and report API errors separately from missing runs. (#146)
+
+## [v1.0.1] - 2026-08-27
+
+### Fixed
+
+- Prevent verbose Spread allocation logs from exposing the generated SSH
+  password by registering it with GitHub Actions masking before execution. (#140)
 
 ## [v1.0.0] - 2026-08-24
 

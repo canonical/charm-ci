@@ -50,12 +50,12 @@ This README is the primary documentation for using `opcli`. Additional resources
 
 ```bash
 sudo snap install astral-uv --classic
-uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git@v1.0.0"
+uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git@v1.0.2"
 export PATH="$HOME/.local/bin:$PATH"  # or: uv tool update-shell && exec $SHELL
 opcli --help
 ```
 
-Pin to a released tag (`@v1.0.0`, or later) for reproducible builds. Omitting the `@` ref tracks `main`, which is convenient for trying opcli out but not recommended for CI or a real project — `main` can change under you.
+Pin to a released tag (for example, `@v1.0.2`) for reproducible builds. Omitting the `@` ref tracks `main`, which is convenient for trying opcli out but not recommended for CI or a real project — `main` can change under you.
 
 > **Note:** The `[cli]` extra is required for the CLI. The bare `opcli` package (without `[cli]`) installs only the pytest plugin — useful when your project already has a conflicting `typer` pin.
 
