@@ -86,8 +86,12 @@ def test_pagination_and_retries_are_bounded(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     requests = (tmp_path / "requests").read_text()
-    assert requests.count("/runs?") == ATTEMPTS * MAX_PAGES
-    assert "page=11" not in requests
+    run_requests = [request for request in requests.splitlines() if "/runs?" in request]
+    expected_requests = [
+        f"repos/canonical/charm-ci/actions/workflows/42/runs?per_page=100&page={page}"
+        for page in range(1, MAX_PAGES + 1)
+    ] * ATTEMPTS
+    assert run_requests == expected_requests
     assert "Search limit reached: 1000 runs" in result.stdout
     assert not (tmp_path / "output").exists()
 
