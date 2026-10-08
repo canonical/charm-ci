@@ -855,6 +855,18 @@ jobs:
       working-directory: .
 ```
 
+The publish workflow resolves a successful integration run whose head-commit
+tree matches the publish commit's tree, allowing different commit SHAs after
+squash, rebase, or regular merges when the file snapshots match. It searches
+up to 1,000 recent runs (10 pages), filtering successful conclusions locally
+rather than using the status-filtered API listing. A missing match is retried
+up to five total attempts, with 15s, 30s, 60s, and 120s waits (225s total,
+plus API request time). Each attempt starts at the first page and logs page
+counts, timestamp ranges, and matching candidates. API errors fail explicitly
+rather than being reported as missing runs. This preserves the existing
+head-commit tree check; it does not record the actual checkout tree used by
+PR jobs, which may test a synthetic merge commit.
+
 The publish workflow can also create a git tag (`{charm-name}-rev{revision}`) for
 every published charm revision, and at most one combined GitHub Release per
 publish workflow run summarizing everything published (charms, revisions,

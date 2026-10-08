@@ -43,20 +43,64 @@ fi
 
 echo "Integration workflow ID: ${WORKFLOW_ID} (${INPUT_WORKFLOW_FILE})"
 
-# 3. List recent successful runs and find one matching our tree SHA.
-# Checks up to 100 runs (covers ~14 days for active repos).
-# Selects the most recent matching run (API returns newest first).
-# NOTE: Multiple commits can share a tree SHA (e.g., after rebase).
-# This is by design — tree SHA guarantees the *code* was tested,
-# regardless of which specific commit triggered the test run.
-RUN_ID=$(gh api "repos/${REPO}/actions/workflows/${WORKFLOW_ID}/runs?status=success&per_page=100" \
-  --jq "[.workflow_runs[] | select(.head_commit.tree_id == \"${TREE_SHA}\")] | first | .id // empty")
+# 3. Avoid the inconsistent status-filtered listing; select successes locally.
+# Keep tree matching across different commit SHAs (e.g. squash/rebase merges).
+# This retains the existing head-commit matching semantics, not checkout provenance.
+MAX_ATTEMPTS=5
+MAX_PAGES=10
+PER_PAGE=100
+RETRY_DELAYS=(15 30 60 120)
 
-if [ -z "${RUN_ID}" ] || [ "${RUN_ID}" = "null" ]; then
-  echo "::error::No successful integration-test run found for tree SHA ${TREE_SHA}."
-  echo "::error::Ensure integration tests have passed for this exact code before publishing."
-  exit 1
-fi
+for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
+  for ((page = 1; page <= MAX_PAGES; page++)); do
+    if ! response=$(gh api \
+      "repos/${REPO}/actions/workflows/${WORKFLOW_ID}/runs?per_page=${PER_PAGE}&page=${page}"); then
+      echo "::error::Could not list integration-test runs (attempt ${attempt}, page ${page})."
+      exit 1
+    fi
+    if ! jq -e '(.workflow_runs | type) == "array" and (.total_count | type) == "number"' \
+      <<< "${response}" > /dev/null; then
+      echo "::error::Invalid integration-test run listing (attempt ${attempt}, page ${page})."
+      exit 1
+    fi
 
-echo "run-id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
-echo "Found integration-test run: ${RUN_ID}"
+    run_count=$(jq '.workflow_runs | length' <<< "${response}")
+    jq -r --arg attempt "${attempt}/${MAX_ATTEMPTS}" --arg page "${page}" '
+      "Run lookup: attempt=\($attempt) page=\($page) returned=\(.workflow_runs | length)" +
+      " total=\(.total_count) newest=\(.workflow_runs[0].created_at // "none")" +
+      " oldest=\(.workflow_runs[-1].created_at // "none")"
+    ' <<< "${response}"
+    jq -r --arg tree "${TREE_SHA}" '
+      .workflow_runs[]
+      | select(.conclusion == "success" and .head_commit.tree_id == $tree)
+      | "Candidate run: id=\(.id) attempt=\(.run_attempt) conclusion=\(.conclusion)" +
+        " head_sha=\(.head_sha) tree=\(.head_commit.tree_id)"
+    ' <<< "${response}"
+    RUN_ID=$(jq -r --arg tree "${TREE_SHA}" '
+      [.workflow_runs[] | select(.conclusion == "success" and .head_commit.tree_id == $tree)]
+      | first | .id // empty
+    ' <<< "${response}")
+
+    if [ -n "${RUN_ID}" ]; then
+      echo "run-id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+      echo "Found integration-test run: ${RUN_ID}"
+      exit 0
+    fi
+    if [ "${run_count}" -lt "${PER_PAGE}" ]; then
+      break
+    fi
+    if [ "${page}" -eq "${MAX_PAGES}" ]; then
+      echo "::warning::Search limit reached: $((MAX_PAGES * PER_PAGE)) runs per attempt."
+    fi
+  done
+
+  if [ "${attempt}" -lt "${MAX_ATTEMPTS}" ]; then
+    delay="${RETRY_DELAYS[attempt - 1]}"
+    echo "No matching successful run yet; retrying in ${delay}s."
+    sleep "${delay}"
+  fi
+done
+
+echo "::error::No successful integration-test run found for tree SHA ${TREE_SHA} after ${MAX_ATTEMPTS} attempts."
+echo "::error::Ensure integration tests have passed for this exact code before publishing."
+exit 1
