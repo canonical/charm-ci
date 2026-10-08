@@ -67,8 +67,9 @@ def test_missing_run_exhausts_bounded_backoff(tmp_path: Path) -> None:
     assert not (tmp_path / "output").exists()
 
 
-def test_finds_matching_success_on_second_page(tmp_path: Path) -> None:
-    failed_runs = [_run(index, conclusion="failure") for index in range(100)]
+@pytest.mark.parametrize("first_page_size", [0, 1, 99, 100])
+def test_finds_matching_success_on_second_page(tmp_path: Path, first_page_size: int) -> None:
+    failed_runs = [_run(index, conclusion="failure") for index in range(first_page_size)]
     result = _run_script(
         tmp_path,
         [_page(*failed_runs, total=101), _page(_run(101), total=101)],
@@ -76,13 +77,22 @@ def test_finds_matching_success_on_second_page(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "output").read_text() == "run-id=101\n"
-    assert "per_page=100&page=2" in (tmp_path / "requests").read_text()
+    run_requests = [
+        request
+        for request in (tmp_path / "requests").read_text().splitlines()
+        if "/runs?" in request
+    ]
+    assert run_requests == [
+        f"repos/canonical/charm-ci/actions/workflows/42/runs?per_page=100&page={page}"
+        for page in (1, 2)
+    ]
     assert not (tmp_path / "sleeps").exists()
 
 
-def test_pagination_and_retries_are_bounded(tmp_path: Path) -> None:
-    full_page = _page(*[_run(index, tree="other-tree") for index in range(100)], total=2000)
-    result = _run_script(tmp_path, [full_page] * (ATTEMPTS * MAX_PAGES))
+@pytest.mark.parametrize("page_size", [0, 1, 100])
+def test_pagination_and_retries_are_bounded(tmp_path: Path, page_size: int) -> None:
+    response = _page(*[_run(index, tree="other-tree") for index in range(page_size)], total=2000)
+    result = _run_script(tmp_path, [response] * (ATTEMPTS * MAX_PAGES))
 
     assert result.returncode == 1
     requests = (tmp_path / "requests").read_text()

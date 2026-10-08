@@ -859,7 +859,8 @@ The publish workflow resolves a successful integration run whose head-commit
 tree matches the publish commit's tree, allowing different commit SHAs after
 squash, rebase, or regular merges when the file snapshots match. It searches
 up to 1,000 recent runs (10 pages), filtering successful conclusions locally
-rather than using the status-filtered API listing. A missing match is retried
+rather than using the status-filtered API listing. Short or empty pages do
+not end the search if `total_count` indicates additional pages. A missing match is retried
 up to five total attempts, with 15s, 30s, 60s, and 120s waits (225s total,
 plus API request time). Each attempt starts at the first page and logs page
 counts, timestamp ranges, and matching candidates. API errors fail explicitly

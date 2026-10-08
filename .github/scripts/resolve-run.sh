@@ -65,6 +65,7 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
     fi
 
     run_count=$(jq '.workflow_runs | length' <<< "${response}")
+    total_count=$(jq '.total_count' <<< "${response}")
     jq -r --arg attempt "${attempt}/${MAX_ATTEMPTS}" --arg page "${page}" '
       "Run lookup: attempt=\($attempt) page=\($page) returned=\(.workflow_runs | length)" +
       " total=\(.total_count) newest=\(.workflow_runs[0].created_at // "none")" +
@@ -86,7 +87,7 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
       echo "Found integration-test run: ${RUN_ID}"
       exit 0
     fi
-    if [ "${run_count}" -lt "${PER_PAGE}" ]; then
+    if [ "${run_count}" -lt "${PER_PAGE}" ] && [ "$((page * PER_PAGE))" -ge "${total_count}" ]; then
       break
     fi
     if [ "${page}" -eq "${MAX_PAGES}" ]; then
