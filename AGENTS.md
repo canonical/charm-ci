@@ -268,6 +268,8 @@ These encode hard-won correctness lessons — do not violate.
 
 9. **OCI resources don't require a declared rock.** `ArtifactResource.rock` (in `models/artifacts.py`) is optional. When absent, `artifacts_publish` resolves the image reference from the charm's own `upstream-source` field in `charmcraft.yaml`/`metadata.yaml` (`_resolve_upstream_source` in `core/publish.py`) instead of a locally built rock — this supports resources backed by externally hosted images.
 
+10. **Publish run resolution.** `.github/scripts/resolve-run.sh` lists integration runs without a server-side status filter and selects successful conclusions with matching `head_commit.tree_id` locally. It searches at most 10 pages of 100 runs per attempt, with five attempts and 15s/30s/60s/120s backoff for missing matches. Short or empty pages must not stop pagination when `total_count` indicates more pages. API failures must remain explicit, not become "no matching run" errors. Preserve tree matching across different commit SHAs; the run's head-commit tree is not necessarily the synthetic merge tree checked out by PR jobs. Regression tests mock `gh` and `sleep` executables, following the existing workflow-script tests.
+
 ---
 
 ## Error hierarchy
