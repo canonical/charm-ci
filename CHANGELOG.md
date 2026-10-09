@@ -15,7 +15,7 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ### Fixed
 
-- Add `~/.local/bin` to `PATH` in each integration-test and artifact-build job
+- Add `~/.local/bin` to `PATH` in the integration-test matrix and test jobs
   before resolving workflow versions or running `opcli`, so user-installed
   executables are found on self-hosted runners started without a login shell.
 
