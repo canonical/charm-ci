@@ -134,6 +134,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Add user executables to PATH
+        shell: bash
+        run: echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
       - name: Get workflow version
         id: workflow-version
         uses: canonical/get-workflow-version-action@v1
@@ -192,6 +196,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Add user executables to PATH
+        shell: bash
+        run: echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Compute artifact fetch timeout
         run: |

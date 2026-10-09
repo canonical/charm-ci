@@ -77,6 +77,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Add user executables to PATH
+        shell: bash
+        run: echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
       - name: Determine rock upload mode
         id: upload-mode
         run: |
@@ -134,6 +138,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Add user executables to PATH
+        shell: bash
+        run: echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Set up tmate session (self-hosted)
         if: runner.debug == 1 && runner.environment == 'self-hosted'
