@@ -77,9 +77,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Add user executables to PATH
+      - name: Install uv
         shell: bash
-        run: echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+        run: |
+          sudo snap install astral-uv --classic
+          uv tool update-shell
 
       - name: Determine rock upload mode
         id: upload-mode
@@ -101,9 +103,6 @@ jobs:
           repository-name: canonical/charm-ci
           file-name: build-artifacts.yml
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install uv
-        run: sudo snap install astral-uv --classic
 
       - name: Install opcli
         run: |
@@ -139,10 +138,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Add user executables to PATH
-        shell: bash
-        run: echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
-
       - name: Set up tmate session (self-hosted)
         if: runner.debug == 1 && runner.environment == 'self-hosted'
         uses: canonical/action-tmate@main
@@ -157,7 +152,10 @@ jobs:
           detached: true
 
       - name: Install uv
-        run: sudo snap install astral-uv --classic
+        shell: bash
+        run: |
+          sudo snap install astral-uv --classic
+          uv tool update-shell
 
       - name: Install opcli
         run: |
