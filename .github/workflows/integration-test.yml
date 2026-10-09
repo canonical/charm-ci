@@ -134,6 +134,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install uv
+        run: |
+          sudo snap install astral-uv --classic
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
       - name: Get workflow version
         id: workflow-version
         uses: canonical/get-workflow-version-action@v1
@@ -141,9 +146,6 @@ jobs:
           repository-name: canonical/charm-ci
           file-name: integration-test.yml
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install uv
-        run: sudo snap install astral-uv --classic
 
       - name: Install opcli
         run: |
@@ -213,7 +215,9 @@ jobs:
           detached: true
 
       - name: Install uv
-        run: sudo snap install astral-uv --classic
+        run: |
+          sudo snap install astral-uv --classic
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Install opcli
         run: |

@@ -77,6 +77,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install uv
+        run: |
+          sudo snap install astral-uv --classic
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
       - name: Determine rock upload mode
         id: upload-mode
         run: |
@@ -97,9 +102,6 @@ jobs:
           repository-name: canonical/charm-ci
           file-name: build-artifacts.yml
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install uv
-        run: sudo snap install astral-uv --classic
 
       - name: Install opcli
         run: |
@@ -149,7 +151,9 @@ jobs:
           detached: true
 
       - name: Install uv
-        run: sudo snap install astral-uv --classic
+        run: |
+          sudo snap install astral-uv --classic
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Install opcli
         run: |
