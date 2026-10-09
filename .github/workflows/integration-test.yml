@@ -137,7 +137,7 @@ jobs:
       - name: Install uv
         run: |
           sudo snap install astral-uv --classic
-          uv tool update-shell
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Get workflow version
         id: workflow-version
@@ -217,7 +217,7 @@ jobs:
       - name: Install uv
         run: |
           sudo snap install astral-uv --classic
-          uv tool update-shell
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Install opcli
         run: |

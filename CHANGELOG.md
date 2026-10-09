@@ -15,9 +15,9 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ### Fixed
 
-- Run `uv tool update-shell` when installing uv in integration-test and
-  artifact-build jobs to configure the tool executable directory in shell
-  startup files.
+- Add `~/.local/bin` to `PATH` when installing uv in integration-test and
+  artifact-build jobs, so user-installed executables are found on self-hosted
+  runners started without a login shell.
 
 ## [v1.0.2] - 2026-10-08
 
