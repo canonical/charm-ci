@@ -135,7 +135,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install uv
-        shell: bash
         run: |
           sudo snap install astral-uv --classic
           uv tool update-shell
@@ -216,7 +215,6 @@ jobs:
           detached: true
 
       - name: Install uv
-        shell: bash
         run: |
           sudo snap install astral-uv --classic
           uv tool update-shell
