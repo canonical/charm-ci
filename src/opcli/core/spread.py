@@ -54,13 +54,27 @@ _INTEGRATION_SUITES_KEY = "integration-suites"
 # ---------------------------------------------------------------------------
 
 
+_TASK_USER_ENV = (
+    "OPCLI_PACKAGE,OPCLI_ARTIFACTS_BUILD_YAML,OPCLI_DEFER_ARTIFACTS,"
+    "GITHUB_ACTIONS,GITHUB_RUN_ID,GITHUB_REPOSITORY,GITHUB_TOKEN,OPCLI_FETCH_WAIT_TIMEOUT"
+)
+
+_TASK_USER_ENV_SETUP = (
+    '    export OPCLI_PACKAGE="${OPCLI_PACKAGE:-opcli}"\n'
+    '    OPCLI_USER_ENV="OPCLI_PACKAGE,OPCLI_ARTIFACTS_BUILD_YAML"\n'
+    '    if [ "${OPCLI_DEFER_ARTIFACTS:-0}" = "1" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; then\n'
+    f'      OPCLI_USER_ENV="{_TASK_USER_ENV}"\n'
+    "    fi\n"
+)
 _TASK_YAML_CONTENT = (
     "summary: integration tests\n"
     "\n"
     "execute: |\n"
     '    cd "${SPREAD_PATH}"\n'
     '    PYTEST_CMD=$(opcli pytest expand -e "${TOX_ENV:-integration}") || exit 1\n'
-    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && OPCLI_PACKAGE='${OPCLI_PACKAGE:-opcli}' OPCLI_ARTIFACTS_BUILD_YAML='${OPCLI_ARTIFACTS_BUILD_YAML:-}' ${PYTEST_CMD}\"\n"
+    + _TASK_USER_ENV_SETUP
+    + '    runuser -l ubuntu --whitelist-environment="$OPCLI_USER_ENV" '
+    "-c \"cd '${SPREAD_PATH}' && ${PYTEST_CMD}\"\n"
 )
 
 _TASK_YAML_CONTENT_SUITE = (
@@ -70,7 +84,9 @@ _TASK_YAML_CONTENT_SUITE = (
     '    cd "${SPREAD_PATH}"\n'
     '    PYTEST_CMD=$(opcli pytest expand --suite "$OPCLI_SUITE"'
     ' --module "${MODULE}" -e "${TOX_ENV:-integration}") || exit 1\n'
-    "    runuser -l ubuntu -c \"cd '${SPREAD_PATH}' && export OPCLI_PACKAGE='${OPCLI_PACKAGE:-opcli}' && export OPCLI_ARTIFACTS_BUILD_YAML='${OPCLI_ARTIFACTS_BUILD_YAML:-}' && ${PYTEST_CMD}\"\n"
+    + _TASK_USER_ENV_SETUP
+    + '    runuser -l ubuntu --whitelist-environment="$OPCLI_USER_ENV" '
+    "-c \"cd '${SPREAD_PATH}' && ${PYTEST_CMD}\"\n"
 )
 
 
@@ -817,6 +833,8 @@ def _build_concrete_backend(
         # Scoping them here keeps the root spread.yaml clean for local runs.
         existing_env = backend_def.get("environment")
         existing_env = dict(existing_env) if isinstance(existing_env, dict) else {}
+        if str(existing_env.get("OPCLI_DEFER_ARTIFACTS", "")) == "1":
+            existing_env["GITHUB_ACTIONS"] = "true"
         backend_def["environment"] = {
             # SUDO_USER=ubuntu makes juju store controller data in the ubuntu
             # user's home directory so tests running as ubuntu can find the
@@ -1012,22 +1030,26 @@ chown -R ubuntu:ubuntu /home/ubuntu
 
 _CI_PREPARE_AFTER_USER = """\
 export HOME=/root
-if [ -n "${GITHUB_RUN_ID:-}" ]; then
-  export GH_TOKEN="${GITHUB_TOKEN}"
-  # Build OPCLI_FETCH_WAIT_TIMEOUT into --wait-timeout when provided by the
-  # workflow.  This allows slow builds (e.g. 45-min rocks) to be waited for
-  # without hitting the hard-coded 1800s default.
-  WAIT_TIMEOUT_ARG=""
-  if [ -n "${OPCLI_FETCH_WAIT_TIMEOUT:-}" ]; then
-    WAIT_TIMEOUT_ARG="--wait-timeout ${OPCLI_FETCH_WAIT_TIMEOUT}"
+case "${OPCLI_DEFER_ARTIFACTS:-0}" in
+  0|1|"") ;;
+  *) echo "OPCLI_DEFER_ARTIFACTS must be 0 or 1." >&2; exit 1 ;;
+esac
+if [ "${OPCLI_DEFER_ARTIFACTS:-0}" != "1" ] || [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    export GH_TOKEN="${GITHUB_TOKEN}"
+    # Preserve the workflow's timeout budget for slow builds.
+    WAIT_TIMEOUT_ARG=""
+    if [ -n "${OPCLI_FETCH_WAIT_TIMEOUT:-}" ]; then
+      WAIT_TIMEOUT_ARG="--wait-timeout ${OPCLI_FETCH_WAIT_TIMEOUT}"
+    fi
+    cd "${SPREAD_PATH}" && opcli artifacts fetch \
+      --run-id "${GITHUB_RUN_ID}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --wait \
+      ${WAIT_TIMEOUT_ARG}
   fi
-  cd "${SPREAD_PATH}" && opcli artifacts fetch \
-    --run-id "${GITHUB_RUN_ID}" \
-    --repo "${GITHUB_REPOSITORY}" \
-    --wait \
-    ${WAIT_TIMEOUT_ARG}
+  opcli artifacts push-images --missing-registry deploy
 fi
-opcli artifacts push-images --missing-registry deploy
 chown -R ubuntu:ubuntu "${SPREAD_PATH}"
 """
 
