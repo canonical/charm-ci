@@ -283,20 +283,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -o pipefail
           # COUPLING: this jq regex mirrors the job-name format "Build {type} {name} ({arch})"
           # produced by build-artifacts.yml.  The Python equivalent is
           # _check_build_jobs_conclusion() in src/opcli/core/artifacts.py.
           # If the job naming convention changes, update both places.
-          conclusion=$(gh run view "${{ github.run_id }}" \
-            --repo "${{ github.repository }}" \
-            --json jobs \
-            --jq '
-              [.jobs[] | select(.name | test("(?:^|/ )Build (?:charm|rock|snap) .+ \\(")) | .conclusion] |
+          if ! conclusion=$(gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=50" |
+            jq --slurp -r '
+              [.[].jobs[] | select(.name | test("(?:^|/ )Build (?:charm|rock|snap) .+ \\(")) | .conclusion] |
               if any(. == "failure") then "failure"
               elif any(. == "cancelled") then "cancelled"
               else empty
               end
-            ')
+            '); then
+            echo "::warning::Unable to query build jobs; deferring to opcli artifact checks."
+            conclusion=""
+          fi
           if [[ "$conclusion" =~ ^(failure|cancelled)$ ]]; then
             echo "::error::Build failed — build job conclusion is '$conclusion'. Skipping test."
             exit 1

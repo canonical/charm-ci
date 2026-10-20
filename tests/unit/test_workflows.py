@@ -26,3 +26,13 @@ def test_verbose_spread_password_is_masked(workflow_path: str) -> None:
 
     assert mask_index < export_index < run_index
     assert 'opcli spread run -- -vv -pass "$SPREAD_CI_PASSWORD"' in workflow
+
+
+def test_integration_build_status_query_uses_small_pages() -> None:
+    """Build status queries avoid GitHub timeouts on workflows with many jobs."""
+    workflow = (_ROOT / ".github/workflows/integration-test.yml").read_text()
+
+    assert "gh api --paginate" in workflow
+    assert "jobs?per_page=50" in workflow
+    assert "jq --slurp" in workflow
+    assert 'gh run view "${{ github.run_id }}"' not in workflow
