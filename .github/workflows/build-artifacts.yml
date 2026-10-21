@@ -12,11 +12,9 @@ name: Build Artifacts
 #       permissions:
 #         contents: read
 #         packages: write
-#         actions: read   # required for get-workflow-version-action
 #
 # opcli is installed at the exact commit SHA this workflow was called with,
-# resolved via canonical/get-workflow-version-action (workaround for
-# https://github.com/actions/toolkit/issues/1264).
+# resolved via `job.workflow_sha`.
 
 on:
   workflow_call:
@@ -64,11 +62,10 @@ jobs:
     name: Build matrix
     runs-on: ubuntu-latest
     permissions:
-      actions: read  # required by get-workflow-version-action
       contents: read
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
-      opcli-sha: ${{ steps.workflow-version.outputs.sha }}
+      opcli-sha: ${{ job.workflow_sha }}
       rock-upload-mode: ${{ steps.upload-mode.outputs.mode }}
     defaults:
       run:
@@ -95,20 +92,12 @@ jobs:
           fi
         working-directory: .
 
-      - name: Get workflow version
-        id: workflow-version
-        uses: canonical/get-workflow-version-action@v1
-        with:
-          repository-name: canonical/charm-ci
-          file-name: build-artifacts.yml
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install opcli
         run: |
           if grep -q 'name = "opcli"' "${GITHUB_WORKSPACE}/pyproject.toml" 2>/dev/null; then
             uv tool install "opcli[cli] @ ${GITHUB_WORKSPACE}"
           else
-            uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git@${{ steps.workflow-version.outputs.sha }}"
+            uv tool install "opcli[cli] @ git+https://github.com/canonical/charm-ci.git@${{ job.workflow_sha }}"
           fi
 
       - name: Generate build matrix
