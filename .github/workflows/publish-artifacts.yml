@@ -98,19 +98,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get workflow version
-        id: workflow-version
-        uses: canonical/get-workflow-version-action@v1
-        with:
-          repository-name: canonical/charm-ci
-          file-name: publish-artifacts.yml
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Checkout charm-ci scripts
         uses: actions/checkout@v4
         with:
           repository: canonical/charm-ci
-          ref: ${{ steps.workflow-version.outputs.sha }}
+          ref: ${{ job.workflow_sha }}
           path: .charm-ci
 
       - name: Resolve integration-test run
@@ -149,19 +141,11 @@ jobs:
         with:
           detached: true
 
-      - name: Get workflow version
-        id: workflow-version
-        uses: canonical/get-workflow-version-action@v1
-        with:
-          repository-name: canonical/charm-ci
-          file-name: publish-artifacts.yml
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Checkout charm-ci scripts
         uses: actions/checkout@v4
         with:
           repository: canonical/charm-ci
-          ref: ${{ steps.workflow-version.outputs.sha }}
+          ref: ${{ job.workflow_sha }}
           path: .charm-ci
 
       - name: Install uv
