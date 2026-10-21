@@ -114,7 +114,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      actions: read
 
   # ── Job 2: generate the spread test matrix ──────────────────────────────────
   # Runs in parallel with the build job — only needs spread.yaml from the repo.
