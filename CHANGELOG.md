@@ -13,6 +13,10 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ## [Unreleased]
 
+### Changed
+
+- Default pull-request test rock builds to GitHub artifact mode with 30-day retention instead of pushing every build to GHCR; select `upload-image: registry` for other events or workflows that require a remote image.
+
 ### Fixed
 
 - Add `~/.local/bin` to `PATH` when installing uv in integration-test and
