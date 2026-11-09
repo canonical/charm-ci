@@ -897,7 +897,7 @@ Local `opcli artifacts publish` never modifies charm archives.
 > the combined release instead, or to resolve the tag directly rather than
 > via a Release lookup.
 
-Pinning to a SHA or tag automatically installs the matching `opcli` version via `canonical/get-workflow-version-action`.
+Pinning to a SHA or tag automatically installs the matching `opcli` version via `job.workflow_sha`.
 
 ### Build environment variables
 

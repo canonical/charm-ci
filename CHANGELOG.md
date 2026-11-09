@@ -13,6 +13,10 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ## [Unreleased]
 
+### Changed
+
+- Reusable workflows now use `${{ job.workflow_sha }}` instead of the deprecated `canonical/get-workflow-version-action`; the matrix jobs no longer need `actions: read` for this.
+
 ### Fixed
 
 - Add `~/.local/bin` to `PATH` when installing uv in integration-test and
