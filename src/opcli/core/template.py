@@ -38,10 +38,11 @@ import os
 import shlex
 from pathlib import Path
 
-from jinja2 import StrictUndefined, TemplateSyntaxError, UndefinedError
+from jinja2 import StrictUndefined, TemplateSyntaxError, UndefinedError, meta
 from jinja2.exceptions import SecurityError
 from jinja2.sandbox import SandboxedEnvironment
 
+from opcli.core.artifact_preparation import deferred_artifacts_enabled
 from opcli.core.constants import artifacts_build_path
 from opcli.core.env import current_arch
 from opcli.core.exceptions import ConfigurationError
@@ -113,9 +114,6 @@ def _render_template(root: Path, template_str: str, template_name: str) -> str:
         ConfigurationError: On missing artifacts file, syntax errors,
             undefined variable references, or sandbox violations.
     """
-    artifacts = _load_artifacts(root)
-    context = _build_context(artifacts)
-
     env = SandboxedEnvironment(
         keep_trailing_newline=True,
         trim_blocks=True,
@@ -124,6 +122,14 @@ def _render_template(root: Path, template_str: str, template_name: str) -> str:
     )
 
     try:
+        parsed = env.parse(template_str)
+        deferred = deferred_artifacts_enabled()
+        if deferred and "artifacts" in meta.find_undeclared_variables(parsed):
+            raise ConfigurationError(
+                f"{template_name} references artifacts, which is incompatible with "
+                "OPCLI_DEFER_ARTIFACTS=1. Use pytest artifact fixtures or disable deferral."
+            )
+        context = _build_context(None if deferred else _load_artifacts(root))
         template = env.from_string(template_str)
     except TemplateSyntaxError as exc:
         msg = f"Jinja2 syntax error in {template_name}: {exc}"
@@ -158,7 +164,7 @@ def _load_artifacts(root: Path) -> ArtifactsGenerated:
     return load_artifacts_build(gen_path)
 
 
-def _build_context(artifacts: ArtifactsGenerated) -> dict[str, object]:
+def _build_context(artifacts: ArtifactsGenerated | None) -> dict[str, object]:
     """Build the Jinja2 template context dictionary.
 
     Returns a dict with:
@@ -166,8 +172,10 @@ def _build_context(artifacts: ArtifactsGenerated) -> dict[str, object]:
         arch: Current machine architecture string.
         env: Snapshot of the current process environment.
     """
-    return {
-        "artifacts": artifacts,
+    context: dict[str, object] = {
         "arch": current_arch(),
         "env": dict(os.environ),
     }
+    if artifacts is not None:
+        context["artifacts"] = artifacts
+    return context

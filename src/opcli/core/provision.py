@@ -385,7 +385,8 @@ def _detect_kubectl() -> list[str] | None:
     if shutil.which("k8s"):
         candidates.append(["sudo", "k8s", "kubectl"])
     if shutil.which("kubectl"):
-        candidates.append(["sudo", "kubectl"])
+        # Standalone kubectl must use the caller's kubeconfig, not root's.
+        candidates.append(["kubectl"])
     for cmd in candidates:
         try:
             run_command(

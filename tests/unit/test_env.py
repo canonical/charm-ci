@@ -428,7 +428,7 @@ class TestProvisionRegistry:
             patch(
                 "opcli.core.provision.run_command",
                 side_effect=SubprocessError(
-                    cmd=["sudo", "kubectl", "cluster-info", "--request-timeout=5s"],
+                    cmd=["kubectl", "cluster-info", "--request-timeout=5s"],
                     returncode=1,
                     stderr="connection refused",
                 ),
@@ -438,7 +438,7 @@ class TestProvisionRegistry:
 
         assert result == "skipped"
         mock_run.assert_called_once_with(
-            ["sudo", "kubectl", "cluster-info", "--request-timeout=5s"],
+            ["kubectl", "cluster-info", "--request-timeout=5s"],
             stream=False,
             quiet=True,
             timeout=10,
@@ -462,7 +462,7 @@ class TestProvisionRegistry:
         [
             pytest.param("microk8s", ["sudo", "microk8s", "kubectl"], id="microk8s"),
             pytest.param("k8s", ["sudo", "k8s", "kubectl"], id="k8s"),
-            pytest.param("kubectl", ["sudo", "kubectl"], id="kubectl"),
+            pytest.param("kubectl", ["kubectl"], id="kubectl"),
         ],
     )
     def test_detected_k8s_provider_applies_manifest(
