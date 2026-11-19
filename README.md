@@ -790,7 +790,7 @@ RST equivalent uses `.. SPREAD`, `.. SPREAD END`, `.. SPREAD SKIP`, and `.. SPRE
 
 ## GitHub Actions reusable workflows
 
-Four reusable workflows are available for operator repositories:
+Reusable workflows are available for operator repositories:
 
 | Workflow | Purpose |
 |---|---|
@@ -798,6 +798,45 @@ Four reusable workflows are available for operator repositories:
 | `integration-test.yml` | Download artifacts, generate spread task matrix, run integration tests |
 | `publish-artifacts.yml` | Publish validated artifacts to CharmHub; `channel` is optional and falls back to per-charm channels in `artifacts.yaml` |
 | `doc-test.yml` | Generate spread task matrix, run documentation/tutorial tests (no artifact build) |
+| `generate-changelog.yml` | Generate a read-only Markdown or RST release draft and range/run manifests |
+
+### Draft a changelog
+
+In the `charm-ci` **Actions** tab, choose **Generate changelog** and supply:
+
+- `from_ref`: the previous release, such as `refs/tags/v1.0.1` (exclusive).
+- `to_ref`: the current release, such as `refs/tags/v1.0.2` (inclusive).
+- `source_branch`: the fully qualified source branch (for example
+  `refs/heads/main` or `refs/heads/track/1.0`). Its tip is checked before and
+  after generation. If it moves, start a new run rather than reusing the range.
+- `release_version`, `release_date` (ISO `YYYY-MM-DD`), and `output_format`
+  (`md` or `rst`).
+
+Use the tags for the releases you intend to compare, not the latest open PR
+or a date as a proxy for a ref. The draft uses every commit in the exact
+ancestor range. A missing or repointed ref, an invalid range, or incomplete
+history stops generation. `allow_full_history` is for backfills or recovery
+when bounded targeted retrieval does not prove completeness.
+
+Download `release-changelog` from the run. It contains the draft and the
+range and run manifests, including the output hash and review warnings.
+Review **Unclassified** entries against their linked PR or commit before
+copying the draft into a documentation PR. Follow the consuming
+repository's Markdown or RST and documentation checks on that PR. Titles
+such as `feat(scope): add X` and `fix!: handle Y` improve classification.
+Use explicit changelog labels for security and deprecation; mutable PR
+metadata is flagged for review, not treated as an archived merge record.
+
+The reusable workflow accepts `range_manifest` (canonical JSON) and
+`range_manifest_hash` from a caller that has already stored the resolved
+range. Pin the call to the exact `canonical/charm-ci` commit recorded in
+the manifest's `generator` field. Pass `contents: read` and
+`pull-requests: read`; do not inherit promotion credentials.
+
+This pilot is read-only. `open_pr: true` fails explicitly. Do not rely on
+the expiring Actions artifact for release-lifetime retention or assume
+that a rerun freezes live GitHub metadata. Automatic promotion dispatch,
+durable audit storage, and the documentation PR writer are not enabled.
 
 Example usage for integration tests — `integration-test.yml` already calls `build-artifacts.yml` internally, so a single job is enough (no separate `build` job needed):
 

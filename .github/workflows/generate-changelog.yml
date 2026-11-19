@@ -1,0 +1,114 @@
+name: Generate changelog
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_ref:
+        description: Previous release ref, e.g. refs/tags/v1.0.0 (exclusive)
+        type: string
+        required: true
+      to_ref:
+        description: Current release ref, e.g. refs/tags/v1.1.0 (inclusive)
+        type: string
+        required: true
+      source_branch:
+        description: Fully qualified source branch whose tip must remain unchanged
+        type: string
+        required: true
+        default: refs/heads/main
+      release_version:
+        description: Release heading version
+        type: string
+        required: true
+      release_date:
+        description: Release date (YYYY-MM-DD)
+        type: string
+        required: true
+      output_format:
+        description: Release document format
+        type: choice
+        options: [md, rst]
+        default: md
+      open_pr:
+        description: Reserved; PR creation is disabled in this dry-run pilot
+        type: boolean
+        default: false
+      allow_full_history:
+        description: Permit a full history fallback for a backfill or recovery
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      range_manifest:
+        description: Canonical JSON of the already persisted release range
+        type: string
+        required: true
+      range_manifest_hash:
+        description: SHA-256 of the canonical range manifest
+        type: string
+        required: true
+      output_format:
+        description: Release document format (md or rst)
+        type: string
+        default: md
+      open_pr:
+        description: Reserved; PR creation is disabled in this dry-run pilot
+        type: boolean
+        default: false
+      allow_full_history:
+        description: Permit a full history fallback for a backfill or recovery
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: release-changelog-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout trusted generator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: canonical/charm-ci
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          version: '0.11.6'
+          enable-cache: false
+      - name: Generate release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GENERATOR_SHA: ${{ job.workflow_sha }}
+          FROM_REF: ${{ inputs.from_ref }}
+          TO_REF: ${{ inputs.to_ref }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          RELEASE_DATE: ${{ inputs.release_date }}
+          OUTPUT_FORMAT: ${{ inputs.output_format }}
+          OPEN_PR: ${{ inputs.open_pr }}
+          ALLOW_FULL_HISTORY: ${{ inputs.allow_full_history }}
+          RANGE_MANIFEST: ${{ inputs.range_manifest }}
+          RANGE_MANIFEST_HASH: ${{ inputs.range_manifest_hash }}
+          CHANGELOG_OUTPUT_DIR: ${{ runner.temp }}/release-changelog
+        run: uv run --locked --no-dev python -m opcli.changelog_job
+      - name: Upload release draft and manifests
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: release-changelog
+          path: ${{ runner.temp }}/release-changelog/
+          if-no-files-found: error
