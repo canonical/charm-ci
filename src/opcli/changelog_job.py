@@ -20,6 +20,10 @@ from opcli.core.exceptions import OpcliError, ValidationError
 from opcli.models.changelog import Boundary, ReleaseRange, RunManifest
 
 
+class RangeInputError(ValidationError):
+    """A fixed diagnostic safe to show in workflow logs."""
+
+
 def main() -> int:
     """Run only against the repository and generator identity set by Actions."""
     out = Path(os.environ["CHANGELOG_OUTPUT_DIR"])
@@ -49,8 +53,12 @@ def main() -> int:
             token=os.environ.get("GH_TOKEN", ""),
             allow_full=os.environ.get("ALLOW_FULL_HISTORY") == "true",
         )
-    except (OpcliError, ModelError, ValueError, OSError):
-        error = "Changelog generation stopped; no release page was published"
+    except (OpcliError, ModelError, ValueError, OSError) as exc:
+        error = (
+            str(exc)
+            if isinstance(exc, RangeInputError)
+            else "Changelog generation stopped; no release page was published"
+        )
         # Exceptions can contain raw API data, so keep the public diagnostic bounded.
         failure: dict[str, object] = {
             "retrieval": "failed",
@@ -124,27 +132,40 @@ def _load_range(api: GitHub, output_format: Format) -> ReleaseRange:
     repository_id = int(os.environ["GITHUB_REPOSITORY_ID"])
     generator = os.environ["GENERATOR_SHA"]
     raw = os.environ.get("RANGE_MANIFEST", "")
+    manifest_hash = os.environ.get("RANGE_MANIFEST_HASH", "")
+    from_ref, to_ref, source_branch, release_version, release_date = ref_inputs = tuple(
+        os.environ.get(key, "")
+        for key in ("FROM_REF", "TO_REF", "SOURCE_BRANCH", "RELEASE_VERSION", "RELEASE_DATE")
+    )
     config_hash = digest({"format": output_format, "date_heading": False})
-    if raw:
+    if raw or manifest_hash:
+        if not (raw and manifest_hash) or any(ref_inputs):
+            raise RangeInputError(
+                "Provide both range_manifest and range_manifest_hash without any ref-mode inputs"
+            )
         release = ReleaseRange.model_validate_json(raw)
         if (
             release.repository != repo
             or release.repository_id != repository_id
             or release.generator != generator
             or release.config_hash != config_hash
-            or digest(release) != os.environ.get("RANGE_MANIFEST_HASH")
+            or digest(release) != manifest_hash
         ):
             raise ValidationError("provided release manifest does not match the workflow inputs")
         return release
 
+    if not all(ref_inputs):
+        raise RangeInputError(
+            "Ref mode requires from_ref, to_ref, source_branch, release_version, and release_date"
+        )
     return ReleaseRange(
         repository=repo,
         repository_id=repository_id,
-        previous=api.boundary(repo, os.environ["FROM_REF"]),
-        current=api.boundary(repo, os.environ["TO_REF"]),
-        source_tip=api.boundary(repo, os.environ["SOURCE_BRANCH"]),
-        release=os.environ["RELEASE_VERSION"],
-        release_date=os.environ["RELEASE_DATE"],
+        previous=api.boundary(repo, from_ref),
+        current=api.boundary(repo, to_ref),
+        source_tip=api.boundary(repo, source_branch),
+        release=release_version,
+        release_date=release_date,
         generator=generator,
         config_hash=config_hash,
     )

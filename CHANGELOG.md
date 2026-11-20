@@ -16,7 +16,8 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 ### Added
 
 - Added a standalone `generate-changelog.yml` dry-run workflow for Markdown
-  and reStructuredText release drafts from verified Git ranges.
+  and reStructuredText release drafts from verified Git ranges. Reusable
+  callers can supply release refs or a persisted range manifest and hash.
 - `build-artifacts.yml` and `integration-test.yml` accept
   `charmcraft-environments` and `rockcraft-environments` to set environment
   during charmcraft pack or rockcraft pack.

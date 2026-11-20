@@ -61,6 +61,14 @@ def test_workflow_is_pinned_and_defaults_to_no_writes():
     assert "workflow_dispatch" in workflow["on"]
     assert "workflow_call" in workflow["on"]
     assert workflow["on"]["workflow_dispatch"]["inputs"]["open_pr"]["default"] is False
+    dispatch_inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+    call_inputs = workflow["on"]["workflow_call"]["inputs"]
+    dispatch_refs = ("from_ref", "to_ref", "source_branch", "release_version", "release_date")
+    for field in dispatch_refs:
+        assert dispatch_inputs[field]["required"]
+    for field in (*dispatch_refs, "range_manifest", "range_manifest_hash"):
+        assert call_inputs[field]["type"] == "string"
+        assert not call_inputs[field].get("required")
     for job in workflow["jobs"].values():
         if job.get("permissions", {}).get("contents") == "write":
             assert "open_pr" in job["if"]
@@ -174,3 +182,56 @@ def test_write_request_fails_before_network_access(api_draft, tmp_path, monkeypa
     assert not api_draft.called
     assert json.loads((tmp_path / "run.json").read_bytes())["output_hash"] is None
     assert not (tmp_path / "release.rst").exists()
+
+
+_REF_ENV = ("FROM_REF", "TO_REF", "SOURCE_BRANCH", "RELEASE_VERSION", "RELEASE_DATE")
+
+
+@pytest.mark.parametrize("extra_ref", ["", "refs/tags/v1"])
+def test_manifest_mode_requires_no_ref_inputs(api_draft, tmp_path, monkeypatch, extra_ref):
+    source = _boundaries()
+    manifest = ReleaseRange(
+        repository="canonical/example",
+        repository_id=1,
+        previous=source["refs/tags/v1"],
+        current=source["refs/tags/v2"],
+        source_tip=source["refs/heads/main"],
+        release="v2",
+        release_date="2026-11-19",
+        generator="c" * 40,
+        config_hash=digest({"format": "rst", "date_heading": False}),
+    )
+    for key in _REF_ENV:
+        monkeypatch.setenv(key, "")
+    monkeypatch.setenv("FROM_REF", extra_ref)
+    monkeypatch.setenv("RANGE_MANIFEST", canonical(manifest).decode())
+    monkeypatch.setenv("RANGE_MANIFEST_HASH", digest(manifest))
+    if extra_ref:
+        assert main() == 1
+        assert not api_draft.called
+        assert not (tmp_path / "range.json").exists()
+        return
+    assert main() == 0
+    assert (tmp_path / "range.json").read_bytes() == canonical(manifest)
+    assert (tmp_path / "release.rst").exists()
+    assert api_draft.called
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"RANGE_MANIFEST": "{}"},
+        {"RANGE_MANIFEST_HASH": "a" * 64},
+        {"RANGE_MANIFEST": "{}", "RANGE_MANIFEST_HASH": "a" * 64},
+        {"TO_REF": ""},
+        dict.fromkeys(_REF_ENV, ""),
+    ],
+)
+def test_mixed_or_incomplete_modes_fail_before_network(
+    api_draft, tmp_path, monkeypatch, overrides
+):
+    for key, value in overrides.items():
+        monkeypatch.setenv(key, value)
+    assert main() == 1
+    assert not api_draft.called
+    assert not (tmp_path / "range.json").exists()

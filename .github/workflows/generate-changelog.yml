@@ -40,13 +40,26 @@ on:
   workflow_call:
     inputs:
       range_manifest:
-        description: Canonical JSON of the already persisted release range
+        description: Canonical JSON of the already persisted release range (manifest mode)
         type: string
-        required: true
       range_manifest_hash:
-        description: SHA-256 of the canonical range manifest
+        description: SHA-256 of the canonical range manifest (manifest mode)
         type: string
-        required: true
+      from_ref:
+        description: Fully qualified previous release ref, exclusive (ref mode)
+        type: string
+      to_ref:
+        description: Fully qualified current release ref, inclusive (ref mode)
+        type: string
+      source_branch:
+        description: Fully qualified branch whose tip must remain unchanged (ref mode)
+        type: string
+      release_version:
+        description: Release heading version (ref mode)
+        type: string
+      release_date:
+        description: Release date in YYYY-MM-DD format (ref mode)
+        type: string
       output_format:
         description: Release document format (md or rst)
         type: string

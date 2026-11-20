@@ -827,11 +827,53 @@ such as `feat(scope): add X` and `fix!: handle Y` improve classification.
 Use explicit changelog labels for security and deprecation; mutable PR
 metadata is flagged for review, not treated as an archived merge record.
 
-The reusable workflow accepts `range_manifest` (canonical JSON) and
-`range_manifest_hash` from a caller that has already stored the resolved
-range. Pin the call to the exact `canonical/charm-ci` commit recorded in
-the manifest's `generator` field. Pass `contents: read` and
-`pull-requests: read`; do not inherit promotion credentials.
+To run from another repository, add a small wrapper there and replace
+`<commit-sha>` with the trusted `canonical/charm-ci` workflow commit:
+
+```yaml
+name: Draft release changelog
+on:
+  workflow_dispatch:
+    inputs:
+      from_ref:
+        description: Previous release ref (exclusive)
+        type: string
+        required: true
+      to_ref:
+        description: Current release ref (inclusive)
+        type: string
+        required: true
+      release_version:
+        description: Release heading version
+        type: string
+        required: true
+      release_date:
+        description: Release date (YYYY-MM-DD)
+        type: string
+        required: true
+jobs:
+  changelog:
+    uses: canonical/charm-ci/.github/workflows/generate-changelog.yml@<commit-sha>
+    permissions:
+      contents: read
+      pull-requests: read
+    with:
+      from_ref: ${{ inputs.from_ref }}
+      to_ref: ${{ inputs.to_ref }}
+      source_branch: refs/heads/main
+      release_version: ${{ inputs.release_version }}
+      release_date: ${{ inputs.release_date }}
+```
+
+In this **ref mode**, the generator saves `range.json` before collecting
+history, and the draft artifact appears on the caller's run. Set `source_branch`
+to the branch you release from.
+
+In **manifest mode**, a caller such as a charm promotion workflow passes
+`range_manifest` (canonical JSON) and `range_manifest_hash` (SHA-256) instead
+of the five ref-mode inputs. The caller must persist the manifest first. Pin
+the call to the exact `canonical/charm-ci` commit recorded in the manifest's
+`generator` field. Do not mix the two modes or inherit promotion credentials.
 
 This pilot is read-only. `open_pr: true` fails explicitly. Do not rely on
 the expiring Actions artifact for release-lifetime retention or assume
