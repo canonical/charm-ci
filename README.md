@@ -438,6 +438,9 @@ Users write their own `task.yaml` for this backend (or use `opcli tutorial expan
 
 The `runner`, `cpu`, `memory`, and `disk` fields are opcli-only metadata — they are stripped before spread sees the YAML.
 
+Both virtual backends use the same local LXD VM allocator. It waits for cloud-init
+to finish before setting the temporary SSH password for `ubuntu`.
+
 ## `integration-suites` in `spread.yaml`
 
 Instead of committing boilerplate `task.yaml` files, declare test suites declaratively:

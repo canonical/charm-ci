@@ -19,6 +19,9 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ### Fixed
 
+- Fix repeated local Spread VM allocation failures on Ubuntu 26.04 by setting
+  the `ubuntu` user's temporary SSH password after cloud-init, without asking
+  cloud-init to unlock it first. (#160)
 - Add `~/.local/bin` to `PATH` when installing uv in integration-test and
   artifact-build jobs, so user-installed executables are found on self-hosted
   runners started without a login shell.

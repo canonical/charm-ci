@@ -405,6 +405,18 @@ suites:
         cloudinit_pos = allocate.index("cloud-init status --wait")
         assert agent_pos < cloudinit_pos
 
+    def test_local_allocate_leaves_password_locked_during_cloud_init(self, tmp_path: Path) -> None:
+        """Cloud-init must not be asked to unlock ubuntu before a password is set."""
+        write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
+
+        parsed = loads_yaml(spread_expand(tmp_path, ci=False))
+        allocate = parsed["backends"]["integration-test-local"]["allocate"]
+        _, user_data = allocate.split("<<'ENDCLOUD'\n", 1)
+        user_data, _ = user_data.split("\nENDCLOUD\n", 1)
+        ubuntu = next(user for user in loads_yaml(user_data)["users"] if user["name"] == "ubuntu")
+
+        assert ubuntu.get("lock_passwd", True) is True
+
     def test_auto_detects_ci_env_var(self, tmp_path: Path) -> None:
         """CI env var toggles between ci/local backend expansion."""
         write_file(tmp_path / "spread.yaml", _MINIMAL_SPREAD)
