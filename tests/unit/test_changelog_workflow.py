@@ -58,11 +58,20 @@ def test_workflow_is_pinned_and_defaults_to_no_writes():
     workflow = YAML(typ="safe").load(
         (root / ".github/workflows/generate-changelog.yml").read_text()
     )
-    assert "workflow_dispatch" in workflow["on"]
-    assert "workflow_call" in workflow["on"]
-    assert workflow["on"]["workflow_dispatch"]["inputs"]["open_pr"]["default"] is False
-    dispatch_inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+    assert set(workflow["on"]) == {"workflow_call"}
     call_inputs = workflow["on"]["workflow_call"]["inputs"]
+    assert call_inputs["open_pr"]["default"] is False
+    dispatch = YAML(typ="safe").load(
+        (root / ".github/workflows/dispatch-changelog.yml").read_text()
+    )
+    assert set(dispatch["on"]) == {"workflow_dispatch"}
+    dispatch_inputs = dispatch["on"]["workflow_dispatch"]["inputs"]
+    assert dispatch_inputs["open_pr"]["default"] is False
+    assert dispatch["permissions"] == workflow["permissions"]
+    (caller,) = dispatch["jobs"].values()
+    assert caller["uses"] == "./.github/workflows/generate-changelog.yml"
+    assert "secrets" not in caller
+    assert caller["with"] == {field: f"${{{{ inputs.{field} }}}}" for field in dispatch_inputs}
     dispatch_refs = ("from_ref", "to_ref", "source_branch", "release_version", "release_date")
     for field in dispatch_refs:
         assert dispatch_inputs[field]["required"]

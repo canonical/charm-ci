@@ -802,7 +802,8 @@ Reusable workflows are available for operator repositories:
 
 ### Draft a changelog
 
-In the `charm-ci` **Actions** tab, choose **Generate changelog** and supply:
+In the `charm-ci` **Actions** tab, choose **Generate changelog**
+(`dispatch-changelog.yml`) and supply:
 
 - `from_ref`: the previous release, such as `refs/tags/v1.0.1` (exclusive).
 - `to_ref`: the current release, such as `refs/tags/v1.0.2` (inclusive).
@@ -827,7 +828,8 @@ such as `feat(scope): add X` and `fix!: handle Y` improve classification.
 Use explicit changelog labels for security and deprecation; mutable PR
 metadata is flagged for review, not treated as an archived merge record.
 
-To run from another repository, add a small wrapper there and replace
+The `charm-ci` dispatch wrapper calls `generate-changelog.yml` at the same
+commit. To run from another repository, add a small wrapper there and replace
 `<commit-sha>` with the trusted `canonical/charm-ci` workflow commit:
 
 ```yaml

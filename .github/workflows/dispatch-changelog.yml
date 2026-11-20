@@ -1,0 +1,56 @@
+name: Generate changelog
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_ref:
+        description: Previous release ref, e.g. refs/tags/v1.0.0 (exclusive)
+        type: string
+        required: true
+      to_ref:
+        description: Current release ref, e.g. refs/tags/v1.1.0 (inclusive)
+        type: string
+        required: true
+      source_branch:
+        description: Fully qualified source branch whose tip must remain unchanged
+        type: string
+        required: true
+        default: refs/heads/main
+      release_version:
+        description: Release heading version
+        type: string
+        required: true
+      release_date:
+        description: Release date (YYYY-MM-DD)
+        type: string
+        required: true
+      output_format:
+        description: Release document format
+        type: choice
+        options: [md, rst]
+        default: md
+      open_pr:
+        description: Whether to open or update a documentation PR instead of only uploading a draft. PR creation is not yet supported.
+        type: boolean
+        default: false
+      allow_full_history:
+        description: Permit a full history fallback for a backfill or recovery
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changelog:
+    uses: ./.github/workflows/generate-changelog.yml
+    with:
+      from_ref: ${{ inputs.from_ref }}
+      to_ref: ${{ inputs.to_ref }}
+      source_branch: ${{ inputs.source_branch }}
+      release_version: ${{ inputs.release_version }}
+      release_date: ${{ inputs.release_date }}
+      output_format: ${{ inputs.output_format }}
+      open_pr: ${{ inputs.open_pr }}
+      allow_full_history: ${{ inputs.allow_full_history }}
