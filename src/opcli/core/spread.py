@@ -890,13 +890,13 @@ DISK="${DISK:-20}"
 CPU="${CPU:-4}"
 MEM="${MEM:-8}"
 
+# Leave the ubuntu password locked until chpasswd runs after cloud-init.
 CLOUD_CONFIG=$(mktemp)
 cat > "$CLOUD_CONFIG" <<'ENDCLOUD'
 #cloud-config
 ssh_pwauth: true
 users:
   - name: ubuntu
-    lock_passwd: false
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
 ENDCLOUD
