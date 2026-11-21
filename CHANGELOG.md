@@ -30,6 +30,10 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ### Added
 
+- Added `generate-changelog.yml` for Markdown and reStructuredText release
+  drafts from verified Git ranges, with a separate `dispatch-changelog.yml`
+  wrapper for manual runs in `charm-ci`. Reusable callers can supply release
+  refs or a persisted range manifest and hash.
 - `build-artifacts.yml` and `integration-test.yml` accept
   `charmcraft-environments` and `rockcraft-environments` to set environment
   during charmcraft pack or rockcraft pack. (#143)
