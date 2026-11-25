@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a problem with opcli or the reusable GitHub Actions workflows
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe what happened and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the command or workflow inputs and the relevant parts of your configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the opcli version or workflow ref, OS and architecture, and whether this runs locally or in GitHub Actions.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste the relevant output or link to a public workflow run. Remove secrets and credentials before sharing.
