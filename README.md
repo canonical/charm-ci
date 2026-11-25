@@ -1037,15 +1037,6 @@ uv run mypy src/                           # type check
 uv run pytest tests/unit/                  # unit tests
 ```
 
-### GitHub issue sync to Jira
-
-The [Jira sync GitHub App](https://github.com/canonical/gh-jira-sync-bot)
-reads [`.github/.jira_sync_config.yaml`](.github/.jira_sync_config.yaml) to
-sync GitHub issues to the `CharmCI` component in the `ISD` Jira project and
-comment with a link to the created ticket. The app must have access to
-`canonical/charm-ci`, and the component must exist in Jira with that exact
-name. No GitHub Actions workflow is needed.
-
 ### Project structure
 
 ```
