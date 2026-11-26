@@ -25,6 +25,13 @@ name: Integration Test
 #   with:
 #     environment: integration-tests
 #
+# Optional: skip the build and tests on pull requests that only change files
+# matching an extended regex (grep -E), matched against paths relative to the
+# repository root. Add the same files to `paths-ignore` of your publish workflow.
+#
+#   with:
+#     ignored-file-patterns: '\.md$|^apm\.yml$|^\.agents/'
+#
 # Assumptions about the operator repository layout:
 #   - ``artifacts.yaml`` declares charms/rocks
 #   - ``spread.yaml`` uses the ``integration-test:`` virtual backend
@@ -97,10 +104,45 @@ on:
         description: "GitHub Environment name to scope the test job (and its secrets) to (optional)"
         type: string
         default: ""
+      ignored-file-patterns:
+        description: "Extended regex (grep -E) of files, relative to the repository root, whose changes alone skip the build and tests on pull requests (optional)"
+        type: string
+        default: ""
 
 jobs:
-  # ── Job 1: build all artifacts ──────────────────────────────────────────────
+  # ── Job 1: skip build and tests if a PR only changes ignored files ──────────
+  find-changes:
+    name: Find changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      has-code-changes: ${{ steps.changes.outputs.has-code-changes }}
+    steps:
+      - name: Checkout
+        if: github.event_name == 'pull_request' && inputs.ignored-file-patterns != ''
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Checkout charm-ci scripts
+        uses: actions/checkout@v4
+        with:
+          repository: canonical/charm-ci
+          ref: ${{ job.workflow_sha }}
+          path: .charm-ci
+
+      - name: Find changes
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IGNORED_FILE_PATTERNS: ${{ inputs.ignored-file-patterns }}
+        run: .charm-ci/.github/scripts/find-changes.sh
+
+  # ── Job 2: build all artifacts ──────────────────────────────────────────────
   build:
+    needs: [find-changes]
+    if: needs.find-changes.outputs.has-code-changes == 'true'
     uses: ./.github/workflows/build-artifacts.yml
     with:
       working-directory: ${{ inputs.working-directory }}
@@ -115,10 +157,12 @@ jobs:
       contents: read
       packages: write
 
-  # ── Job 2: generate the spread test matrix ──────────────────────────────────
+  # ── Job 3: generate the spread test matrix ──────────────────────────────────
   # Runs in parallel with the build job — only needs spread.yaml from the repo.
   test-matrix:
     name: Test matrix
+    needs: [find-changes]
+    if: needs.find-changes.outputs.has-code-changes == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -162,13 +206,14 @@ jobs:
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "Test matrix: $matrix"
 
-  # ── Job 3: run each spread task ─────────────────────────────────────────────
+  # ── Job 4: run each spread task ─────────────────────────────────────────────
   # Starts as soon as test-matrix finishes — does NOT wait for the build job.
   # Provisioning runs in parallel with the build.  The spread _CI_PREPARE script
   # waits for and downloads the build artifacts before executing tests.
   test:
     name: "${{ matrix.name }}"
-    needs: [test-matrix]
+    needs: [find-changes, test-matrix]
+    if: needs.find-changes.outputs.has-code-changes == 'true'
     runs-on: ${{ fromJSON(matrix.runs-on) }}
     timeout-minutes: ${{ inputs.test-timeout-minutes }}
     environment: ${{ inputs.environment || null }}

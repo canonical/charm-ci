@@ -822,7 +822,13 @@ jobs:
       # charmcraft-channel: latest/stable  # forwarded to build-artifacts (snap channel for charmcraft)
       # rockcraft-channel: latest/stable   # forwarded to build-artifacts (snap channel for rockcraft)
       # environment: integration-tests  # optional: scope secrets to a GitHub Environment
+      # ignored-file-patterns: '\.md$|^apm\.yml$|^\.agents/'  # optional: files that skip build and tests
 ```
+
+A pull request that only changes files matching `ignored-file-patterns` (`grep -E`,
+against paths relative to the repository root, not to `working-directory`) skips
+the build and tests but still succeeds. Add the same files to `paths-ignore` of
+your publish workflow: without a build there is nothing to publish.
 
 Example usage for documentation tests:
 
