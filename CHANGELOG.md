@@ -24,6 +24,9 @@ Entries for releases prior to `v0.0.1-alpha.9` are not backfilled here; see the
 
 ### Fixed
 
+- Add the repository configuration for syncing `charm-ci` GitHub issues to the
+  `CharmCI` component in the `ISD` Jira project. Bug report and enhancement
+  issue forms apply the GitHub labels used to select the Jira issue type.
 - Fix repeated local Spread VM allocation failures on Ubuntu 26.04 by setting
   the `ubuntu` user's temporary SSH password after cloud-init, without asking
   cloud-init to unlock it first. (#160)
